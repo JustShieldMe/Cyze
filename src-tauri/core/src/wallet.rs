@@ -13,7 +13,8 @@ use tonic::transport::{Channel, ClientTlsConfig};
 use zcash_client_backend::proto::service::{
     compact_tx_streamer_client::CompactTxStreamerClient, Empty,
 };
-use zcash_protocol::consensus::Network;
+use zcash_protocol::consensus::{BlockHeight, Network, NetworkType, NetworkUpgrade, Parameters};
+use zcash_protocol::local_consensus::LocalNetwork;
 
 use crate::error::CoreError;
 
@@ -23,49 +24,176 @@ use crate::error::CoreError;
 pub enum WalletNetwork {
     Test,
     Main,
+    /// A local regtest devnet (e.g. thus-spoke-zakura). Regtest chains choose
+    /// their own upgrade heights, so the network carries the latest upgrade the
+    /// node has active; see [`RegtestUpgrade`].
+    Regtest(RegtestUpgrade),
+}
+
+/// The newest network upgrade active on a local regtest devnet, from genesis.
+///
+/// Regtest has no fixed activation table: each node picks its own `nuparams`.
+/// Devnets activate everything up to some upgrade at height 1, so "which
+/// upgrade is the newest" is enough to rebuild the node's consensus parameters.
+/// The wallet must agree with the node on this: it picks the consensus branch
+/// id and the Orchard circuit a transaction is built with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RegtestUpgrade {
+    /// NU6 — what thus-spoke-zakura ships by default.
+    #[default]
+    Nu6,
+    Nu6_1,
+    Nu6_2,
+    /// NU6.3 — Ironwood.
+    Nu6_3,
+}
+
+impl RegtestUpgrade {
+    pub const ALL: [RegtestUpgrade; 4] = [
+        RegtestUpgrade::Nu6,
+        RegtestUpgrade::Nu6_1,
+        RegtestUpgrade::Nu6_2,
+        RegtestUpgrade::Nu6_3,
+    ];
+
+    /// The settings/IPC spelling (`nu6`, `nu6_1`, …).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RegtestUpgrade::Nu6 => "nu6",
+            RegtestUpgrade::Nu6_1 => "nu6_1",
+            RegtestUpgrade::Nu6_2 => "nu6_2",
+            RegtestUpgrade::Nu6_3 => "nu6_3",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|u| u.as_str() == s)
+    }
+
+    /// The upgrade whose consensus branch id a node reports (lowercase hex, as
+    /// in [`LightwalletdInfo::consensus_branch_id`]). `None` for a branch older
+    /// than NU6 or one this build doesn't know.
+    pub fn from_branch_id(branch_hex: &str) -> Option<Self> {
+        match branch_hex.trim().to_ascii_lowercase().as_str() {
+            "c8e71055" => Some(RegtestUpgrade::Nu6),
+            "4dec4df0" => Some(RegtestUpgrade::Nu6_1),
+            "5437f330" => Some(RegtestUpgrade::Nu6_2),
+            NU6_3_BRANCH_ID => Some(RegtestUpgrade::Nu6_3),
+            _ => None,
+        }
+    }
+
+    /// Regtest consensus parameters: every upgrade up to and including this one
+    /// active at height 1, everything later inactive.
+    pub fn local_network(self) -> LocalNetwork {
+        let one = Some(BlockHeight::from_u32(1));
+        let upto = |u: RegtestUpgrade| if self >= u { one } else { None };
+        LocalNetwork {
+            overwinter: one,
+            sapling: one,
+            blossom: one,
+            heartwood: one,
+            canopy: one,
+            nu5: one,
+            nu6: one,
+            nu6_1: upto(RegtestUpgrade::Nu6_1),
+            nu6_2: upto(RegtestUpgrade::Nu6_2),
+            nu6_3: upto(RegtestUpgrade::Nu6_3),
+            #[cfg(zcash_unstable = "nu7")]
+            nu7: None,
+        }
+    }
+}
+
+/// Consensus parameters for any [`WalletNetwork`]: the fixed public networks or
+/// a local regtest chain. The single `Parameters` type the wallet db, sync, and
+/// tx builder are instantiated with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WalletParams {
+    Consensus(Network),
+    Local(LocalNetwork),
+}
+
+impl Parameters for WalletParams {
+    fn network_type(&self) -> NetworkType {
+        match self {
+            WalletParams::Consensus(n) => n.network_type(),
+            WalletParams::Local(n) => n.network_type(),
+        }
+    }
+
+    fn activation_height(&self, nu: NetworkUpgrade) -> Option<BlockHeight> {
+        match self {
+            WalletParams::Consensus(n) => n.activation_height(nu),
+            WalletParams::Local(n) => n.activation_height(nu),
+        }
+    }
 }
 
 impl WalletNetwork {
+    /// Parse the settings spelling. A regtest network parsed this way assumes
+    /// the default upgrade level; callers that know the node's level construct
+    /// `WalletNetwork::Regtest(level)` directly.
     pub fn from_str(s: &str) -> Self {
         match s {
             "main" => WalletNetwork::Main,
+            "regtest" => WalletNetwork::Regtest(RegtestUpgrade::default()),
             _ => WalletNetwork::Test,
         }
     }
 
-    /// The consensus parameters for this network (used by sync/address logic).
-    pub fn params(self) -> Network {
+    /// The settings/IPC spelling: `main`, `test`, or `regtest`.
+    pub fn as_str(self) -> &'static str {
         match self {
-            WalletNetwork::Test => Network::TestNetwork,
-            WalletNetwork::Main => Network::MainNetwork,
+            WalletNetwork::Main => "main",
+            WalletNetwork::Test => "test",
+            WalletNetwork::Regtest(_) => "regtest",
+        }
+    }
+
+    /// The consensus parameters for this network (used by sync/address logic).
+    pub fn params(self) -> WalletParams {
+        match self {
+            WalletNetwork::Test => WalletParams::Consensus(Network::TestNetwork),
+            WalletNetwork::Main => WalletParams::Consensus(Network::MainNetwork),
+            WalletNetwork::Regtest(level) => WalletParams::Local(level.local_network()),
         }
     }
 
     /// The address/key encoding network type.
-    pub fn network_type(self) -> zcash_protocol::consensus::NetworkType {
+    pub fn network_type(self) -> NetworkType {
         match self {
-            WalletNetwork::Test => zcash_protocol::consensus::NetworkType::Test,
-            WalletNetwork::Main => zcash_protocol::consensus::NetworkType::Main,
+            WalletNetwork::Test => NetworkType::Test,
+            WalletNetwork::Main => NetworkType::Main,
+            WalletNetwork::Regtest(_) => NetworkType::Regtest,
         }
     }
 
-    /// A sensible default public lightwalletd endpoint for this network.
+    /// A sensible default lightwalletd endpoint for this network. For regtest
+    /// this is lightwalletd's conventional local port; a devnet that picks its
+    /// own port (thus-spoke-zakura) is found with devnet detection instead.
     pub fn default_lightwalletd(self) -> &'static str {
         match self {
             WalletNetwork::Test => "https://testnet.zec.rocks:443",
             WalletNetwork::Main => "https://zec.rocks:443",
+            WalletNetwork::Regtest(_) => "http://127.0.0.1:9067",
         }
     }
 
-    /// On-disk directory name for this network's wallet data. Testnet and
-    /// mainnet keep entirely separate databases, blocks caches, and pending
+    /// On-disk directory name for this network's wallet data. Each network
+    /// keeps entirely separate databases, blocks caches, and pending
     /// transactions, so switching networks never shows one network's balance
-    /// while pointed at the other's chain (and testnet data can't corrupt a
-    /// mainnet db, or vice versa).
+    /// while pointed at the other's chain (and testnet or devnet data can't
+    /// corrupt a mainnet db, or vice versa).
+    ///
+    /// All regtest upgrade levels share one directory: the level describes the
+    /// node's rules, not a different chain.
     pub fn dir_name(self) -> &'static str {
         match self {
             WalletNetwork::Test => "testnet",
             WalletNetwork::Main => "mainnet",
+            WalletNetwork::Regtest(_) => "regtest",
         }
     }
 }
@@ -149,7 +277,7 @@ fn normalize_endpoint(url: &str) -> String {
 /// True when the host component of a normalized URL is a loopback address —
 /// plaintext gRPC is only tolerated against a local node (regtest/dev), never
 /// against a remote lightwalletd where the traffic would cross the network.
-fn is_loopback_host(normalized_url: &str) -> bool {
+pub fn is_loopback_host(normalized_url: &str) -> bool {
     let after_scheme = normalized_url
         .split_once("://")
         .map(|(_, rest)| rest)
@@ -265,10 +393,9 @@ use zcash_client_sqlite::util::SystemClock;
 use zcash_client_sqlite::wallet::init::init_wallet_db;
 use zcash_client_sqlite::WalletDb;
 use zcash_keys::keys::UnifiedFullViewingKey;
-use zcash_protocol::consensus::BlockHeight;
 use zcash_protocol::memo::{Memo, MemoBytes};
 
-type GroupDb = WalletDb<rusqlite::Connection, Network, SystemClock, OsRng>;
+type GroupDb = WalletDb<rusqlite::Connection, WalletParams, SystemClock, OsRng>;
 
 /// `(wallet.sqlite path, fsblockdb dir)` for a group on a given network.
 /// Scoped by network (`.../<group_id>/<network>/...`) so testnet and mainnet
@@ -722,9 +849,22 @@ pub const DEFAULT_TESTNET_BIRTHDAY: u64 = 3_800_000;
 /// recover funds that predate a rebuilt wallet, pass an explicit
 /// `birthday_height` (the command layer supplies the persisted one); for a
 /// from-scratch testnet rescan, pass [`DEFAULT_TESTNET_BIRTHDAY`].
-pub fn default_birthday_height(_network: WalletNetwork) -> Option<u64> {
-    None
+///
+/// A local regtest devnet is the exception: its whole chain is a few hundred
+/// blocks, and a developer typically funds the group from the devnet faucet
+/// *before* opening its wallet. Scanning from [`REGTEST_BIRTHDAY`] costs
+/// nothing and finds those funds.
+pub fn default_birthday_height(network: WalletNetwork) -> Option<u64> {
+    match network {
+        WalletNetwork::Regtest(_) => Some(REGTEST_BIRTHDAY),
+        WalletNetwork::Test | WalletNetwork::Main => None,
+    }
 }
+
+/// First block a regtest wallet scans. lightwalletd cannot serve a devnet's
+/// block 1 (thus-spoke-zakura documents scanning from block 2), and block 1
+/// only carries the upgrade-activation coinbase, so nothing is lost.
+pub const REGTEST_BIRTHDAY: u64 = 2;
 
 /// Pick the first block to scan: the requested birthday held inside
 /// `[nu5, tip]`, or the tip when nothing was requested.
@@ -1027,7 +1167,7 @@ fn split_scan_range(range: ScanRange, batch_size: u32) -> Vec<ScanRange> {
 /// today does not perform it either. Omitting it here keeps the two byte-identical.
 async fn run_pipelined(
     client: &mut CompactTxStreamerClient<Channel>,
-    params: &Network,
+    params: &WalletParams,
     db: &mut GroupDb,
     batch_size: u32,
 ) -> Result<(), CoreError> {
@@ -1048,7 +1188,7 @@ async fn run_pipelined(
 /// range) and the caller should restart from a fresh `suggest_scan_ranges`.
 async fn running_pipelined(
     client: &mut CompactTxStreamerClient<Channel>,
-    params: &Network,
+    params: &WalletParams,
     db: &mut GroupDb,
     batch_size: u32,
 ) -> Result<bool, CoreError> {
@@ -1194,7 +1334,7 @@ async fn running_pipelined(
 /// signal a restart if scanning surfaced a higher-priority range. The in-memory
 /// source needs no cache truncation on rewind (each batch is downloaded fresh).
 fn scan_batch(
-    params: &Network,
+    params: &WalletParams,
     src: &MemBlockSource,
     db: &mut GroupDb,
     chain_state: &ChainState,
@@ -1500,12 +1640,18 @@ pub async fn prepare_send(
     let to = Address::decode(&params, r).ok_or_else(|| {
         // Give a network-mismatch hint when the address prefix clearly belongs
         // to the other network — saves a confusing round-trip for the user.
+        let looks_regtest = r.starts_with("uregtest") || r.starts_with("zregtestsapling");
+        let looks_test = r.starts_with("utest") || r.starts_with("ztestsapling");
+        let looks_main = (r.starts_with("u1") || r.starts_with("zs1") || r.starts_with("t1"))
+            && !looks_test
+            && !looks_regtest;
         let hint = match network {
-            WalletNetwork::Main if r.starts_with("utest") || r.starts_with("ztestsapling") =>
-                " — this looks like a testnet address but you are on mainnet",
-            WalletNetwork::Test if (r.starts_with("u1") || r.starts_with("zs1") || r.starts_with("t1"))
-                && !r.starts_with("utest") =>
-                " — this looks like a mainnet address but you are on testnet",
+            WalletNetwork::Main if looks_test => " — this looks like a testnet address but you are on mainnet",
+            WalletNetwork::Main if looks_regtest => " — this looks like a devnet (regtest) address but you are on mainnet",
+            WalletNetwork::Test if looks_main => " — this looks like a mainnet address but you are on testnet",
+            WalletNetwork::Test if looks_regtest => " — this looks like a devnet (regtest) address but you are on testnet",
+            WalletNetwork::Regtest(_) if looks_main => " — this looks like a mainnet address but you are on the local devnet",
+            WalletNetwork::Regtest(_) if looks_test => " — this looks like a testnet address but you are on the local devnet",
             _ => "",
         };
         CoreError::Crypto(format!("invalid recipient address{hint}"))
@@ -2374,10 +2520,55 @@ mod tests {
 
     #[test]
     fn network_params_and_defaults() {
-        assert_eq!(WalletNetwork::Test.params(), Network::TestNetwork);
-        assert_eq!(WalletNetwork::Main.params(), Network::MainNetwork);
+        assert_eq!(WalletNetwork::Test.params(), WalletParams::Consensus(Network::TestNetwork));
+        assert_eq!(WalletNetwork::Main.params(), WalletParams::Consensus(Network::MainNetwork));
         assert!(WalletNetwork::Test.default_lightwalletd().starts_with("https://"));
         assert!(WalletNetwork::Main.default_lightwalletd().starts_with("https://"));
+
+        // Regtest: local params, regtest encoding, its own data dir, and a
+        // loopback plaintext default that the endpoint guard accepts.
+        let dev = WalletNetwork::Regtest(RegtestUpgrade::Nu6);
+        assert!(matches!(dev.params(), WalletParams::Local(_)));
+        assert_eq!(dev.network_type(), NetworkType::Regtest);
+        assert_eq!(dev.dir_name(), "regtest");
+        assert!(validate_endpoint_security(dev.default_lightwalletd()).is_ok());
+        assert_eq!(WalletNetwork::from_str("regtest"), dev);
+        assert_eq!(WalletNetwork::from_str(dev.as_str()), dev);
+    }
+
+    #[test]
+    fn regtest_upgrade_from_branch_id() {
+        // The branch ids a node reports for each upgrade we can build for.
+        assert_eq!(RegtestUpgrade::from_branch_id("c8e71055"), Some(RegtestUpgrade::Nu6));
+        assert_eq!(RegtestUpgrade::from_branch_id("4dec4df0"), Some(RegtestUpgrade::Nu6_1));
+        assert_eq!(RegtestUpgrade::from_branch_id("5437F330"), Some(RegtestUpgrade::Nu6_2));
+        assert_eq!(RegtestUpgrade::from_branch_id(NU6_3_BRANCH_ID), Some(RegtestUpgrade::Nu6_3));
+        // NU5 (and anything unknown) is not a level we model.
+        assert_eq!(RegtestUpgrade::from_branch_id("c2d6d0b4"), None);
+        assert_eq!(RegtestUpgrade::from_branch_id(""), None);
+        for u in RegtestUpgrade::ALL {
+            assert_eq!(RegtestUpgrade::parse(u.as_str()), Some(u));
+        }
+    }
+
+    #[test]
+    fn regtest_params_activate_only_up_to_level() {
+        // Each level must make the wallet agree with the node on the branch id
+        // at the tip: that is what picks the tx version and Orchard circuit.
+        for (level, branch) in [
+            (RegtestUpgrade::Nu6, "c8e71055"),
+            (RegtestUpgrade::Nu6_1, "4dec4df0"),
+            (RegtestUpgrade::Nu6_2, "5437f330"),
+            (RegtestUpgrade::Nu6_3, NU6_3_BRANCH_ID),
+        ] {
+            let net = WalletNetwork::Regtest(level);
+            assert_eq!(branch_id_for_height(net, 500), branch, "{level:?}");
+            assert_eq!(RegtestUpgrade::from_branch_id(branch), Some(level));
+        }
+        let nu6 = RegtestUpgrade::Nu6.local_network();
+        assert_eq!(nu6.activation_height(NetworkUpgrade::Nu5), Some(BlockHeight::from_u32(1)));
+        assert_eq!(nu6.activation_height(NetworkUpgrade::Nu6_1), None);
+        assert_eq!(nu6.activation_height(NetworkUpgrade::Nu6_3), None);
     }
 
     #[test]
@@ -2481,7 +2672,11 @@ mod tests {
         let sk = Option::<SpendingKey>::from(SpendingKey::from_bytes([9u8; 32])).unwrap();
         let ak: [u8; 32] = FullViewingKey::from(&sk).to_bytes()[..32].try_into().unwrap();
 
-        for net in [WalletNetwork::Test, WalletNetwork::Main] {
+        for net in [
+            WalletNetwork::Test,
+            WalletNetwork::Main,
+            WalletNetwork::Regtest(RegtestUpgrade::Nu6),
+        ] {
             let keys = crate::zcash::derive_orchard_keys(&ak, net.network_type()).unwrap();
             let addr = ufvk_default_address(net, &keys.ufvk).unwrap();
             assert_eq!(addr, keys.address, "zcash_keys must agree on {net:?}");
@@ -2532,6 +2727,19 @@ mod tests {
         assert_eq!(default_birthday_height(WalletNetwork::Test), None);
         assert_eq!(default_birthday_height(WalletNetwork::Main), None);
         assert_eq!(resolve_scan_from(None, TEST_NU5, 4_200_000), 4_200_000);
+    }
+
+    #[test]
+    fn regtest_wallets_scan_the_whole_devnet_chain() {
+        // A devnet group is usually funded from the faucet before its wallet is
+        // opened, so regtest scans from block 2 rather than the tip.
+        for level in RegtestUpgrade::ALL {
+            let net = WalletNetwork::Regtest(level);
+            assert_eq!(default_birthday_height(net), Some(REGTEST_BIRTHDAY));
+            assert_eq!(resolve_scan_from(default_birthday_height(net), 1, 350), 2);
+        }
+        // A brand-new devnet whose tip is below the birthday still anchors.
+        assert_eq!(resolve_scan_from(Some(REGTEST_BIRTHDAY), 1, 1), 1);
     }
 
     #[test]

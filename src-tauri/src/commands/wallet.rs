@@ -4,7 +4,7 @@
 
 use frost_app_core::ciphersuite::Suite;
 use frost_app_core::signing::{run_coordinator, CoordinatorParams};
-use frost_app_core::wallet::{self, LightwalletdInfo, WalletNetwork, WalletStatus};
+use frost_app_core::wallet::{self, LightwalletdInfo, RegtestUpgrade, WalletNetwork, WalletStatus};
 use frost_client::api::PublicKey;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -13,20 +13,37 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
-use crate::state::{AppState, CeremonyHandle};
+use crate::state::{AppState, CeremonyHandle, Settings};
 
-fn network_from_str(s: &str) -> WalletNetwork {
-    match s {
-        "main" => WalletNetwork::Main,
-        _ => WalletNetwork::Test,
+/// The wallet network the app is configured for. For a local devnet this
+/// includes its upgrade level: the user's override if set, otherwise the level
+/// last detected from the node, otherwise NU6 (thus-spoke-zakura's default).
+/// Every command resolves the network through here so they all agree.
+pub(crate) fn configured_network(settings: &Settings) -> WalletNetwork {
+    match settings.wallet_network.as_deref().unwrap_or("main") {
+        "regtest" => WalletNetwork::Regtest(
+            settings
+                .regtest_upgrade
+                .as_deref()
+                .or(settings.regtest_detected.as_deref())
+                .and_then(RegtestUpgrade::parse)
+                .unwrap_or_default(),
+        ),
+        other => WalletNetwork::from_str(other),
     }
 }
 
 #[derive(Serialize)]
 pub struct WalletConfig {
-    /// "test" or "main".
+    /// "main", "test", or "regtest".
     pub network: String,
     pub lightwalletd_url: String,
+    /// Regtest: the forced upgrade level, or `None` for auto.
+    pub regtest_upgrade: Option<String>,
+    /// Regtest: the upgrade level last detected from the node, if any.
+    pub regtest_detected: Option<String>,
+    /// Regtest: the level actually in use (override, else detected, else NU6).
+    pub regtest_effective: Option<String>,
 }
 
 /// Resolve the effective wallet config, filling in the network's default
@@ -36,16 +53,22 @@ fn resolve_config(state: &AppState) -> WalletConfig {
     // Mainnet is the default: it is where the wallet is actually used, and the
     // mainnet guardrails (badge, confirmation modal, address checks) make the
     // active network unmissable. Testnet remains one click away in settings.
-    let network = s.wallet_network.clone().unwrap_or_else(|| "main".into());
-    let net = network_from_str(&network);
+    let net = configured_network(&s);
     let lightwalletd_url = s
         .lightwalletd_url
         .clone()
         .filter(|u| !u.trim().is_empty())
         .unwrap_or_else(|| net.default_lightwalletd().to_string());
+    let regtest_effective = match net {
+        WalletNetwork::Regtest(level) => Some(level.as_str().to_string()),
+        _ => None,
+    };
     WalletConfig {
-        network,
+        network: net.as_str().to_string(),
         lightwalletd_url,
+        regtest_upgrade: s.regtest_upgrade.clone(),
+        regtest_detected: s.regtest_detected.clone(),
+        regtest_effective,
     }
 }
 
@@ -55,15 +78,26 @@ pub async fn get_wallet_config(state: State<'_, AppState>) -> AppResult<WalletCo
 }
 
 /// Save the wallet network and endpoint. An empty URL clears the override,
-/// reverting to the network's default endpoint.
+/// reverting to the network's default endpoint. `regtest_upgrade` forces a
+/// devnet upgrade level (`"nu6"` … `"nu6_3"`); omitted or empty means auto.
 #[tauri::command]
 pub async fn set_wallet_config(
     state: State<'_, AppState>,
     network: String,
     lightwalletd_url: String,
+    regtest_upgrade: Option<String>,
 ) -> AppResult<WalletConfig> {
     let mut settings = state.load_settings();
-    settings.wallet_network = Some(if network == "main" { "main" } else { "test" }.to_string());
+    settings.wallet_network = Some(WalletNetwork::from_str(&network).as_str().to_string());
+    settings.regtest_upgrade = match regtest_upgrade.as_deref().map(str::trim) {
+        None | Some("") | Some("auto") => None,
+        Some(level) => Some(
+            RegtestUpgrade::parse(level)
+                .ok_or_else(|| AppError::new("config", format!("unknown devnet upgrade level '{level}'")))?
+                .as_str()
+                .to_string(),
+        ),
+    };
     let url = lightwalletd_url.trim();
     // Refuse to persist a plaintext (non-loopback http://) endpoint so wallet
     // traffic is never silently downgraded off TLS.
@@ -86,16 +120,132 @@ pub async fn lightwalletd_info(
         .filter(|u| !u.trim().is_empty())
         .unwrap_or_else(|| resolve_config(&state).lightwalletd_url);
     let mut info = wallet::lightwalletd_info(&url).await?;
+    record_regtest_level(&state, &info)?;
     // Compute the consensus branch id this build would use at the node's height
     // and flag a mismatch (e.g. after a network upgrade like Ironwood the node
     // expects a branch id this build doesn't yet know), so the UI can warn
     // before a whole signing ceremony is spent on a tx the node will reject.
-    let network = network_from_str(&resolve_config(&state).network);
+    let network = configured_network(&state.load_settings());
     let wallet_branch = wallet::branch_id_for_height(network, info.block_height);
     info.branch_supported = Some(!info.consensus_branch_id.is_empty()
         && info.consensus_branch_id == wallet_branch);
     info.wallet_branch_id = Some(wallet_branch);
     Ok(info)
+}
+
+/// What "Detect local devnet" found.
+#[derive(Serialize)]
+pub struct DevnetStatus {
+    /// The thus-spoke-zakura CLI is installed (Linux/macOS only).
+    pub installed: bool,
+    /// The devnet's lightwalletd answered and reports a regtest chain.
+    pub running: bool,
+    /// The devnet's lightwalletd URL (loopback, plaintext), when known.
+    pub lightwalletd: Option<String>,
+    /// The devnet's browser dashboard (faucet, mining), when known.
+    pub dashboard: Option<String>,
+    /// Chain height reported by the devnet's lightwalletd, when running.
+    pub block_height: Option<u64>,
+    /// The upgrade level read from the node (`nu6` … `nu6_3`), when running.
+    pub detected_upgrade: Option<String>,
+    /// Why the devnet isn't usable yet, phrased as what to do next.
+    pub detail: Option<String>,
+}
+
+/// Find a local thus-spoke-zakura devnet and check that it's up. `instance` is
+/// the launcher's `--name` (default `"default"`). Never changes the saved
+/// endpoint — the UI fills the field and the user saves — but it does record
+/// the devnet's upgrade level, like a connection test.
+#[tauri::command]
+pub async fn detect_local_devnet(
+    state: State<'_, AppState>,
+    instance: Option<String>,
+) -> AppResult<DevnetStatus> {
+    use crate::devnet::{lookup, Lookup};
+    let instance = instance
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "default".into());
+    let mut status = DevnetStatus {
+        installed: false,
+        running: false,
+        lightwalletd: None,
+        dashboard: None,
+        block_height: None,
+        detected_upgrade: None,
+        detail: None,
+    };
+    let endpoints = match lookup(&instance).await? {
+        Lookup::NotInstalled => {
+            status.detail = Some(if cfg!(target_os = "windows") {
+                "thus-spoke-zakura runs on Linux and macOS. On Windows, run it in WSL2 and enter its lightwalletd URL by hand.".into()
+            } else {
+                "thus-spoke-zakura isn't installed (looked on PATH and in ~/.local/bin).".into()
+            });
+            return Ok(status);
+        }
+        Lookup::NoInstance(reason) => {
+            status.installed = true;
+            status.detail = Some(format!(
+                "No devnet named '{instance}' is set up ({reason}). Start one with `thus-spoke-zakura`."
+            ));
+            return Ok(status);
+        }
+        Lookup::Found(e) => e,
+    };
+    status.installed = true;
+    status.dashboard = Some(endpoints.dashboard.clone());
+    // The devnet binds to loopback only. Anything else isn't the devnet this
+    // detector is for, and must not be offered as a plaintext endpoint.
+    if !wallet::is_loopback_host(&endpoints.lightwalletd) {
+        status.detail = Some(format!(
+            "the devnet reported a non-local lightwalletd ({}); enter the endpoint by hand",
+            endpoints.lightwalletd
+        ));
+        return Ok(status);
+    }
+    status.lightwalletd = Some(endpoints.lightwalletd.clone());
+    // `endpoints` reads a file that outlives the devnet, so probe it.
+    match wallet::lightwalletd_info(&endpoints.lightwalletd).await {
+        Ok(info) if info.chain_name == "regtest" => {
+            record_regtest_level(&state, &info)?;
+            status.running = true;
+            status.block_height = Some(info.block_height);
+            status.detected_upgrade = RegtestUpgrade::from_branch_id(&info.consensus_branch_id)
+                .map(|u| u.as_str().to_string());
+        }
+        Ok(info) => {
+            status.detail = Some(format!(
+                "{} is a '{}' node, not a regtest devnet",
+                endpoints.lightwalletd, info.chain_name
+            ));
+        }
+        Err(e) => {
+            tracing::debug!(error = %e, url = %endpoints.lightwalletd, "devnet: probe failed");
+            status.detail = Some(format!(
+                "Found devnet '{instance}', but it isn't running. Start it with `thus-spoke-zakura`."
+            ));
+        }
+    }
+    Ok(status)
+}
+
+/// When a probed node is a regtest devnet, remember which upgrade it runs (read
+/// from its consensus branch id) so "auto" builds for the same rules. Keyed on
+/// what the node reports, not the saved network, so testing a devnet endpoint
+/// before saving it still records the level.
+pub(crate) fn record_regtest_level(state: &AppState, info: &LightwalletdInfo) -> AppResult<()> {
+    if info.chain_name != "regtest" {
+        return Ok(());
+    }
+    let detected = RegtestUpgrade::from_branch_id(&info.consensus_branch_id).map(|u| u.as_str().to_string());
+    let mut settings = state.load_settings();
+    if settings.regtest_detected != detected {
+        tracing::info!(branch = %info.consensus_branch_id, level = ?detected, "devnet: detected upgrade level");
+        settings.regtest_detected = detected;
+        state.save_settings(&settings)?;
+    }
+    Ok(())
 }
 
 /// Resolve the wallet context for a RedPallas group: (network, lightwalletd
@@ -120,7 +270,7 @@ async fn group_wallet_ctx(
         ));
     }
     let cfg = resolve_config(state);
-    let network = WalletNetwork::from_str(&cfg.network);
+    let network = configured_network(&state.load_settings());
     // The group id is the hex of its verifying key (the Orchard ak).
     let ufvk = frost_app_core::zcash::derive_orchard_keys_hex(group_id, network.network_type())?.ufvk;
     Ok((network, cfg.lightwalletd_url, ufvk))
@@ -159,11 +309,15 @@ pub async fn wallet_init_account(
     let (network, url, ufvk) = group_wallet_ctx(&state, &group_id).await?;
     let db_key = state.wallet_db_key(&group_id).await?;
 
-    let recorded = state
-        .load_settings()
-        .wallet_birthdays
-        .get(&group_id)
-        .copied();
+    // Recorded birthdays are keyed by group, not network, and are only ever
+    // public-chain heights. A devnet always scans its whole (tiny) chain — see
+    // `default_birthday_height` — and is reset often, so it neither reuses a
+    // recorded height (a testnet ~4.1M would hide every devnet note) nor
+    // records its own (which would clobber the group's real birthday).
+    let is_devnet = matches!(network, WalletNetwork::Regtest(_));
+    let recorded = (!is_devnet)
+        .then(|| state.load_settings().wallet_birthdays.get(&group_id).copied())
+        .flatten();
     let requested = birthday_height.or(recorded);
 
     let scan_from = wallet::init_group_account(
@@ -180,7 +334,7 @@ pub async fn wallet_init_account(
     // Remember where this wallet starts, so a later rebuild of the (deleted)
     // wallet database scans from here again rather than from the chain tip.
     // `scan_from == 0` means the account already existed; nothing was imported.
-    if scan_from > 0 && recorded != Some(scan_from) {
+    if scan_from > 0 && !is_devnet && recorded != Some(scan_from) {
         let mut settings = state.load_settings();
         settings.wallet_birthdays.insert(group_id, scan_from);
         state.save_settings(&settings)?;
@@ -467,10 +621,18 @@ pub async fn resolve_zns_name(
     state: State<'_, AppState>,
     name: String,
 ) -> AppResult<Option<frost_app_core::zns::ResolveResult>> {
-    let mainnet = matches!(
-        network_from_str(&resolve_config(&state).network),
-        WalletNetwork::Main
-    );
+    let mainnet = match configured_network(&state.load_settings()) {
+        WalletNetwork::Main => true,
+        WalletNetwork::Test => false,
+        // There is no ZNS indexer for a local chain. Say so, rather than
+        // returning `None`, which the UI would show as "name not registered".
+        WalletNetwork::Regtest(_) => {
+            return Err(AppError::new(
+                "config",
+                "ZcashNames aren't available on the local devnet — paste a uregtest1… address instead",
+            ))
+        }
+    };
     Ok(frost_app_core::zns::resolve_name(&name, mainnet).await?)
 }
 
@@ -602,7 +764,7 @@ pub async fn wallet_send<R: tauri::Runtime>(
     let ctx_fee = draft.fee_zatoshis;
     let ctx_memo = draft.memo.clone();
     let ctx_is_unshield = draft.is_unshield;
-    let ctx_network = if matches!(network, WalletNetwork::Main) { "main" } else { "test" }.to_string();
+    let ctx_network = network.as_str().to_string();
     let plan_id = ceremony_id.to_string();
     tauri::async_runtime::spawn(async move {
         let fail = |error: String| {

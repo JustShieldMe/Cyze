@@ -251,10 +251,11 @@ balance and history update (use **Sync Now** on the Wallet page if needed).
 Network and light-client endpoint are set on the **Wallet Settings** page.
 
 **Network.** Cyze defaults to **Mainnet**. The active network is shown as a small
-**Mainnet / Testnet** label on the wallet page, and a real mainnet send asks for
-one confirmation before it broadcasts. Switch to **Testnet** to test with faucet
-funds, and back to Mainnet when ready. Balances, addresses, and history are kept
-entirely separate per network.
+**Mainnet / Testnet / Devnet** label on the wallet page, and a real mainnet send
+asks for one confirmation before it broadcasts. Switch to **Testnet** to test with
+faucet funds, and back to Mainnet when ready. **Local devnet** is for development
+(see below). Balances, addresses, and history are kept entirely separate per
+network.
 
 **lightwalletd endpoint.** Each network offers a **preset** public endpoint
 (`zec.rocks` on mainnet, `testnet.zec.rocks` on testnet). To use your own node,
@@ -270,6 +271,49 @@ refreshes every panel (balances, pending/settled, notes, and history).
 time**. Use **Zcash → Wallets** to switch between groups; selecting one makes it
 the active wallet, and the app stops syncing the previous one so all processing
 stays focused on your choice.
+
+### Local devnet (regtest)
+
+For Zcash development, Cyze can run against a private regtest chain on your own
+machine, using
+[thus-spoke-zakura](https://github.com/zcashlabs/thus-spoke-zakura). Nothing on
+a devnet is real money: addresses start with `uregtest1…` and amounts show as
+**rZEC**.
+
+1. **Install and start the devnet** (Linux or macOS, needs Docker):
+   ```sh
+   curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/zcashlabs/thus-spoke-zakura/main/install.sh | sh
+   thus-spoke-zakura            # keep it running; Ctrl-C deletes the devnet
+   ```
+2. In **Wallet Settings**, choose **Local devnet** and click **Detect local
+   devnet**. Cyze asks the `thus-spoke-zakura` CLI where lightwalletd is
+   listening (it picks a random port) and checks that it answers. Then click
+   **Save**. If Cyze can't find the CLI, run `thus-spoke-zakura endpoints` and
+   paste the `lightwalletd` URL (`http://127.0.0.1:<port>`) into the endpoint
+   field. Plain `http://` is allowed only for local addresses. On Windows, run
+   the devnet in WSL2 and enter the URL by hand.
+3. **Network upgrade.** A devnet picks its own upgrades, and the wallet must
+   match the node. **Auto** reads the upgrade from the node when you click
+   Detect or Test connection. You can also force NU6 through NU6.3 (Ironwood).
+4. **Fund the group.** Open the group's wallet, copy its `uregtest1…` address,
+   and use the faucet on the devnet dashboard (the link appears after Detect).
+   Mine a few blocks there so the funds confirm. Devnet wallets scan the whole
+   chain, so funds sent before you opened the wallet still show up.
+
+**Limitations:**
+- **Sends need NU6.2 or later.** The stock devnet runs **NU6**. Cyze can only
+  build Orchard proofs with the NU6.2+ circuit, so a NU6 node will most likely
+  reject a send, and the settings page warns you about this. Syncing, receiving,
+  and balances work. To test sends, use a devnet that activates NU6.2 or NU6.3.
+- **Before Ironwood, the balance is the Orchard pool.** Until the devnet
+  activates NU6.3, the balance shows the Orchard pool, because that's where
+  devnet funds land.
+- ZcashNames don't resolve on a devnet.
+- **Resetting the devnet starts a brand-new chain.** A group's devnet wallet
+  still holds the old chain, so after `thus-spoke-zakura reset` (or recreating
+  it), delete that wallet's data: the `wallets/<group id>/regtest/` folder in
+  Cyze's data directory. It is rebuilt on the next sync. This only affects
+  devnet data. Testnet and mainnet wallets are stored separately.
 
 **Diagnostics log.** Wallet Settings has a **Diagnostics log** card that captures
 what the app logs while running (sync steps, errors). Use **Copy all** to grab it

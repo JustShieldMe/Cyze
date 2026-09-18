@@ -1,4 +1,5 @@
 pub mod commands;
+pub mod devnet;
 pub mod error;
 pub mod logbuf;
 pub mod sidecar;
@@ -82,6 +83,7 @@ pub fn run() {
             commands::wallet::get_wallet_config,
             commands::wallet::set_wallet_config,
             commands::wallet::lightwalletd_info,
+            commands::wallet::detect_local_devnet,
             commands::wallet::wallet_group_status,
             commands::wallet::wallet_init_account,
             commands::wallet::wallet_sync,

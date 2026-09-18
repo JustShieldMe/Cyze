@@ -8,15 +8,14 @@ import {
   walletGroupStatus,
   GroupSummary,
   AppError,
+  WalletNetwork,
 } from "../ipc/commands";
+import { asNetwork, unit } from "../network";
 import { useCeremonies } from "../stores/ceremonies";
 
 /** Amount display from zatoshis (1 unit = 1e8 zatoshis). */
 function zec(zats: number): string {
   return (zats / 1e8).toLocaleString(undefined, { maximumFractionDigits: 8 });
-}
-function unit(isMainnet: boolean): string {
-  return isMainnet ? "ZEC" : "TAZ";
 }
 
 /**
@@ -33,7 +32,7 @@ export default function Wallets() {
   const groups = useQuery({ queryKey: ["groups"], queryFn: listGroups });
   const active = useQuery({ queryKey: ["active-wallet"], queryFn: getActiveWallet });
   const walletConfig = useQuery({ queryKey: ["wallet-config"], queryFn: getWalletConfig });
-  const isMainnet = walletConfig.data?.network === "main";
+  const network = asNetwork(walletConfig.data?.network);
 
   const activeSendByGroup = useCeremonies((s) => s.activeSendByGroup);
   const activeSigningId = useCeremonies((s) => s.activeSigningId);
@@ -94,7 +93,7 @@ export default function Wallets() {
             <WalletRow
               key={g.id}
               group={g}
-              isMainnet={isMainnet}
+              network={network}
               isActive={g.id === activeId}
               pending={activate.isPending}
               onSelect={() => select(g)}
@@ -121,13 +120,13 @@ export default function Wallets() {
 
 function WalletRow({
   group,
-  isMainnet,
+  network,
   isActive,
   pending,
   onSelect,
 }: {
   group: GroupSummary;
-  isMainnet: boolean;
+  network: WalletNetwork;
   isActive: boolean;
   pending: boolean;
   onSelect: () => void;
@@ -164,7 +163,7 @@ function WalletRow({
           {" · "}
           {!s || !s.initialized
             ? "not set up yet"
-            : `${zec(total)} ${unit(isMainnet)}`}
+            : `${zec(total)} ${unit(network)}`}
         </div>
       </div>
       <button onClick={onSelect} disabled={pending} className={isActive ? "secondary" : undefined}>

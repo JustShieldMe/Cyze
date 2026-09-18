@@ -43,9 +43,18 @@ pub struct Settings {
     /// Local nicknames/aliases for contacts, keyed by hex comm pubkey.
     #[serde(default)]
     pub contact_aliases: HashMap<String, String>,
-    /// Zcash network for wallet features: "test" (default) or "main".
+    /// Zcash network for wallet features: "main" (default), "test", or
+    /// "regtest" (a local devnet).
     #[serde(default)]
     pub wallet_network: Option<String>,
+    /// Regtest only: the upgrade level the user forced ("nu6" … "nu6_3").
+    /// `None` means auto — use [`Settings::regtest_detected`].
+    #[serde(default)]
+    pub regtest_upgrade: Option<String>,
+    /// Regtest only: the upgrade level last read from the devnet node's
+    /// consensus branch id (recorded by the connection test).
+    #[serde(default)]
+    pub regtest_detected: Option<String>,
     /// lightwalletd endpoint for the selected network.
     #[serde(default)]
     pub lightwalletd_url: Option<String>,

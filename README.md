@@ -38,6 +38,10 @@ authorize any spend.
   active wallet at a time** — selecting a group makes it the sole wallet the app
   syncs and acts on. Includes on-chain and local transaction/message history, and
   an in-app diagnostics log for troubleshooting.
+- **Local devnet for development** — besides mainnet and testnet, the wallet can
+  run against a local regtest devnet
+  ([thus-spoke-zakura](https://github.com/zcashlabs/thus-spoke-zakura)), found
+  with one click, for Zcash protocol and app development with throwaway funds.
 - **Coinholder voting** — cast a Zcash coinholder-poll vote from a group: paste
   the poll's published ballot, answer, and the vote is delivered as a shielded
   memo (Vote Cast Memo v1) to the poll's reception address through the same FROST

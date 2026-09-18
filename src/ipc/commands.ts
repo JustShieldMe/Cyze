@@ -116,9 +116,29 @@ export const setUsername = (username: string) =>
   invoke<void>("set_username", { username });
 
 // Zcash wallet (light-client)
+/** The Zcash network the wallet runs on. "regtest" is a local devnet. */
+export type WalletNetwork = "main" | "test" | "regtest";
+/** A local devnet's newest active upgrade (all activated from genesis). */
+export type RegtestUpgrade = "nu6" | "nu6_1" | "nu6_2" | "nu6_3";
 export interface WalletConfig {
-  network: string; // "test" | "main"
+  network: WalletNetwork;
   lightwalletd_url: string;
+  /** Devnet: the forced upgrade level, or null for auto. */
+  regtest_upgrade: RegtestUpgrade | null;
+  /** Devnet: the level last read from the node, if any. */
+  regtest_detected: RegtestUpgrade | null;
+  /** Devnet: the level in use (override, else detected, else NU6). */
+  regtest_effective: RegtestUpgrade | null;
+}
+/** What "Detect local devnet" found. */
+export interface DevnetStatus {
+  installed: boolean;
+  running: boolean;
+  lightwalletd: string | null;
+  dashboard: string | null;
+  block_height: number | null;
+  detected_upgrade: RegtestUpgrade | null;
+  detail: string | null;
 }
 export interface LightwalletdInfo {
   chain_name: string;
@@ -134,8 +154,13 @@ export interface LightwalletdInfo {
   branch_supported: boolean | null;
 }
 export const getWalletConfig = () => invoke<WalletConfig>("get_wallet_config");
-export const setWalletConfig = (network: string, lightwalletdUrl: string) =>
-  invoke<WalletConfig>("set_wallet_config", { network, lightwalletdUrl });
+export const setWalletConfig = (
+  network: WalletNetwork,
+  lightwalletdUrl: string,
+  regtestUpgrade: RegtestUpgrade | null = null
+) => invoke<WalletConfig>("set_wallet_config", { network, lightwalletdUrl, regtestUpgrade });
+export const detectLocalDevnet = (instance: string | null = null) =>
+  invoke<DevnetStatus>("detect_local_devnet", { instance });
 export const lightwalletdInfo = (url: string | null) =>
   invoke<LightwalletdInfo>("lightwalletd_info", { url });
 
