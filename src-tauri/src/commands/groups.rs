@@ -38,10 +38,9 @@ pub async fn group_orchard_keys(
     if !ciphersuite.contains("Pallas") {
         return Ok(None);
     }
-    // Encode for the configured network (testnet during testing).
-    let network = frost_app_core::wallet::WalletNetwork::from_str(
-        state.load_settings().wallet_network.as_deref().unwrap_or("test"),
-    );
+    // Encode for the configured network, resolved the same way as every wallet
+    // command (so the group page and the wallet never disagree on the prefix).
+    let network = crate::commands::wallet::configured_network(&state.load_settings());
     Ok(Some(frost_app_core::zcash::derive_orchard_keys_hex(
         &id,
         network.network_type(),

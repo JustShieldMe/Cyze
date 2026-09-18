@@ -277,7 +277,7 @@ fn normalize_endpoint(url: &str) -> String {
 /// True when the host component of a normalized URL is a loopback address —
 /// plaintext gRPC is only tolerated against a local node (regtest/dev), never
 /// against a remote lightwalletd where the traffic would cross the network.
-fn is_loopback_host(normalized_url: &str) -> bool {
+pub fn is_loopback_host(normalized_url: &str) -> bool {
     let after_scheme = normalized_url
         .split_once("://")
         .map(|(_, rest)| rest)
