@@ -63,7 +63,9 @@ zcash_client_backend = { version = "=0.24.0-rc.7", optional = true, default-feat
 zcash_client_sqlite = { version = "=0.22.0-rc.8", optional = true, features = ["orchard", "transparent-inputs", "unstable", "serde"] }
 pczt = { version = "0.9.1", optional = true, features = ["signer"] }
 zcash_keys = { version = "0.16.1", optional = true, features = ["orchard"] }
-zcash_protocol = { version = "0.10.3", optional = true }
+# `local-consensus` exposes `LocalNetwork`, the regtest parameters used for a
+# local devnet (see `WalletNetwork::Regtest`).
+zcash_protocol = { version = "0.10.3", optional = true, features = ["local-consensus"] }
 tonic = { version = "0.14", optional = true, default-features = false, features = ["transport", "tls-webpki-roots"] }
 # SQLCipher (bundled amalgamation) so the per-group wallet database is encrypted
 # at rest. Feature-unifies with zcash_client_sqlite's `bundled` rusqlite: the
@@ -95,3 +97,8 @@ wallet = [
 
 [dev-dependencies]
 tempfile = "3"
+
+[lints.rust]
+# `zcash_unstable = "nu7"` is the zcash crates' opt-in for the next upgrade; the
+# regtest `LocalNetwork` literal in wallet.rs must follow it to stay buildable.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(zcash_unstable, values("nu7", "nutachyon"))'] }
