@@ -33,7 +33,9 @@ import {
   ContactDto,
   GroupSummary,
   Identity,
+  WalletNetwork,
 } from "../ipc/commands";
+import { asNetwork, devnetHasIronwood, networkLabel, unit } from "../network";
 import { resolveParticipant } from "../lib/participants";
 import {
   useCeremonies,
@@ -46,10 +48,6 @@ function zec(zats: number): string {
   return (zats / 1e8).toLocaleString(undefined, { maximumFractionDigits: 8 });
 }
 
-/** The currency ticker for the active network: ZEC on mainnet, TAZ on testnet. */
-function unit(isMainnet: boolean): string {
-  return isMainnet ? "ZEC" : "TAZ";
-}
 
 /** How long an unconfirmed send is still worth showing. A transaction's expiry
  *  is ~40 blocks (≈50 min), so past an hour with no on-chain row it can never
@@ -164,17 +162,31 @@ function MainnetConfirmModal({
 
 type SendMode = "shielded" | "unshield";
 
-/** Network a transparent address belongs to (mainnet t1/t3 P2PKH/P2SH,
- *  testnet tm/t2), or null if not a transparent address. */
-function transparentNet(a: string): "main" | "test" | null {
+const RECIPIENT_PLACEHOLDER: Record<SendMode, Record<WalletNetwork, string>> = {
+  unshield: {
+    main: "t1… or t3… (mainnet transparent)",
+    test: "tm… or t2… (testnet transparent)",
+    regtest: "tm… (devnet transparent)",
+  },
+  shielded: {
+    main: "u1… (mainnet)",
+    test: "utest1… (testnet)",
+    regtest: "uregtest1… (devnet)",
+  },
+};
+
+/** Network a transparent address belongs to (mainnet t1/t3 P2PKH/P2SH, or
+ *  tm/t2 — shared by testnet and regtest), or null if not a transparent address. */
+function transparentNet(a: string): WalletNetwork | "test-or-regtest" | null {
   if (a.startsWith("t1") || a.startsWith("t3")) return "main";
-  if (a.startsWith("tm") || a.startsWith("t2")) return "test";
+  if (a.startsWith("tm") || a.startsWith("t2")) return "test-or-regtest";
   return null;
 }
 
-/** Network a shielded address belongs to (UA u1/utest1, Sapling zs1/ztestsapling),
- *  or null if not a shielded address. */
-function shieldedNet(a: string): "main" | "test" | null {
+/** Network a shielded address belongs to (UA u1/utest1/uregtest1, Sapling
+ *  zs1/ztestsapling/zregtestsapling), or null if not a shielded address. */
+function shieldedNet(a: string): WalletNetwork | null {
+  if (a.startsWith("uregtest") || a.startsWith("zregtestsapling")) return "regtest";
   if (a.startsWith("utest") || a.startsWith("ztestsapling")) return "test";
   if (a.startsWith("u1") || a.startsWith("zs1")) return "main";
   return null;
@@ -186,24 +198,25 @@ function shieldedNet(a: string): "main" | "test" | null {
  *  Address::decode stays authoritative on submit; this is fast guidance. */
 function validateRecipient(
   address: string,
-  isMainnet: boolean,
+  network: WalletNetwork,
   mode: SendMode
 ): string | null {
   const a = address.trim();
   if (!a) return null;
   const t = transparentNet(a);
   const sh = shieldedNet(a);
-  const wrongNet = (net: "main" | "test" | null) =>
-    (isMainnet && net === "test") || (!isMainnet && net === "main");
+  const here = networkLabel(network);
 
   if (mode === "unshield") {
     if (sh) {
       return "This is a shielded address — switch to Send for shielded recipients. Unshield needs a transparent t-address.";
     }
-    if (t && wrongNet(t)) {
-      return isMainnet
-        ? "This looks like a testnet transparent address. You are on Mainnet."
-        : "This looks like a mainnet transparent address. You are on Testnet.";
+    // tm/t2 is valid on both testnet and regtest, so only a clear mismatch is flagged.
+    if (t === "main" && network !== "main") {
+      return `This looks like a mainnet transparent address. You are on ${here}.`;
+    }
+    if (t === "test-or-regtest" && network === "main") {
+      return "This looks like a testnet transparent address. You are on Mainnet.";
     }
     return null;
   }
@@ -211,10 +224,10 @@ function validateRecipient(
   if (t) {
     return "This is a transparent address — switch to Unshield to send to a transparent t-address.";
   }
-  if (sh && wrongNet(sh)) {
-    return isMainnet
-      ? "This looks like a testnet address. You are on Mainnet — check the address carefully."
-      : "This looks like a mainnet address. You are on Testnet.";
+  if (sh && sh !== network) {
+    return `This looks like a ${networkLabel(sh).toLowerCase()} address. You are on ${here}${
+      network === "main" ? " — check the address carefully" : ""
+    }.`;
   }
   return null;
 }
@@ -335,13 +348,13 @@ type WalletTab = "receive" | "send" | "notes" | "vote";
  *  a one-click self-send consolidation to merge fragmented notes into one. */
 function ReviewNotesTab({
   groupId,
-  isMainnet,
+  network,
   onConsolidate,
   consolidatePending,
   disabledReason,
 }: {
   groupId: string;
-  isMainnet: boolean;
+  network: WalletNetwork;
   onConsolidate: () => void;
   consolidatePending: boolean;
   disabledReason: string | null;
@@ -381,7 +394,7 @@ function ReviewNotesTab({
             Your balance is made of <strong>{spendable.length}</strong> spendable
             note{spendable.length === 1 ? "" : "s"}
             {pending.length > 0 && <> (plus {pending.length} pending)</>}, totalling{" "}
-            <strong>{zec(totalSpendable)} {unit(isMainnet)}</strong> spendable. Each note is a
+            <strong>{zec(totalSpendable)} {unit(network)}</strong> spendable. Each note is a
             separate spend authorization, so a full-balance send needs{" "}
             <strong>
               {rounds} signing round{rounds === 1 ? "" : "s"}
@@ -432,7 +445,7 @@ function ReviewNotesTab({
                 return (
                   <tr key={n.received_txid + i}>
                     <td style={{ fontWeight: 600, whiteSpace: "nowrap" }}>
-                      {zec(n.value_zatoshis)} {unit(isMainnet)}
+                      {zec(n.value_zatoshis)} {unit(network)}
                     </td>
                     <td>
                       <span className={`badge ${b.cls}`}>{b.label}</span>
@@ -496,12 +509,12 @@ function parseBallot(
  *  the vote is a shielded memo sent via the normal review + FROST ceremony. Vote
  *  weight is set by the poll's balance snapshot, not the amount sent. */
 function VoteTab({
-  isMainnet,
+  network,
   disabledReason,
   pending,
   onCastVote,
 }: {
-  isMainnet: boolean;
+  network: WalletNetwork;
   disabledReason: string | null;
   pending: boolean;
   onCastVote: (v: {
@@ -633,7 +646,7 @@ function VoteTab({
             );
           })}
 
-          <label>Amount sent with vote ({unit(isMainnet)})</label>
+          <label>Amount sent with vote ({unit(network)})</label>
           <div>
             <input
               value={amountZec}
@@ -664,7 +677,7 @@ function VoteTab({
 }
 
 /** Per-group Zcash wallet: view-only account, receive address, balance. */
-function GroupWallet({ group, isMainnet }: { group: GroupSummary; isMainnet: boolean }) {
+function GroupWallet({ group, network }: { group: GroupSummary; network: WalletNetwork }) {
   const queryClient = useQueryClient();
   const status = useQuery({
     queryKey: ["wallet-status", group.id],
@@ -675,6 +688,14 @@ function GroupWallet({ group, isMainnet }: { group: GroupSummary; isMainnet: boo
     // finish, so a confirmation could sit on screen unreflected.
     refetchInterval: 5_000,
   });
+  const walletConfig = useQuery({ queryKey: ["wallet-config"], queryFn: getWalletConfig });
+  // Ironwood is where new shielded funds land — except on a local devnet that
+  // hasn't activated it (thus-spoke-zakura stops at NU6), where Orchard is still
+  // the live pool. There the Orchard balance is the real balance, not legacy.
+  const livePool: "ironwood" | "orchard" =
+    network === "regtest" && !devnetHasIronwood(walletConfig.data?.regtest_effective ?? null)
+      ? "orchard"
+      : "ironwood";
   const [err, setErr] = useState<string | null>(null);
   const [walletTab, setWalletTab] = useState<WalletTab>("receive");
 
@@ -785,7 +806,7 @@ function GroupWallet({ group, isMainnet }: { group: GroupSummary; isMainnet: boo
   const mustResolveName = recipientLooksLikeName && !znsResult;
   const recipientErr = mustResolveName
     ? null
-    : validateRecipient(effectiveRecipient, isMainnet, sendMode);
+    : validateRecipient(effectiveRecipient, network, sendMode);
   // Balances are read from the local wallet database, which is empty (or stale)
   // until the first sync finishes. Building a transaction before then selects
   // from notes the wallet hasn't scanned yet and fails with a spurious
@@ -837,7 +858,7 @@ function GroupWallet({ group, isMainnet }: { group: GroupSummary; isMainnet: boo
       const spendable = status.data?.spendable_zatoshis ?? 0;
       if (!addr) throw new Error("wallet address not available — try syncing first");
       if (spendable <= CONSOLIDATE_FEE_BUFFER)
-        throw new Error(`balance too low to consolidate (need > 0.001 ${unit(isMainnet)} above fees)`);
+        throw new Error(`balance too low to consolidate (need > 0.001 ${unit(network)} above fees)`);
       return walletPrepareSend(group.id, addr, spendable - CONSOLIDATE_FEE_BUFFER);
     },
     onSuccess: (d) => {
@@ -866,7 +887,7 @@ function GroupWallet({ group, isMainnet }: { group: GroupSummary; isMainnet: boo
       if (!addr) throw new Error("wallet address not available — try syncing first");
       if (orchard <= CONSOLIDATE_FEE_BUFFER)
         throw new Error(
-          `Legacy balance too low to move (need > 0.001 ${unit(isMainnet)} above fees)`
+          `Legacy balance too low to move (need > 0.001 ${unit(network)} above fees)`
         );
       return walletPrepareSend(group.id, addr, orchard - CONSOLIDATE_FEE_BUFFER);
     },
@@ -1104,34 +1125,42 @@ function GroupWallet({ group, isMainnet }: { group: GroupSummary; isMainnet: boo
         </>
       ) : (
         <>
-          {/* Balance summary — the group's Ironwood balance, the pool all new
-              shielded value lands in. Any legacy Orchard balance is surfaced
-              separately below, only when it exists. */}
+          {/* Balance summary — the group's balance in the live pool: Ironwood,
+              where all new shielded value lands (or Orchard on a pre-Ironwood
+              devnet). Any legacy Orchard balance is surfaced separately below,
+              only when it exists. */}
           <div className="wallet-summary">
             <div className="row" style={{ gap: 28 }}>
               <div>
                 <label>Spendable</label>
                 <div style={{ fontSize: 18, color: "var(--accent)" }}>
-                  {zec(s.ironwood.spendable_zatoshis)} {unit(isMainnet)}
+                  {zec(s[livePool].spendable_zatoshis)} {unit(network)}
                 </div>
               </div>
               <div>
                 <label>Pending</label>
                 <div style={{ fontSize: 18 }}>
-                  {zec(s.ironwood.pending_zatoshis)} {unit(isMainnet)}
+                  {zec(s[livePool].pending_zatoshis)} {unit(network)}
                 </div>
               </div>
               <div>
                 <label>Total</label>
                 <div style={{ fontSize: 18 }}>
-                  {zec(s.ironwood.total_zatoshis)} {unit(isMainnet)}
+                  {zec(s[livePool].total_zatoshis)} {unit(network)}
                 </div>
               </div>
             </div>
+            {livePool === "orchard" && (
+              <div className="dim" style={{ fontSize: 12, marginTop: 6 }}>
+                Orchard pool — Ironwood isn't active on this devnet.
+              </div>
+            )}
             {/* Legacy Orchard funds: only surfaced when a spendable balance
                 actually remains, with a one-tap sweep into Ironwood. New groups
-                never hold Orchard, so this stays hidden for them. */}
-            {s.orchard.spendable_zatoshis > CONSOLIDATE_FEE_BUFFER &&
+                never hold Orchard, so this stays hidden for them — as it does
+                on a pre-Ironwood devnet, where there is no Ironwood to move to. */}
+            {livePool === "ironwood" &&
+              s.orchard.spendable_zatoshis > CONSOLIDATE_FEE_BUFFER &&
               !(activeSend && !activeSend.done) && (
                 <div
                   style={{
@@ -1143,7 +1172,7 @@ function GroupWallet({ group, isMainnet }: { group: GroupSummary; isMainnet: boo
                   }}
                 >
                   <strong>Move legacy funds to Ironwood.</strong> This group holds{" "}
-                  {zec(s.orchard.spendable_zatoshis)} {unit(isMainnet)} in the old
+                  {zec(s.orchard.spendable_zatoshis)} {unit(network)} in the old
                   pool. Sweep it across so all funds stay spendable.
                   <div style={{ marginTop: 8 }}>
                     <button onClick={() => migrate.mutate()} disabled={migrate.isPending}>
@@ -1255,7 +1284,7 @@ function GroupWallet({ group, isMainnet }: { group: GroupSummary; isMainnet: boo
           {walletTab === "notes" && (
             <ReviewNotesTab
               groupId={group.id}
-              isMainnet={isMainnet}
+              network={network}
               onConsolidate={() => {
                 consolidate.mutate();
                 setWalletTab("send");
@@ -1274,7 +1303,7 @@ function GroupWallet({ group, isMainnet }: { group: GroupSummary; isMainnet: boo
           {/* Vote tab */}
           {walletTab === "vote" && (
             <VoteTab
-              isMainnet={isMainnet}
+              network={network}
               disabledReason={
                 activeSend && !activeSend.done
                   ? "A transaction is already in progress."
@@ -1300,7 +1329,7 @@ function GroupWallet({ group, isMainnet }: { group: GroupSummary; isMainnet: boo
                     setIsConsolidation(false);
                     setShowConfirm(false);
                   }}
-                  isMainnet={isMainnet}
+                  network={network}
                 />
               ) : (
                 <>
@@ -1335,15 +1364,7 @@ function GroupWallet({ group, isMainnet }: { group: GroupSummary; isMainnet: boo
                   </label>
                   <input
                     type="text"
-                    placeholder={
-                      sendMode === "unshield"
-                        ? isMainnet
-                          ? "t1… or t3… (mainnet transparent)"
-                          : "tm… or t2… (testnet transparent)"
-                        : isMainnet
-                          ? "u1… (mainnet)"
-                          : "utest1… (testnet)"
-                    }
+                    placeholder={RECIPIENT_PLACEHOLDER[sendMode][network]}
                     value={recipient}
                     onChange={(e) => setRecipient(e.target.value)}
                   />
@@ -1390,7 +1411,7 @@ function GroupWallet({ group, isMainnet }: { group: GroupSummary; isMainnet: boo
                       )}
                     </div>
                   )}
-                  <label>Amount ({unit(isMainnet)})</label>
+                  <label>Amount ({unit(network)})</label>
                   <input
                     type="text"
                     placeholder="0.001"
@@ -1450,7 +1471,7 @@ function GroupWallet({ group, isMainnet }: { group: GroupSummary; isMainnet: boo
                       {pendingBalance > 0 ? (
                         <>
                           {" "}
-                          {zec(pendingBalance)} {unit(isMainnet)} is still awaiting
+                          {zec(pendingBalance)} {unit(network)} is still awaiting
                           confirmations — received funds need 10 confirmations
                           (your own change needs 3) before they can be spent.
                         </>
@@ -1461,7 +1482,7 @@ function GroupWallet({ group, isMainnet }: { group: GroupSummary; isMainnet: boo
                   )}
                   {initialSyncDone && !noSpendableBalance && exceedsBalance && (
                     <p className="dim" style={{ marginTop: 6, fontSize: 12 }}>
-                      You can spend at most {zec(spendableBalance)} {unit(isMainnet)}{" "}
+                      You can spend at most {zec(spendableBalance)} {unit(network)}{" "}
                       right now (a network fee is taken on top of the amount).
                     </p>
                   )}
@@ -1494,7 +1515,7 @@ function GroupWallet({ group, isMainnet }: { group: GroupSummary; isMainnet: boo
                             Coinholder-poll <strong>vote</strong> — sends a shielded memo
                             (your encoded answers) to the poll's reception address. Vote
                             weight comes from the poll's balance snapshot, not the{" "}
-                            <strong>{zec(draft.amount_zatoshis)} {unit(isMainnet)}</strong>{" "}
+                            <strong>{zec(draft.amount_zatoshis)} {unit(network)}</strong>{" "}
                             dust sent with it. {draft.spends.length} note
                             {draft.spends.length !== 1 ? "s" : ""} will be signed. Keep the
                             group's balance through the poll's snapshot window to be counted.
@@ -1523,7 +1544,7 @@ function GroupWallet({ group, isMainnet }: { group: GroupSummary; isMainnet: boo
                       {!isConsolidation && draft.is_unshield && (
                         <div className="callout warn" style={{ marginBottom: 12 }}>
                           <span>
-                            Unshield — moves <strong>{zec(draft.amount_zatoshis)} {unit(isMainnet)}</strong> to
+                            Unshield — moves <strong>{zec(draft.amount_zatoshis)} {unit(network)}</strong> to
                             a transparent address, so the amount and recipient will be{" "}
                             <strong>public on-chain</strong>.
                           </span>
@@ -1539,15 +1560,15 @@ function GroupWallet({ group, isMainnet }: { group: GroupSummary; isMainnet: boo
                           </tr>
                           <tr>
                             <td>Amount to send</td>
-                            <td>{zec(draft.amount_zatoshis)} {unit(isMainnet)}</td>
+                            <td>{zec(draft.amount_zatoshis)} {unit(network)}</td>
                           </tr>
                           <tr>
                             <td>Fee</td>
-                            <td>{zec(draft.fee_zatoshis)} {unit(isMainnet)}</td>
+                            <td>{zec(draft.fee_zatoshis)} {unit(network)}</td>
                           </tr>
                           <tr>
                             <td>Total</td>
-                            <td>{zec(draft.amount_zatoshis + draft.fee_zatoshis)} {unit(isMainnet)}</td>
+                            <td>{zec(draft.amount_zatoshis + draft.fee_zatoshis)} {unit(network)}</td>
                           </tr>
                           <tr>
                             <td>Sighash</td>
@@ -1629,7 +1650,7 @@ function GroupWallet({ group, isMainnet }: { group: GroupSummary; isMainnet: boo
                       </p>
                       <button
                         onClick={() => {
-                          if (isMainnet && !isConsolidation) {
+                          if (network === "main" && !isConsolidation) {
                             setShowConfirm(true);
                           } else {
                             send.mutate();
@@ -1790,12 +1811,12 @@ function SendSessionPanel({
   ceremonyId,
   ceremony,
   onDismiss,
-  isMainnet,
+  network,
 }: {
   ceremonyId: string;
   ceremony: CeremonyState;
   onDismiss: () => void;
-  isMainnet: boolean;
+  network: WalletNetwork;
 }) {
   const [copied, setCopied] = useState(false);
   const [cancelling, setCancelling] = useState(false);
@@ -1844,7 +1865,7 @@ function SendSessionPanel({
             <tbody>
               <tr>
                 <td>{meta.isUnshield ? "Unshielding" : "Sending"}</td>
-                <td>{zec(meta.amountZatoshis)} {unit(isMainnet)}</td>
+                <td>{zec(meta.amountZatoshis)} {unit(network)}</td>
               </tr>
               <tr>
                 <td>To</td>
@@ -1854,7 +1875,7 @@ function SendSessionPanel({
               </tr>
               <tr>
                 <td>Fee</td>
-                <td>{zec(meta.feeZatoshis)} {unit(isMainnet)}</td>
+                <td>{zec(meta.feeZatoshis)} {unit(network)}</td>
               </tr>
               {meta.memo && (
                 <tr>
@@ -2455,7 +2476,7 @@ export function GroupWalletPage() {
   const { groups } = useGroupData();
   const group = groups.data?.find((g) => g.id === id);
   const walletConfig = useQuery({ queryKey: ["wallet-config"], queryFn: getWalletConfig });
-  const isMainnet = walletConfig.data?.network === "main";
+  const network = asNetwork(walletConfig.data?.network);
   const queryClient = useQueryClient();
 
   // Opening a wallet makes it the active wallet, so the app's processing follows
@@ -2508,11 +2529,16 @@ export function GroupWalletPage() {
               letterSpacing: "0.05em",
               padding: "2px 9px",
               borderRadius: 999,
-              border: "1px solid var(--border)",
-              color: isMainnet ? "var(--danger)" : "var(--muted, #8a8a8a)",
+              border: `1px ${network === "regtest" ? "dashed" : "solid"} var(--border)`,
+              color:
+                network === "main"
+                  ? "var(--danger)"
+                  : network === "regtest"
+                    ? "var(--ok)"
+                    : "var(--muted, #8a8a8a)",
             }}
           >
-            {isMainnet ? "Mainnet" : "Testnet"}
+            {networkLabel(network)}
           </span>
         </h2>
         <Link to={`/groups/${group.id}`} className="dim">
@@ -2520,9 +2546,9 @@ export function GroupWalletPage() {
         </Link>
       </div>
       <div className="card">
-        <GroupWallet group={group} isMainnet={isMainnet} />
+        <GroupWallet group={group} network={network} />
       </div>
-      <WalletTxHistory group={group} isMainnet={isMainnet} />
+      <WalletTxHistory group={group} network={network} />
     </div>
   );
 }
@@ -2536,7 +2562,7 @@ export function GroupWalletPage() {
  *
  *  Columns: Date & Time | Type | Amount | Address | Tx Hash | [+]
  */
-function WalletTxHistory({ group, isMainnet }: { group: GroupSummary; isMainnet: boolean }) {
+function WalletTxHistory({ group, network }: { group: GroupSummary; network: WalletNetwork }) {
   const history = useQuery({
     queryKey: ["wallet-history", group.id],
     queryFn: () => walletHistory(group.id),
@@ -2651,7 +2677,7 @@ function WalletTxHistory({ group, isMainnet }: { group: GroupSummary; isMainnet:
                 myPubkey={identity.data?.pubkey ?? undefined}
                 isExpanded={expandedKey === row.id}
                 onToggle={() => toggle(row.id)}
-                isMainnet={isMainnet}
+                network={network}
               />
             ))}
             {/* On-chain confirmed rows from SQLite */}
@@ -2665,7 +2691,7 @@ function WalletTxHistory({ group, isMainnet }: { group: GroupSummary; isMainnet:
                 myPubkey={identity.data?.pubkey ?? undefined}
                 isExpanded={expandedKey === tx.txid}
                 onToggle={() => toggle(tx.txid)}
-                isMainnet={isMainnet}
+                network={network}
               />
             ))}
           </tbody>
@@ -2697,7 +2723,7 @@ function TxDetail({
   contacts,
   myPubkey,
   error,
-  isMainnet,
+  network,
 }: {
   colSpan: number;
   txid?: string;
@@ -2713,7 +2739,7 @@ function TxDetail({
   contacts?: ContactDto[];
   myPubkey?: string;
   error?: string;
-  isMainnet: boolean;
+  network: WalletNetwork;
 }) {
   const dateStr = timestamp
     ? fmtDate(new Date(timestamp * 1000))
@@ -2727,7 +2753,7 @@ function TxDetail({
   if (blockHeight != null) rows.push({ label: "Block", value: `#${blockHeight.toLocaleString()}` });
   if (txid) rows.push({ label: "Transaction ID", value: txid, mono: true });
   if (direction) rows.push({ label: "Type", value: direction === "receive" ? "Received" : "Sent" });
-  if (amount != null) rows.push({ label: "Amount", value: `${direction === "receive" ? "+" : "−"}${zec(amount)} ${unit(isMainnet)}` });
+  if (amount != null) rows.push({ label: "Amount", value: `${direction === "receive" ? "+" : "−"}${zec(amount)} ${unit(network)}` });
   // Always report the fee, for every transaction type. It used to be omitted
   // whenever it was unknown, which is precisely the received case — leaving no
   // indication of whether a fee existed at all. A received transaction's fee was
@@ -2737,7 +2763,7 @@ function TxDetail({
     label: "Network Fee",
     value:
       fee != null
-        ? `${zec(fee)} ${unit(isMainnet)}`
+        ? `${zec(fee)} ${unit(network)}`
         : direction === "receive"
           ? "Paid by the sender (not visible to this wallet)"
           : "—",
@@ -2842,7 +2868,7 @@ function PendingTxRow({
   myPubkey,
   isExpanded,
   onToggle,
-  isMainnet,
+  network,
 }: {
   row: PendingRow;
   contacts: ContactDto[];
@@ -2850,7 +2876,7 @@ function PendingTxRow({
   myPubkey?: string;
   isExpanded: boolean;
   onToggle: () => void;
-  isMainnet: boolean;
+  network: WalletNetwork;
 }) {
   const meta = row.send;
   const isUnshield = meta?.isUnshield;
@@ -2874,7 +2900,7 @@ function PendingTxRow({
           )}
         </td>
         <td style={{ textAlign: "right", paddingRight: 12, maxWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12, color: pendingColor }}>
-          {meta ? `−${zec(meta.amountZatoshis)} ${unit(isMainnet)}` : "—"}
+          {meta ? `−${zec(meta.amountZatoshis)} ${unit(network)}` : "—"}
         </td>
         <td className="mono-cell" style={{ maxWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 11, color: pendingColor ?? "var(--fg-muted)" }}>
           {addrDisplay}
@@ -2900,7 +2926,7 @@ function PendingTxRow({
       {isExpanded && (
         <TxDetail
           colSpan={6}
-          isMainnet={isMainnet}
+          network={network}
           txid={row.txid}
           blockHeight={undefined}
           direction={isUnshield ? "send" : "send"}
@@ -2927,7 +2953,7 @@ function OnchainTxRow({
   myPubkey,
   isExpanded,
   onToggle,
-  isMainnet,
+  network,
 }: {
   tx: TxRecord;
   contacts: ContactDto[];
@@ -2936,7 +2962,7 @@ function OnchainTxRow({
   myPubkey?: string;
   isExpanded: boolean;
   onToggle: () => void;
-  isMainnet: boolean;
+  network: WalletNetwork;
 }) {
   const isReceive = tx.direction === "receive";
   const addrDisplay = isReceive
@@ -2965,7 +2991,7 @@ function OnchainTxRow({
         <td style={{ textAlign: "right", paddingRight: 12, maxWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12 }}>
           <span style={{ color: isReceive ? "#4ade80" : undefined }}>
             {isReceive ? "+" : "−"}
-            {zec(tx.amount_zatoshis)} {unit(isMainnet)}
+            {zec(tx.amount_zatoshis)} {unit(network)}
           </span>
         </td>
         <td className="dim mono-cell" style={{ maxWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 11 }}>
@@ -2989,7 +3015,7 @@ function OnchainTxRow({
       {isExpanded && (
         <TxDetail
           colSpan={6}
-          isMainnet={isMainnet}
+          network={network}
           txid={tx.txid}
           timestamp={tx.timestamp}
           blockHeight={tx.block_height}

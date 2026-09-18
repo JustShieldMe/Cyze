@@ -4,42 +4,80 @@ import {
   getWalletConfig,
   lightwalletdInfo,
   setWalletConfig,
+  detectLocalDevnet,
+  openUrl,
   getLogs,
   clearLogs,
   AppError,
+  DevnetStatus,
   LightwalletdInfo,
+  RegtestUpgrade,
+  WalletNetwork,
 } from "../ipc/commands";
+import { REGTEST_UPGRADES, devnetCanSend, upgradeLabel } from "../network";
 
-/** Known public lightwalletd endpoints per network (user can also type their own). */
-const PRESETS: Record<string, { label: string; url: string }[]> = {
+/** Known lightwalletd endpoints per network (user can also type their own). */
+const PRESETS: Record<WalletNetwork, { label: string; url: string }[]> = {
   test: [
     { label: "zec.rocks — testnet", url: "https://testnet.zec.rocks:443" },
     { label: "tz.ombie.cash", url: "https://tz.ombie.cash:443" },
     { label: "tl.ombie.cash", url: "https://tl.ombie.cash:443" },
   ],
   main: [{ label: "zec.rocks", url: "https://zec.rocks:443" }],
+  // A devnet picks its own port; "Detect local devnet" fills the real one.
+  regtest: [],
 };
+
+const PLACEHOLDER: Record<WalletNetwork, string> = {
+  main: "https://zec.rocks:443",
+  test: "https://testnet.zec.rocks:443",
+  regtest: "http://127.0.0.1:<port>",
+};
+
+const NETWORKS: { id: WalletNetwork; label: string; blurb: string }[] = [
+  { id: "test", label: "Testnet", blurb: "Test network — faucet funds." },
+  { id: "main", label: "Mainnet", blurb: "Live network — real ZEC." },
+  { id: "regtest", label: "Local devnet", blurb: "Your own regtest chain — for development." },
+];
+
+const INSTALL_CMD =
+  "curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/zcashlabs/thus-spoke-zakura/main/install.sh | sh";
 
 export default function Wallet() {
   const queryClient = useQueryClient();
   const config = useQuery({ queryKey: ["wallet-config"], queryFn: getWalletConfig });
 
-  const [network, setNetwork] = useState<string | null>(null);
+  const [network, setNetwork] = useState<WalletNetwork | null>(null);
   const [url, setUrl] = useState<string | null>(null);
+  /** Pending devnet upgrade choice: "auto", a forced level, or null = unchanged. */
+  const [upgrade, setUpgrade] = useState<RegtestUpgrade | "auto" | null>(null);
   const [info, setInfo] = useState<LightwalletdInfo | null>(null);
   const [testErr, setTestErr] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
+  const [devnet, setDevnet] = useState<DevnetStatus | null>(null);
+  const [detecting, setDetecting] = useState(false);
 
   // Mainnet is the default (matches the backend), so the app opens on the network
   // it is actually used on rather than quietly pointing at testnet.
-  const net = network ?? config.data?.network ?? "main";
+  const net: WalletNetwork = network ?? config.data?.network ?? "main";
   const effectiveUrl = url ?? config.data?.lightwalletd_url ?? "";
+  const isDevnet = net === "regtest";
+  const detected = config.data?.regtest_detected ?? null;
+  const upgradeChoice = upgrade ?? config.data?.regtest_upgrade ?? "auto";
+  const effectiveUpgrade: RegtestUpgrade =
+    upgradeChoice === "auto" ? detected ?? "nu6" : upgradeChoice;
 
   const save = useMutation({
-    mutationFn: () => setWalletConfig(net, url ?? effectiveUrl),
+    mutationFn: () =>
+      setWalletConfig(
+        net,
+        url ?? effectiveUrl,
+        isDevnet && upgradeChoice !== "auto" ? upgradeChoice : null
+      ),
     onSuccess: (cfg) => {
       setNetwork(null);
       setUrl(null);
+      setUpgrade(null);
       setInfo(null);
       queryClient.setQueryData(["wallet-config"], cfg);
       // Each network has its own wallet db, so balances/notes/history/addresses
@@ -63,6 +101,8 @@ export default function Wallet() {
     setInfo(null);
     try {
       setInfo(await lightwalletdInfo(effectiveUrl || null));
+      // A devnet probe records the node's upgrade level; show it.
+      queryClient.invalidateQueries({ queryKey: ["wallet-config"] });
     } catch (e) {
       setTestErr((e as AppError).message ?? String(e));
     } finally {
@@ -70,7 +110,27 @@ export default function Wallet() {
     }
   };
 
-  const isMainnet = net === "main";
+  const detect = async () => {
+    setDetecting(true);
+    setDevnet(null);
+    setTestErr(null);
+    try {
+      const d = await detectLocalDevnet();
+      setDevnet(d);
+      if (d.running && d.lightwalletd) setUrl(d.lightwalletd);
+      queryClient.invalidateQueries({ queryKey: ["wallet-config"] });
+    } catch (e) {
+      setTestErr((e as AppError).message ?? String(e));
+    } finally {
+      setDetecting(false);
+    }
+  };
+
+  const unsaved =
+    network !== null || url !== null || (upgrade !== null && upgrade !== (config.data?.regtest_upgrade ?? "auto"));
+  // A devnet reports "regtest"; its branch check is the devnet card's job
+  // (the generic mismatch text below is about public-network upgrades).
+  const infoIsDevnet = info?.chain_name === "regtest";
 
   return (
     <div>
@@ -84,67 +144,88 @@ export default function Wallet() {
 
       <div className="card">
         <h3>Network</h3>
-        <div className="row" style={{ marginBottom: 14, alignItems: "center" }}>
-          <button
-            className={net === "test" ? "" : "secondary"}
-            onClick={() => {
-              setNetwork("test");
-              setUrl("");
-            }}
-          >
-            Testnet
-          </button>
-          <button
-            className={isMainnet ? "" : "secondary"}
-            onClick={() => {
-              if (net !== "main") {
-                setNetwork("main");
-                setUrl("");
-              }
-            }}
-          >
-            Mainnet
-          </button>
-          <span className="dim">
-            {isMainnet ? "Live network — real ZEC." : "Test network — faucet funds."}
-          </span>
+        <div className="row" style={{ marginBottom: 14, alignItems: "center", flexWrap: "wrap" }}>
+          {NETWORKS.map((n) => (
+            <button
+              key={n.id}
+              className={net === n.id ? "" : "secondary"}
+              onClick={() => {
+                if (net !== n.id) {
+                  setNetwork(n.id);
+                  setUrl("");
+                  setInfo(null);
+                  setDevnet(null);
+                }
+              }}
+            >
+              {n.label}
+            </button>
+          ))}
+          <span className="dim">{NETWORKS.find((n) => n.id === net)?.blurb}</span>
         </div>
 
+        {isDevnet && (
+          <DevnetPanel
+            detecting={detecting}
+            onDetect={detect}
+            status={devnet}
+            upgradeChoice={upgradeChoice}
+            detected={detected}
+            effectiveUpgrade={effectiveUpgrade}
+            onUpgrade={setUpgrade}
+          />
+        )}
+
         <label>lightwalletd endpoint</label>
-        <select
-          value={
-            PRESETS[net]?.some((p) => p.url === effectiveUrl) ? effectiveUrl : "custom"
-          }
-          onChange={(e) => {
-            if (e.target.value !== "custom") setUrl(e.target.value);
-          }}
-        >
-          {PRESETS[net]?.map((p) => (
-            <option key={p.url} value={p.url}>
-              {p.label} — {p.url}
-            </option>
-          ))}
-          <option value="custom">Custom…</option>
-        </select>
+        {PRESETS[net].length > 0 && (
+          <select
+            value={PRESETS[net].some((p) => p.url === effectiveUrl) ? effectiveUrl : "custom"}
+            onChange={(e) => {
+              if (e.target.value !== "custom") setUrl(e.target.value);
+            }}
+          >
+            {PRESETS[net].map((p) => (
+              <option key={p.url} value={p.url}>
+                {p.label} — {p.url}
+              </option>
+            ))}
+            <option value="custom">Custom…</option>
+          </select>
+        )}
         <input
           type="text"
-          placeholder={net === "main" ? "https://zec.rocks:443" : "https://testnet.zec.rocks:443"}
+          placeholder={PLACEHOLDER[net]}
           value={effectiveUrl}
           onChange={(e) => setUrl(e.target.value)}
         />
         <p className="dim" style={{ marginTop: -6 }}>
-          Pick a server above or type your own (a bare <span className="code-inline">host:443</span>{" "}
-          works too).
+          {isDevnet ? (
+            <>
+              Plain <span className="code-inline">http://</span> is allowed only for{" "}
+              <span className="code-inline">127.0.0.1</span> / <span className="code-inline">localhost</span>.
+            </>
+          ) : (
+            <>
+              Pick a server above or type your own (a bare{" "}
+              <span className="code-inline">host:443</span> works too).
+            </>
+          )}
         </p>
 
-        <div className="row" style={{ marginTop: 4 }}>
+        <div className="row" style={{ marginTop: 4, alignItems: "center" }}>
           <button onClick={() => save.mutate()} disabled={save.isPending}>
             {save.isPending ? "Saving…" : "Save"}
           </button>
           <button className="secondary" onClick={test} disabled={testing}>
             {testing ? "Connecting…" : "Test connection"}
           </button>
+          {unsaved && <span className="dim" style={{ fontSize: 12 }}>Unsaved changes</span>}
         </div>
+        {save.error && (
+          <div className="error" style={{ marginTop: 10 }}>
+            {(save.error as unknown as AppError).message ?? String(save.error)}
+          </div>
+        )}
 
         {info && (
           <div className="callout" style={{ marginTop: 14 }}>
@@ -162,7 +243,7 @@ export default function Wallet() {
             </span>
           </div>
         )}
-        {info && info.branch_supported === false && (
+        {info && !infoIsDevnet && info.branch_supported === false && (
           <div className="callout warn" style={{ marginTop: 10 }}>
             <span>
               <strong>⚠ Network upgrade mismatch — sends will be rejected.</strong>{" "}
@@ -178,10 +259,141 @@ export default function Wallet() {
             </span>
           </div>
         )}
+        {info && infoIsDevnet && !isDevnet && (
+          <div className="callout warn" style={{ marginTop: 10 }}>
+            <span>
+              This endpoint is a local devnet. Select <strong>Local devnet</strong> above
+              before saving it.
+            </span>
+          </div>
+        )}
         {testErr && <div className="error" style={{ marginTop: 10 }}>{testErr}</div>}
       </div>
 
       <LogsCard />
+    </div>
+  );
+}
+
+/** Local-devnet controls: find a running thus-spoke-zakura devnet, and choose
+ *  which network upgrade its chain runs (auto-read from the node by default). */
+function DevnetPanel({
+  detecting,
+  onDetect,
+  status,
+  upgradeChoice,
+  detected,
+  effectiveUpgrade,
+  onUpgrade,
+}: {
+  detecting: boolean;
+  onDetect: () => void;
+  status: DevnetStatus | null;
+  upgradeChoice: RegtestUpgrade | "auto";
+  detected: RegtestUpgrade | null;
+  effectiveUpgrade: RegtestUpgrade;
+  onUpgrade: (u: RegtestUpgrade | "auto") => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const copyInstall = async () => {
+    await navigator.clipboard.writeText(INSTALL_CMD);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
+  return (
+    <div className="devnet-panel">
+      <p className="dim" style={{ marginTop: 0 }}>
+        Point Cyze at a local{" "}
+        <a
+          href="https://github.com/zcashlabs/thus-spoke-zakura"
+          onClick={(e) => {
+            e.preventDefault();
+            openUrl("https://github.com/zcashlabs/thus-spoke-zakura").catch(() => {});
+          }}
+        >
+          thus-spoke-zakura
+        </a>{" "}
+        regtest devnet. Addresses start with <span className="code-inline">uregtest1</span>, and
+        amounts show as <strong>rZEC</strong>. None of it is real money.
+      </p>
+
+      <div className="row" style={{ alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <button className="secondary" onClick={onDetect} disabled={detecting}>
+          {detecting ? "Looking…" : "Detect local devnet"}
+        </button>
+        {status?.running && (
+          <span className="devnet-found">
+            Found · block {status.block_height?.toLocaleString()}
+            {status.detected_upgrade && <> · {upgradeLabel(status.detected_upgrade)}</>} · endpoint
+            filled in, <strong>Save</strong> to use it
+          </span>
+        )}
+      </div>
+
+      {status && !status.running && (
+        <div className="callout warn" style={{ marginTop: 10 }}>
+          <span>
+            {status.detail}
+            {!status.installed && (
+              <>
+                <br />
+                Install it (Linux / macOS, needs Docker), then run{" "}
+                <span className="code-inline">thus-spoke-zakura</span>:
+                <span className="row" style={{ gap: 8, marginTop: 6, alignItems: "center" }}>
+                  <code className="mono devnet-cmd">{INSTALL_CMD}</code>
+                  <button className="secondary" onClick={copyInstall}>
+                    {copied ? "Copied!" : "Copy"}
+                  </button>
+                </span>
+              </>
+            )}
+          </span>
+        </div>
+      )}
+      {status?.dashboard && (
+        <p className="dim" style={{ fontSize: 12, margin: "8px 0 0" }}>
+          Faucet and mining controls:{" "}
+          <a
+            href={status.dashboard}
+            onClick={(e) => {
+              e.preventDefault();
+              openUrl(status.dashboard!).catch(() => {});
+            }}
+          >
+            {status.dashboard}
+          </a>
+        </p>
+      )}
+
+      <label style={{ marginTop: 14 }}>Network upgrade on this chain</label>
+      <select
+        value={upgradeChoice}
+        onChange={(e) => onUpgrade(e.target.value as RegtestUpgrade | "auto")}
+      >
+        <option value="auto">
+          Auto — {detected ? `detected ${upgradeLabel(detected)}` : "not detected yet (assumes NU6)"}
+        </option>
+        {REGTEST_UPGRADES.map((u) => (
+          <option key={u} value={u}>
+            {upgradeLabel(u)}
+          </option>
+        ))}
+      </select>
+      <p className="dim" style={{ marginTop: -6, fontSize: 12 }}>
+        Must match the node: it decides the transaction format and proof circuit. Auto reads it
+        from the node on Detect or Test connection.
+      </p>
+      {!devnetCanSend(effectiveUpgrade) && (
+        <div className="callout warn" style={{ marginTop: 4 }}>
+          <span>
+            <strong>Sends probably won't work on {upgradeLabel(effectiveUpgrade)}.</strong> Cyze
+            can only build Orchard proofs with the NU6.2+ circuit, and a node on an earlier upgrade
+            will likely reject them. Syncing, receiving, and balances work normally. To test
+            sends, run a devnet that activates NU6.2 or NU6.3.
+          </span>
+        </div>
+      )}
     </div>
   );
 }

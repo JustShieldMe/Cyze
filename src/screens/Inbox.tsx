@@ -8,6 +8,7 @@ import {
   AppError,
 } from "../ipc/commands";
 import { useCeremonies } from "../stores/ceremonies";
+import { asNetwork, networkLabel, unit } from "../network";
 
 /** Signer-side ceremony phases, as a human would say them. */
 const SIGNER_PHASES: Record<string, string> = {
@@ -45,12 +46,14 @@ interface SigningContext {
   tx_sighash?: string;
 }
 
-/** Format zatoshis as a ZEC amount (1 ZEC = 100,000,000 zatoshis). */
-function formatZec(zatoshis: number): string {
+/** Format zatoshis in the request's network ticker (1 unit = 100,000,000
+ *  zatoshis): ZEC, TAZ, or rZEC — so an approver never mistakes a test or
+ *  devnet request for real ZEC. */
+function formatZec(zatoshis: number, network: string): string {
   return `${(zatoshis / 1e8).toLocaleString(undefined, {
     minimumFractionDigits: 0,
     maximumFractionDigits: 8,
-  })} ZEC`;
+  })} ${unit(asNetwork(network))}`;
 }
 
 export default function Inbox() {
@@ -216,12 +219,12 @@ export default function Inbox() {
                           <tr>
                             <td className="dim">Amount</td>
                             <td style={{ fontWeight: 600 }}>
-                              {formatZec(txContext.amount_zatoshis)}
+                              {formatZec(txContext.amount_zatoshis, txContext.network)}
                             </td>
                           </tr>
                           <tr>
                             <td className="dim">Fee</td>
-                            <td>{formatZec(txContext.fee_zatoshis)}</td>
+                            <td>{formatZec(txContext.fee_zatoshis, txContext.network)}</td>
                           </tr>
                           <tr>
                             <td className="dim">To</td>
@@ -231,7 +234,7 @@ export default function Inbox() {
                           </tr>
                           <tr>
                             <td className="dim">Network</td>
-                            <td>{txContext.network === "main" ? "Mainnet" : "Testnet"}</td>
+                            <td>{networkLabel(asNetwork(txContext.network))}</td>
                           </tr>
                           {txContext.memo && (
                             <tr>
