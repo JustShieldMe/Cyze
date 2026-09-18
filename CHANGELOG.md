@@ -4,6 +4,25 @@ All notable changes to Cyze are recorded here. Versions follow
 [semantic versioning](https://semver.org); pre-1.0 minor bumps may include
 breaking changes. Cyze is beta, unaudited software (see the README).
 
+## [Unreleased]
+
+### Added
+- **Local devnet (regtest) network.** Point the wallet at a local
+  [thus-spoke-zakura](https://github.com/zcashlabs/thus-spoke-zakura) regtest
+  devnet for Zcash development. **Detect local devnet** finds its randomly
+  assigned lightwalletd port; the chain's network upgrade is read from the node
+  automatically (or forced in settings). Devnet wallets use `uregtest1…`
+  addresses, an `rZEC` ticker, their own wallet data, and scan the whole devnet
+  chain so faucet funds show up right away. On a devnet below NU6.2 (the stock
+  launcher runs NU6), syncing and receiving work but sends will likely be
+  rejected: Cyze can only build Orchard proofs with the NU6.2+ circuit.
+
+### Fixed
+- The approver's Inbox showed amounts as "ZEC" on every network; it now uses the
+  request's ticker (ZEC / TAZ / rZEC).
+- The group page encoded addresses for testnet when no network had been saved,
+  while the wallet used mainnet; both now resolve the network the same way.
+
 ## [0.2.0-rc.1] — 2026-08-16
 
 First release candidate for the **Ironwood (NU6.3)** feature wave. Still targets
