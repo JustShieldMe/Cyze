@@ -22,7 +22,11 @@ jobs:
             target: x86_64-pc-windows-msvc
           - os: macos-latest # Apple Silicon
             target: aarch64-apple-darwin
-          - os: macos-13 # Intel
+          # Intel, cross-compiled on Apple Silicon: GitHub retired the
+          # macos-13 Intel runners, so a job asking for one waits in the queue
+          # until it's cancelled after 24 h (as 0.2.0-rc.3's did). Every step
+          # below builds for `matrix.target`, not the host.
+          - os: macos-latest
             target: x86_64-apple-darwin
     runs-on: ${{ matrix.os }}
     env:
@@ -70,6 +74,8 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          # Both macOS builds run on the same runner image; keep their caches apart.
+          key: ${{ matrix.target }}
 
       - name: Install Node
         uses: actions/setup-node@v4
