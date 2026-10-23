@@ -11,6 +11,7 @@ pub mod config;
 pub mod dkg;
 pub mod error;
 pub mod events;
+pub mod invite;
 pub mod keystore;
 pub mod neterr;
 pub mod redact;

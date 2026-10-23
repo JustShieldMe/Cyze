@@ -742,3 +742,11 @@ a.card.choice, .content a.card.choice:visited { display: block; color: inherit; 
 a.card.choice:hover { border-color: var(--accent); }
 a.card.choice h3 { margin-top: 0; color: var(--accent); }
 a.card.choice p { margin-bottom: 0; }
+.member-picks { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-bottom: 4px; }
+.member-pick { display: flex; align-items: center; gap: 8px; color: var(--text); margin: 0; cursor: pointer; }
+.member-pick input { width: auto; margin: 0; }
+.invite-code { word-break: break-all; max-height: 120px; overflow: auto; font-size: 12px; }
+.invite-members { display: flex; flex-direction: column; gap: 6px; }
+.invite-member { display: grid; grid-template-columns: minmax(90px, auto) auto 1fr; gap: 12px; align-items: center; }
+.invite-member .badge { justify-self: start; }
+label.confirm { color: var(--text); font-size: 13px; }

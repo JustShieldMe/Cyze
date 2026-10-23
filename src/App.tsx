@@ -25,7 +25,8 @@ import Unlock from "./screens/Unlock";
 import Home from "./screens/Home";
 import Groups, { GroupDetail, OpenWallet } from "./screens/Groups";
 import SessionSetup from "./screens/SessionSetup";
-import DkgWizard from "./screens/DkgWizard";
+import NewGroup from "./screens/NewGroup";
+import JoinGroup from "./screens/JoinGroup";
 import NewSigningSession from "./screens/NewSigningSession";
 import Inbox from "./screens/Inbox";
 import Wallet from "./screens/Wallet";
@@ -169,8 +170,8 @@ const router = createBrowserRouter([
       { index: true, element: <Home /> },
       { path: "inbox", element: <Inbox /> },
       { path: "groups", element: <Groups /> },
-      { path: "groups/new", element: <DkgWizard /> },
-      { path: "groups/join", element: <DkgWizard initialRole="join" key="join" /> },
+      { path: "groups/new", element: <NewGroup /> },
+      { path: "groups/join", element: <JoinGroup /> },
       { path: "groups/:id", element: <GroupDetail /> },
       { path: "groups/:id/wallet", element: <OpenWallet /> },
       { path: "sign", element: <NewSigningSession /> },

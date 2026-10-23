@@ -27,6 +27,12 @@ pub struct StartDkgArgs {
 
 #[tauri::command]
 pub async fn start_dkg<R: tauri::Runtime>(app: AppHandle<R>, args: StartDkgArgs) -> AppResult<Uuid> {
+    begin_dkg(&app, args).await
+}
+
+/// Start a DKG ceremony in the background and return its id; progress arrives
+/// as `dkg:*` events.
+pub(crate) async fn begin_dkg<R: tauri::Runtime>(app: &AppHandle<R>, args: StartDkgArgs) -> AppResult<Uuid> {
     let state = app.state::<AppState>();
 
     let server_url = match args.server_url {

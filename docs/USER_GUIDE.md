@@ -120,7 +120,12 @@ create a DKG ceremony. Exchange contacts in both directions before continuing.
 
 All ceremony traffic flows through a FROSTd coordination server. It is an
 untrusted relay — messages are end-to-end encrypted — so one party hosts it and
-the others connect. Go to **Settings → Connection**.
+the others connect.
+
+**You usually don't need this section.** Creating a group starts your server and
+a public link automatically (or Tailscale, if you chose it here), and an invite
+tells members how to connect. Use **Settings → Connection** to choose Tailscale,
+or to set things up by hand as below.
 
 ### As the host (coordinator)
 
@@ -171,7 +176,9 @@ tailscale serve status    # should list the mapping
 
 ### As a participant
 
-1. In **Connect to the coordinator's server**, paste the URL the coordinator gave
+An invite sets this up for you. To connect by hand instead:
+
+1. In **Connect to the organizer's server**, paste the URL the coordinator gave
    you. It looks like `https://frost.example.com`, `https://203.0.113.7:2744`,
    `https://…trycloudflare.com`, or a Tailscale `https://<name>.ts.net`.
 2. Click **Test connection** — a success message confirms the server, its TLS
@@ -193,22 +200,28 @@ Distributed Key Generation creates the shared key. Everyone ends up with one
 share; the full private key never exists anywhere. Go to **Groups → New group**
 (or, from an empty Home screen, **Start a shared wallet**).
 
-### Coordinator
+### Organizer
 
-1. Set **Role → Create a ceremony.**
-2. Enter a **Group name** (tell the participants exactly what you called it — the
-   name is local to each device).
+1. Collect each member's **contact code** (they find it under **Groups →
+   Contacts**, or on the **Join with an invite** screen) and add them under
+   **Members besides you**, either from your contacts or by pasting the code.
+2. Enter a **name** and choose how many members must **approve a payment**.
 3. Groups are Zcash wallets (RedPallas). With **Show advanced options** on, you
    can choose **Ed25519** instead, for general-purpose signing without a wallet.
-4. Set the **threshold** (e.g. 2) and **select the participants** from your
-   contacts.
-5. Click **Begin** and keep the app open.
+4. Click **Create invite.** The app starts your server and a link members can
+   reach, then shows the **invite**. Copy it and send it to the members.
+5. Keep the app open until everyone has joined.
 
-### Participant
+### Member
 
-1. Set **Role → Join a ceremony.**
-2. Enter the **same group name** the coordinator announced.
-3. Click **Begin.** The app joins the ceremony waiting on the configured server.
+1. Choose **Join with an invite** (on Home, or under **Groups**).
+2. Send the organizer **your contact code** (step 1 on that screen). They need
+   it before they create the invite.
+3. Paste the **invite** they send back. The app shows the group, how many must
+   approve, and every member's key. Members already in your contacts are
+   marked; anyone new is added only after you tick the box. If you can, compare
+   the new keys with those people.
+4. Click **Join.**
 
 When all parties have joined, the ceremony completes and the **group** appears in
 **Groups** for everyone, and its wallet opens on **Home**.

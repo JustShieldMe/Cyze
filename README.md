@@ -85,6 +85,9 @@ Supports both frost-tools ciphersuites: **Ed25519** (generic signing) and
   under keys derived from the keystore, and wallet folders have opaque names
   derived the same way. Settings from earlier
   versions move over on the first unlock.
+- **Invites never add keys silently.** An invite lists every member's key; the
+  app marks those already in your contacts and adds new ones only after you
+  confirm, since whoever controls a listed key holds a share.
 - Keystore writes are atomic and flushed to disk, and the previous version is
   kept; unlocking falls back to it if the current file is damaged.
 - All ceremony messages are **end-to-end encrypted** (Noise, via frost-client);
@@ -110,10 +113,10 @@ Supports both frost-tools ciphersuites: **Ed25519** (generic signing) and
 On first launch you set a passphrase and a display name, and are shown a
 one-time recovery code to back up. A typical first run:
 
-1. **Contacts** — swap contact codes with the other members (under **Groups**).
-2. **New group** — run a key-generation ceremony with them to create a shared
-   wallet. The organizer runs the server the group connects through
-   (**Settings → Connection**).
+1. **Contacts** — members send the organizer their contact codes.
+2. **New group** — the organizer picks the members and how many must approve;
+   the app starts a server members can reach and makes an **invite**. Members
+   choose **Join with an invite** and paste it.
 3. **Home** — the wallet: its receive address, balance, and history.
 4. **Send** — enter a recipient and amount; the app runs a signing ceremony with
    the chosen threshold of members, then broadcasts the transaction.
