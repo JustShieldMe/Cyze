@@ -1682,7 +1682,7 @@ dependencies = [
 
 [[package]]
 name = "frost-app"
-version = "0.2.0-rc.3"
+version = "0.3.0-rc.1"
 dependencies = [
  "dirs 5.0.1",
  "frost-app-core",
