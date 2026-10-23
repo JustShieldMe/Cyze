@@ -21,7 +21,9 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tokio::sync::Notify;
 
-use crate::commands::wallet::{group_wallet_ctx, init_account, local_status, shared_lightwalletd, sync_once};
+use crate::commands::wallet::{
+    group_wallet_ctx, init_account, local_status, rebuild_after_reorg, shared_lightwalletd, sync_once,
+};
 use crate::error::AppError;
 use crate::state::{wallet_session_key, AppState};
 
@@ -161,6 +163,20 @@ async fn run<R: Runtime>(app: AppHandle<R>) {
             // Cancelled by a restart, a wallet switch or a network change; the
             // wake that caused it is already pending, so go straight round.
             Err(e) if e.code == "cancelled" => Duration::ZERO,
+            // A reorg below the wallet's start: rebuild it from an earlier
+            // height and sync again straight away.
+            Err(e) if e.code == "reorg" => match rebuild_after_reorg(&state, &group_id).await {
+                Ok(()) => {
+                    tracing::warn!("rebuilt the wallet after a chain reorganization: {}", e.message);
+                    synced_since_unlock.clear();
+                    Duration::ZERO
+                }
+                Err(rebuild) => {
+                    tracing::warn!("couldn't rebuild the wallet after a reorg: {}", rebuild.message);
+                    backoff = Some(backoff.map_or(FIRST_BACKOFF, |b| (b * 2).min(MAX_BACKOFF)));
+                    backoff.unwrap_or(FIRST_BACKOFF)
+                }
+            },
             Err(e) => {
                 tracing::warn!("wallet sync failed: {}", e.message);
                 let mut status = state.sync_service.status(&group_id).unwrap_or_default();

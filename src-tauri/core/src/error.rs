@@ -34,6 +34,10 @@ pub enum CoreError {
     NotSynced { behind: u64 },
     #[error("refused to sign: {0}")]
     Verification(String),
+    /// A chain reorganization went below the wallet's start, so it can't be
+    /// rewound in place; the wallet must be rebuilt from an earlier height.
+    #[error("chain reorganization below the wallet's start: {0}")]
+    Reorg(String),
     #[error("crypto error: {0}")]
     Crypto(String),
     #[error("TLS error: {0}")]

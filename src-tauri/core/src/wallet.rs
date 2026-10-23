@@ -1511,8 +1511,7 @@ fn scan_batch(
                 err.at_height(),
                 rewind_height
             );
-            db.truncate_to_height(rewind_height)
-                .map_err(|e| CoreError::Crypto(format!("truncate on reorg: {e}")))?;
+            rewind_on_reorg(db, err.at_height(), rewind_height)?;
             Ok(true)
         }
         Ok(_) => {
@@ -1528,6 +1527,74 @@ fn scan_batch(
         }
         Err(e) => Err(CoreError::Crypto(format!("scan: {e}"))),
     }
+}
+
+/// Rewind the wallet after a reorg detected at `at_height` (the first block
+/// that didn't connect), preferably to `target` (a few blocks of slack below).
+///
+/// A wallet keeps checkpoints only from its start height on, and new wallets
+/// start at the chain tip, so near the start the backend refuses rewinds that
+/// would discard tree state no rescan could recreate. Then try the smallest
+/// rewind that still drops the block that didn't connect (`at_height - 2`): if
+/// the fork goes deeper, the next scan finds the next mismatch lower down and
+/// this steps back again. When even that is refused, the fork is below what
+/// the wallet can rewind: [`CoreError::Reorg`], and the sync service rebuilds
+/// the wallet from an earlier height. (Ported from the fix in 78e361b.)
+fn rewind_on_reorg(db: &mut GroupDb, at_height: BlockHeight, target: BlockHeight) -> Result<(), CoreError> {
+    use zcash_client_sqlite::error::SqliteClientError;
+    let refused = match db.truncate_to_height(target) {
+        Ok(_) => return Ok(()),
+        Err(e @ SqliteClientError::RequestedRewindInvalid { .. }) => e,
+        Err(e) => return Err(CoreError::Reorg(e.to_string())),
+    };
+    let minimal = at_height.saturating_sub(2);
+    if minimal > target && db.truncate_to_height(minimal).is_ok() {
+        tracing::info!("reorg: rewound only to {minimal}; the wallet can't go back to {target}");
+        return Ok(());
+    }
+    Err(CoreError::Reorg(refused.to_string()))
+}
+
+/// The height a group's wallet started scanning from (its account birthday),
+/// read from its database. `None` if there is no wallet yet.
+pub fn wallet_start_height(
+    data_dir: &Path,
+    group_id: &str,
+    network: WalletNetwork,
+    db_key: &[u8],
+) -> Result<Option<u64>, CoreError> {
+    let db_path = wallet_db_path(data_dir, group_id, network);
+    if !db_path.exists() {
+        return Ok(None);
+    }
+    let db = open_db_read(&db_path, network, db_key)?;
+    let Some(account) = db
+        .get_account_ids()
+        .map_err(|e| CoreError::Crypto(format!("wallet accounts: {e}")))?
+        .first()
+        .copied()
+    else {
+        return Ok(None);
+    };
+    let birthday = db
+        .get_account_birthday(account)
+        .map_err(|e| CoreError::Crypto(format!("wallet birthday: {e}")))?;
+    Ok(Some(u64::from(birthday)))
+}
+
+/// Delete a group's wallet database on a network (with its WAL/SHM files) so
+/// the next setup rebuilds it. Pending signed transactions are kept. The wallet
+/// is a cache of the chain: nothing is lost but scanning time.
+pub fn delete_wallet_db(data_dir: &Path, group_id: &str, network: WalletNetwork) -> Result<(), CoreError> {
+    let db = wallet_db_path(data_dir, group_id, network);
+    for path in [db.clone(), PathBuf::from(format!("{}-wal", db.display())), PathBuf::from(format!("{}-shm", db.display()))] {
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(CoreError::Io(e)),
+        }
+    }
+    Ok(())
 }
 
 /// Download the subtree roots for all three shielded pools and store them, so the
