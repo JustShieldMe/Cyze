@@ -110,11 +110,11 @@ Supports both frost-tools ciphersuites: **Ed25519** (generic signing) and
 On first launch you set a passphrase and a display name, and are shown a
 one-time recovery code to back up. A typical first run:
 
-1. **Setup** — start (or connect to) a `frostd` server, add contacts.
-2. **New DKG** — run a key-generation ceremony with your group to create a
-   shared wallet.
-3. **Groups** — open the group; for a RedPallas group, its **Wallet** page shows
-   the receive address and balance.
+1. **Contacts** — swap contact codes with the other members (under **Groups**).
+2. **New group** — run a key-generation ceremony with them to create a shared
+   wallet. The organizer runs the server the group connects through
+   (**Settings → Connection**).
+3. **Home** — the wallet: its receive address, balance, and history.
 4. **Send** — enter a recipient and amount; the app runs a signing ceremony with
    the chosen threshold of members, then broadcasts the transaction.
 

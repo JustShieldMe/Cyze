@@ -41,6 +41,7 @@ import {
   type CeremonyState,
 } from "../stores/ceremonies";
 import { useAdvancedMode } from "../lib/advanced";
+import Contacts from "./Contacts";
 
 /** Amount display from zatoshis (1 unit = 1e8 zatoshis). */
 function zec(zats: number): string {
@@ -1036,7 +1037,7 @@ function GroupWallet({ group, network }: { group: GroupSummary; network: WalletN
         <>
           <p className="dim">
             Couldn't set up the wallet: {syncErr}. Check the lightwalletd
-            endpoint on the <Link to="/wallet">Wallet</Link> page, then retry.
+            endpoint in <Link to="/settings/wallet">Settings</Link>, then retry.
           </p>
           <button onClick={() => forceSync()}>Retry</button>
         </>
@@ -2301,17 +2302,24 @@ function useGroupData() {
   return { groups, contacts, identity, remove, invalidateGroups };
 }
 
-/** `/groups` — pick a group (also reachable from the sidebar dropdown). */
+/** `/groups` — the groups this keystore holds a share in, and the contacts
+ *  they're formed with. */
 export default function Groups() {
   const { groups } = useGroupData();
 
   return (
     <div>
-      <h2>Groups</h2>
-      <p className="dim">
-        Threshold signing groups this keystore holds a share for. Choose one from
-        the sidebar or below to see its keys, participants, and recovery options.
-      </p>
+      <div className="page-head">
+        <h2>Groups</h2>
+        <div className="row">
+          <Link to="/groups/join">
+            <button className="secondary">Join with invite</button>
+          </Link>
+          <Link to="/groups/new">
+            <button>New group</button>
+          </Link>
+        </div>
+      </div>
       {groups.data?.length ? (
         groups.data.map((g) => (
           <Link
@@ -2322,21 +2330,21 @@ export default function Groups() {
           >
             <div className="row" style={{ justifyContent: "space-between" }}>
               <h3 style={{ margin: 0 }}>{g.description || "(unnamed group)"}</h3>
-              <span className="badge blue">{g.ciphersuite}</span>
+              {!isOrchard(g) && <span className="badge blue">Ed25519</span>}
             </div>
             <p className="dim" style={{ margin: "6px 0 0" }}>
-              {g.threshold}-of-{g.num_participants} threshold · {g.id.slice(0, 16)}…
+              {g.threshold} of {g.num_participants} must approve
             </p>
           </Link>
         ))
       ) : (
         <div className="card">
-          <p className="dim">
-            No groups in this keystore. Create one with a{" "}
-            <Link to="/dkg">DKG ceremony</Link>.
+          <p className="dim" style={{ margin: 0 }}>
+            No groups yet. Start one, or join with an invite from the person setting it up.
           </p>
         </div>
       )}
+      <Contacts />
     </div>
   );
 }
@@ -2366,7 +2374,7 @@ export function GroupDetail() {
     <div>
       {group.ciphersuite.includes("Pallas") && (
         <div className="row" style={{ justifyContent: "flex-end", marginBottom: 8 }}>
-          <Link to={`/groups/${group.id}/wallet`}>Build a Transaction →</Link>
+          <Link to={`/groups/${group.id}/wallet`}>Open wallet →</Link>
         </div>
       )}
       <GroupCard
@@ -2383,81 +2391,28 @@ export function GroupDetail() {
   );
 }
 
-/** `/groups/:id/wallet` — the group's Zcash wallet: balance, send, history. */
-export function GroupWalletPage() {
+/** `/groups/:id/wallet` (older links): make that wallet active and show it on Home. */
+export function OpenWallet() {
   const { id } = useParams();
-  const { groups } = useGroupData();
-  const group = groups.data?.find((g) => g.id === id);
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    if (!id) return;
+    setActiveWallet(id)
+      .then(() => queryClient.invalidateQueries({ queryKey: ["active-wallet"] }))
+      .catch(() => {})
+      .finally(() => navigate("/", { replace: true }));
+  }, [id, navigate, queryClient]);
+  return null;
+}
+
+/** A group's Zcash wallet: balance, receive, send, and history. Shown on Home
+ *  for the active wallet. */
+export function WalletView({ group }: { group: GroupSummary }) {
   const walletConfig = useQuery({ queryKey: ["wallet-config"], queryFn: getWalletConfig });
   const network = asNetwork(walletConfig.data?.network);
-  const queryClient = useQueryClient();
-
-  // Opening a wallet makes it the active wallet, so the app's processing follows
-  // the view: the backend cancels the previously active wallet's sync, and only
-  // this one syncs. A no-op when it's already active. The Wallets switcher is the
-  // guarded path (it confirms before abandoning unfinished work); this keeps the
-  // invariant for direct navigation / deep links.
-  const isPallasGroup = group?.ciphersuite.includes("Pallas") ?? false;
-  useEffect(() => {
-    if (id && isPallasGroup) {
-      setActiveWallet(id)
-        .then(() => queryClient.invalidateQueries({ queryKey: ["active-wallet"] }))
-        .catch(() => {});
-    }
-  }, [id, isPallasGroup, queryClient]);
-
-  if (groups.isLoading) return <p className="dim">Loading…</p>;
-  if (!group) {
-    return (
-      <div>
-        <h2>Group not found</h2>
-        <p className="dim">
-          <Link to="/groups">Back to groups</Link>.
-        </p>
-      </div>
-    );
-  }
-  if (!group.ciphersuite.includes("Pallas")) {
-    return (
-      <div>
-        <h2>{group.description || "(unnamed group)"} — Wallet</h2>
-        <p className="dim">
-          A Zcash wallet is only available for RedPallas groups.{" "}
-          <Link to={`/groups/${group.id}`}>Back to group details</Link>.
-        </p>
-      </div>
-    );
-  }
-
   return (
     <div>
-      <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
-        <h2 style={{ marginBottom: 0, display: "flex", alignItems: "center", gap: 10 }}>
-          {group.description || "(unnamed group)"} — Wallet
-          <span
-            style={{
-              fontSize: 12,
-              fontWeight: 600,
-              textTransform: "uppercase",
-              letterSpacing: "0.05em",
-              padding: "2px 9px",
-              borderRadius: 999,
-              border: `1px ${network === "regtest" ? "dashed" : "solid"} var(--border)`,
-              color:
-                network === "main"
-                  ? "var(--danger)"
-                  : network === "regtest"
-                    ? "var(--ok)"
-                    : "var(--muted, #8a8a8a)",
-            }}
-          >
-            {networkLabel(network)}
-          </span>
-        </h2>
-        <Link to={`/groups/${group.id}`} className="dim">
-          ← Group details
-        </Link>
-      </div>
       <div className="card">
         <GroupWallet group={group} network={network} />
       </div>

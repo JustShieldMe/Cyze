@@ -25,12 +25,12 @@ const DKG_PHASES: Record<string, string> = {
   failed: "Failed",
 };
 
-export default function DkgWizard() {
+export default function DkgWizard({ initialRole = "create" }: { initialRole?: "create" | "join" }) {
   const contacts = useQuery({ queryKey: ["contacts"], queryFn: listContacts });
   const settings = useQuery({ queryKey: ["settings"], queryFn: getSettings });
   const sidecar = useQuery({ queryKey: ["sidecar"], queryFn: sidecarStatus });
 
-  const [role, setRole] = useState<"create" | "join">("create");
+  const [role, setRole] = useState<"create" | "join">(initialRole);
   const [suite, setSuite] = useState<Ciphersuite>("redpallas");
   // Ed25519 (general-purpose signing) is an advanced option; everyone else gets
   // RedPallas, the Zcash wallet ciphersuite, without having to choose.
@@ -302,7 +302,7 @@ export default function DkgWizard() {
               </>
             ) : (
               <p className="dim">
-                No contacts — <Link to="/contacts">import contacts</Link> first.
+                No contacts yet. <Link to="/groups">Add the members as contacts</Link> first.
               </p>
             )}
 
@@ -360,7 +360,7 @@ export default function DkgWizard() {
             <p className="dim" style={{ marginTop: -4 }}>
               Using your embedded server. Participants on other machines connect
               via the LAN address or tunnel URL shown on the{" "}
-              <Link to="/server">Server</Link> page.
+              <Link to="/settings">Settings</Link>.
             </p>
           </>
         ) : (
