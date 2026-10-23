@@ -82,6 +82,7 @@ pub async fn set_active_wallet(state: State<'_, AppState>, group_id: String) -> 
             token.cancel();
         }
     }
+    state.sync_service.wake(true);
     Ok(())
 }
 

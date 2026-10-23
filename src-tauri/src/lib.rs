@@ -4,6 +4,7 @@ pub mod error;
 pub mod logbuf;
 pub mod sidecar;
 pub mod state;
+pub mod sync_service;
 pub mod tailscale;
 pub mod tunnel;
 
@@ -41,7 +42,7 @@ async fn run_auto_lock_monitor<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
         for (_, handle) in state.ceremonies.lock().await.drain() {
             handle.cancel.cancel();
         }
-        *state.unlocked.write().await = None;
+        state.set_unlocked(None).await;
         let _ = app.emit("keystore:auto-locked", minutes);
     }
 }
@@ -57,6 +58,7 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(run_auto_lock_monitor(handle));
+            sync_service::spawn(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -86,9 +88,8 @@ pub fn run() {
             commands::wallet::detect_local_devnet,
             commands::wallet::wallet_group_status,
             commands::wallet::wallet_init_account,
-            commands::wallet::wallet_sync,
-            commands::wallet::wallet_cancel_sync,
-            commands::wallet::wallet_sync_progress,
+            commands::wallet::wallet_sync_now,
+            commands::wallet::wallet_sync_status,
             commands::wallet::wallet_history,
             commands::wallet::wallet_notes,
             commands::wallet::wallet_receive_address,

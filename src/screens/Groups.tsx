@@ -12,11 +12,9 @@ import {
   removeGroup,
   renameGroup,
   walletGroupStatus,
-  walletInitAccount,
-  walletSync,
-  walletCancelSync,
+  walletSyncNow,
+  walletSyncStatus,
   setActiveWallet,
-  walletSyncProgress,
   walletPrepareSend,
   walletPrepareVote,
   walletSend,
@@ -689,10 +687,9 @@ function GroupWallet({ group, network }: { group: GroupSummary; network: WalletN
     queryKey: ["wallet-status", group.id],
     queryFn: () => walletGroupStatus(group.id),
     enabled: group.ciphersuite.includes("Pallas"),
-    // Balances are read straight from the local db (no network), so polling is
-    // cheap — and without it the figures only moved when a sync happened to
-    // finish, so a confirmation could sit on screen unreflected.
-    refetchInterval: 5_000,
+    // Refreshed on `wallet:updated` (each sync that scanned blocks); this slow
+    // poll is only a fallback.
+    refetchInterval: 60_000,
   });
   const walletConfig = useQuery({ queryKey: ["wallet-config"], queryFn: getWalletConfig });
   // Ironwood is where new shielded funds land — except on a local devnet that
@@ -711,56 +708,19 @@ function GroupWallet({ group, network }: { group: GroupSummary; network: WalletN
     ? ["receive", "send", "notes", "vote"]
     : ["receive", "send", "notes"];
 
-  const init = useMutation({
-    mutationFn: () => walletInitAccount(group.id),
-    onSuccess: () => {
-      setErr(null);
-      queryClient.invalidateQueries({ queryKey: ["wallet-status", group.id] });
-    },
-    onError: (e) => setErr((e as unknown as AppError).message),
+  // Syncing runs in the backend (sync_service.rs), which sets up the account
+  // and keeps the active wallet current from unlock to lock, whatever screen is
+  // open. This screen only reads its status, kept fresh from `wallet:sync`
+  // events by the root listener; the query covers opening mid-sync.
+  const syncStatus = useQuery({
+    queryKey: ["wallet-sync", group.id],
+    queryFn: () => walletSyncStatus(group.id),
+    enabled: group.ciphersuite.includes("Pallas"),
   });
-
-  const [autoSyncOff, setAutoSyncOff] = useState(false);
-  const [lastSynced, setLastSynced] = useState<Date | null>(null);
-  // A sync can fail for reasons that clear on their own — a dropped connection,
-  // a lightwalletd blip. Switching auto-sync off after a single one of those left
-  // the wallet frozen for the rest of the session: nothing refreshed until the
-  // user navigated away and back (which remounts and resets this), which is
-  // exactly the "it only updates if I leave the page" behaviour. Only give up
-  // after it keeps failing.
-  const failures = useRef(0);
-  const AUTO_SYNC_GIVE_UP_AFTER = 3;
-  const sync = useMutation({
-    mutationFn: () => walletSync(group.id),
-    onSuccess: (s) => {
-      setErr(null);
-      failures.current = 0;
-      setLastSynced(new Date());
-      queryClient.setQueryData(["wallet-status", group.id], s);
-      queryClient.invalidateQueries({ queryKey: ["wallet-history", group.id] });
-      queryClient.invalidateQueries({ queryKey: ["wallet-notes", group.id] });
-    },
-    onError: (e) => {
-      const msg = (e as unknown as AppError).message ?? String(e);
-      // A sync we deliberately cancelled (via "Sync Now" restarting it) is not a
-      // failure — a fresh sync is already taking over, so don't count it toward
-      // the give-up threshold or surface it as an error.
-      if (/cancel/i.test(msg)) return;
-      setErr(msg);
-      failures.current += 1;
-      if (failures.current >= AUTO_SYNC_GIVE_UP_AFTER) setAutoSyncOff(true);
-    },
-  });
-
-  // `walletSync` blocks for the entire catch-up, so the cached wallet status
-  // cannot move while it runs — a long rescan looks frozen. This read-only probe
-  // reads the height each scanned batch commits, so progress stays visible.
-  const progress = useQuery({
-    queryKey: ["sync-progress", group.id],
-    queryFn: () => walletSyncProgress(group.id),
-    enabled: sync.isPending,
-    refetchInterval: sync.isPending ? 2000 : false,
-  });
+  const sync = syncStatus.data ?? null;
+  const syncing = sync?.state === "syncing";
+  const syncErr = sync?.state === "error" ? (sync.error ?? "sync failed") : null;
+  const lastSynced = sync?.last_synced_ms ? new Date(sync.last_synced_ms) : null;
 
   const [recipient, setRecipient] = useState("");
   const [amountZec, setAmountZec] = useState("");
@@ -825,9 +785,10 @@ function GroupWallet({ group, network }: { group: GroupSummary; network: WalletN
   // progress, not from whether a sync has finished since this page opened: the
   // database is usually already current. The backend re-checks against the live
   // tip when it builds the transaction.
-  const liveProgress = sync.isPending ? progress.data : undefined;
-  const scannedHeight = liveProgress?.[0] ?? status.data?.synced_height ?? 0;
-  const knownTip = liveProgress?.[1] ?? status.data?.chain_tip_height ?? 0;
+  // The service's heights are live; the wallet status lags a running sync.
+  const live = sync && sync.tip_height > 0 ? sync : null;
+  const scannedHeight = live?.scanned_height ?? status.data?.synced_height ?? 0;
+  const knownTip = live?.tip_height ?? status.data?.chain_tip_height ?? 0;
   const caughtUp = knownTip > 0 && knownTip - scannedHeight <= SEND_MAX_SCAN_LAG;
 
   // Gate the send form on what is actually spendable. Confirmed-but-unspendable
@@ -865,8 +826,8 @@ function GroupWallet({ group, network }: { group: GroupSummary; network: WalletN
       const appErr = e as unknown as AppError;
       setErr(appErr.message);
       // The live tip moved past what this wallet has scanned: catch up now
-      // rather than waiting for the next auto-sync tick.
-      if (appErr.code === "not_synced" && !sync.isPending) sync.mutate();
+      // rather than waiting for the next tip check.
+      if (appErr.code === "not_synced") void walletSyncNow(false);
     },
   });
 
@@ -1018,83 +979,20 @@ function GroupWallet({ group, network }: { group: GroupSummary; network: WalletN
     onError: (e) => setErr((e as unknown as AppError).message),
   });
 
-  // Auto-initialize the view-only account once, using the configured endpoint,
-  // so the user doesn't need a separate step. Only retried manually on error.
-  const autoTried = useRef(false);
-  useEffect(() => {
-    if (
-      status.data &&
-      !status.data.initialized &&
-      !autoTried.current &&
-      !init.isPending
-    ) {
-      autoTried.current = true;
-      init.mutate();
-    }
-  }, [status.data, init]);
-
-  // Auto-sync: fire immediately on first load, then every 30s.
-  const syncRef = useRef(sync);
-  syncRef.current = sync;
-  const statusRef = useRef(status.data);
-  statusRef.current = status.data;
-  const autoSyncOffRef = useRef(autoSyncOff);
-  autoSyncOffRef.current = autoSyncOff;
-  const syncedOnMount = useRef(false);
-  useEffect(() => {
-    if (status.data?.initialized && !syncedOnMount.current && !sync.isPending) {
-      syncedOnMount.current = true;
-      sync.mutate();
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status.data?.initialized]);
-
   /**
-   * Force a sync and refresh every panel that reads the wallet.
-   *
-   * `sync` alone updates the status it returns, but the notes, history and
-   * pending/settled views read their own queries — so a user pressing this while
-   * staring at a stale history would still see stale history. Invalidate them all
-   * so "Sync Now" means the whole wallet, not just the balance. Also clears a
-   * latched auto-sync failure: pressing this is an explicit "try again".
+   * "Sync Now": restart the backend sync (abandoning a stalled one) and re-read
+   * every wallet panel, so it means the whole wallet, not just the balance.
    */
   const forceSync = useCallback(async () => {
-    setAutoSyncOff(false);
-    failures.current = 0;
     for (const key of ["wallet-status", "wallet-history", "wallet-notes"]) {
       queryClient.invalidateQueries({ queryKey: [key, group.id] });
     }
-    // Abandon any in-flight sync first — including a stalled one, which is the
-    // whole point of an always-available "Sync Now": the backend returns the
-    // stuck run promptly, then we start a clean one. Harmless when idle.
     try {
-      await walletCancelSync(group.id);
+      await walletSyncNow(true);
     } catch {
-      // best-effort
+      // best-effort: the service retries on its own
     }
-    syncRef.current.mutate();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [group.id, queryClient]);
-
-  // A ceremony just moved funds (a send we ran, or a session we signed). Sync now
-  // rather than waiting out the poll interval, so the wallet reflects what the
-  // user just did. The wallet screen is the only place that syncs, so this cannot
-  // race a second writer; if one is already running, the poll picks it up next.
-  const walletRefreshTick = useCeremonies((s) => s.walletRefreshTick);
-  useEffect(() => {
-    if (walletRefreshTick === 0) return;
-    if (status.data?.initialized) forceSync();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [walletRefreshTick]);
-  useEffect(() => {
-    const t = setInterval(() => {
-      const cur = syncRef.current;
-      if (statusRef.current?.initialized && !cur.isPending && !autoSyncOffRef.current) {
-        cur.mutate();
-      }
-    }, 10_000);
-    return () => clearInterval(t);
-  }, []);
 
   if (!group.ciphersuite.includes("Pallas")) return null;
   const s = status.data;
@@ -1115,7 +1013,7 @@ function GroupWallet({ group, network }: { group: GroupSummary; network: WalletN
   // "Syncing" should mean *fetching blocks*, not merely "a sync call is in
   // flight". At the tip a sync is a quick no-op check, and a stalled sync sits
   // pending forever — both showed a permanent "Syncing…" that looked broken.
-  const catchingUp = sync.isPending && blocksRemaining > 0;
+  const catchingUp = syncing && blocksRemaining > 0;
   const atTip = tipHeight > 0 && blocksRemaining === 0;
 
   return (
@@ -1132,18 +1030,15 @@ function GroupWallet({ group, network }: { group: GroupSummary; network: WalletN
         </>
       ) : !s ? (
         <p className="dim">Loading wallet…</p>
-      ) : !s.initialized && (init.isPending || !err) ? (
+      ) : !s.initialized && !syncErr ? (
         <p className="dim">Setting up the group's view-only wallet…</p>
       ) : !s.initialized ? (
         <>
           <p className="dim">
-            Couldn't set up the wallet{err ? `: ${err}` : ""}. Check the
-            lightwalletd endpoint on the <Link to="/wallet">Wallet</Link> page,
-            then retry.
+            Couldn't set up the wallet: {syncErr}. Check the lightwalletd
+            endpoint on the <Link to="/wallet">Wallet</Link> page, then retry.
           </p>
-          <button onClick={() => init.mutate()} disabled={init.isPending}>
-            {init.isPending ? "Setting up…" : "Retry"}
-          </button>
+          <button onClick={() => forceSync()}>Retry</button>
         </>
       ) : (
         <>
@@ -1223,21 +1118,13 @@ function GroupWallet({ group, network }: { group: GroupSummary; network: WalletN
                   <span>
                     ✓ Synced {lastSynced.toLocaleTimeString(undefined, { timeStyle: "short" })}
                   </span>
+                ) : syncErr ? (
+                  <span>Sync failed; retrying automatically</span>
                 ) : (
-                  <span className="dim">Auto-syncing every 10s</span>
-                )}
-                {autoSyncOff && !catchingUp && (
-                  <>
-                    {" · "}
-                    <button
-                      style={{ all: "unset", cursor: "pointer", color: "var(--accent)", fontSize: 11 }}
-                      onClick={() => forceSync()}
-                    >
-                      Resume auto-sync
-                    </button>
-                  </>
+                  <span className="dim">Waiting for the first sync…</span>
                 )}
               </div>
+              {syncErr && <SyncErrorView text={syncErr} />}
               {/* Always available — auto-sync can lag or stall (a slow endpoint,
                   a dropped stream), and there is no way to tell "nothing changed"
                   from "wedged". Clicking mid-sync abandons the current run and

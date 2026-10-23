@@ -201,16 +201,25 @@ export const walletInitAccount = (groupId: string, birthdayHeight?: number) =>
     groupId,
     birthdayHeight: birthdayHeight ?? null,
   });
-export const walletSync = (groupId: string) =>
-  invoke<WalletStatus>("wallet_sync", { groupId });
-/** Cancel a group's in-flight sync (if any). The running `walletSync` returns
- *  promptly, freeing the wallet for a fresh sync. No-op if nothing is syncing. */
-export const walletCancelSync = (groupId: string) =>
-  invoke<void>("wallet_cancel_sync", { groupId });
-/** `[fullyScannedHeight, chainTipHeight]`, readable while a sync is running.
- *  `walletSync` blocks for the whole catch-up, so poll this to show progress. */
-export const walletSyncProgress = (groupId: string) =>
-  invoke<[number, number]>("wallet_sync_progress", { groupId });
+/** The background sync service's view of a wallet; also sent as the
+ *  `wallet:sync` event whenever it changes. */
+export interface SyncStatus {
+  group_id: string;
+  state: "setting_up" | "syncing" | "idle" | "error";
+  scanned_height: number;
+  tip_height: number;
+  /** When a sync last completed (epoch ms). */
+  last_synced_ms: number | null;
+  error: string | null;
+  error_code: string | null;
+}
+/** Ask the backend to sync the active wallet now; `restart` abandons a stalled
+ *  sync first. Returns immediately; progress arrives as `wallet:sync` events. */
+export const walletSyncNow = (restart = false) =>
+  invoke<void>("wallet_sync_now", { restart });
+/** The latest sync status for a group, or null before the first report. */
+export const walletSyncStatus = (groupId: string) =>
+  invoke<SyncStatus | null>("wallet_sync_status", { groupId });
 
 export interface TxRecord {
   txid: string;

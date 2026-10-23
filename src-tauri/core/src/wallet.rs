@@ -369,6 +369,20 @@ impl Lightwalletd {
     pub fn url(&self) -> &str {
         &self.url
     }
+
+    /// The server's current chain tip height. One small RPC, so a caught-up
+    /// wallet can check for new blocks without running a sync.
+    pub async fn latest_height(&self) -> Result<u64, CoreError> {
+        let mut client = self.client.clone();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            client.get_latest_block(ChainSpec::default()),
+        )
+        .await
+        .map_err(|_| CoreError::Connection("get_latest_block timed out".into()))?
+        .map(|r| r.into_inner().height)
+        .map_err(|e| CoreError::Connection(format!("get_latest_block: {e}")))
+    }
 }
 
 /// Fetch chain info from a lightwalletd endpoint — used to verify reachability
