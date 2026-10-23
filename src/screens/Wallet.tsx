@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   getWalletConfig,
   lightwalletdInfo,
+  setAdvancedMode,
   setWalletConfig,
   detectLocalDevnet,
   openUrl,
@@ -15,6 +16,7 @@ import {
   WalletNetwork,
 } from "../ipc/commands";
 import { REGTEST_UPGRADES, devnetCanSend, upgradeLabel } from "../network";
+import { useAdvancedMode } from "../lib/advanced";
 
 /** Known lightwalletd endpoints per network (user can also type their own). */
 const PRESETS: Record<WalletNetwork, { label: string; url: string }[]> = {
@@ -46,6 +48,7 @@ const INSTALL_CMD =
 export default function Wallet() {
   const queryClient = useQueryClient();
   const config = useQuery({ queryKey: ["wallet-config"], queryFn: getWalletConfig });
+  const advanced = useAdvancedMode();
 
   const [network, setNetwork] = useState<WalletNetwork | null>(null);
   const [url, setUrl] = useState<string | null>(null);
@@ -131,38 +134,42 @@ export default function Wallet() {
   // A devnet reports "regtest"; its branch check is the devnet card's job
   // (the generic mismatch text below is about public-network upgrades).
   const infoIsDevnet = info?.chain_name === "regtest";
+  // Test networks are an advanced option, but never hide the switch from someone
+  // already on one: they need it to get back to mainnet.
+  const showNetworks = advanced || net !== "main";
 
   return (
     <div>
       <h2>Wallet</h2>
 
       <p className="dim">
-        Cyze syncs Zcash as a light client against a configurable{" "}
-        <span className="code-inline">lightwalletd</span> server — no full node
-        needed. Start on testnet with faucet funds; switch to mainnet when ready.
+        Cyze syncs Zcash as a light client from a{" "}
+        <span className="code-inline">lightwalletd</span> server; no full node needed.
       </p>
 
       <div className="card">
-        <h3>Network</h3>
-        <div className="row" style={{ marginBottom: 14, alignItems: "center", flexWrap: "wrap" }}>
-          {NETWORKS.map((n) => (
-            <button
-              key={n.id}
-              className={net === n.id ? "" : "secondary"}
-              onClick={() => {
-                if (net !== n.id) {
-                  setNetwork(n.id);
-                  setUrl("");
-                  setInfo(null);
-                  setDevnet(null);
-                }
-              }}
-            >
-              {n.label}
-            </button>
-          ))}
-          <span className="dim">{NETWORKS.find((n) => n.id === net)?.blurb}</span>
-        </div>
+        <h3>{showNetworks ? "Network" : "Server"}</h3>
+        {showNetworks && (
+          <div className="row" style={{ marginBottom: 14, alignItems: "center", flexWrap: "wrap" }}>
+            {NETWORKS.map((n) => (
+              <button
+                key={n.id}
+                className={net === n.id ? "" : "secondary"}
+                onClick={() => {
+                  if (net !== n.id) {
+                    setNetwork(n.id);
+                    setUrl("");
+                    setInfo(null);
+                    setDevnet(null);
+                  }
+                }}
+              >
+                {n.label}
+              </button>
+            ))}
+            <span className="dim">{NETWORKS.find((n) => n.id === net)?.blurb}</span>
+          </div>
+        )}
 
         {isDevnet && (
           <DevnetPanel
@@ -270,7 +277,36 @@ export default function Wallet() {
         {testErr && <div className="error" style={{ marginTop: 10 }}>{testErr}</div>}
       </div>
 
-      <LogsCard />
+      {advanced && <LogsCard />}
+      <AdvancedCard enabled={advanced} />
+    </div>
+  );
+}
+
+/** The switch for advanced options. Off by default so everyday screens stay
+ *  focused on the mainnet wallet. */
+function AdvancedCard({ enabled }: { enabled: boolean }) {
+  const queryClient = useQueryClient();
+  const toggle = useMutation({
+    mutationFn: (on: boolean) => setAdvancedMode(on),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["settings"] }),
+  });
+  return (
+    <div className="card" style={{ marginTop: 18 }}>
+      <label className="row" style={{ gap: 8, alignItems: "center", margin: 0 }}>
+        <input
+          type="checkbox"
+          style={{ width: "auto", margin: 0 }}
+          checked={enabled}
+          disabled={toggle.isPending}
+          onChange={(e) => toggle.mutate(e.target.checked)}
+        />
+        <strong>Show advanced options</strong>
+      </label>
+      <p className="dim" style={{ fontSize: 12, margin: "6px 0 0" }}>
+        Test networks and local devnet, diagnostics log, Ed25519 groups, raw-message
+        signing, and coinholder voting.
+      </p>
     </div>
   );
 }

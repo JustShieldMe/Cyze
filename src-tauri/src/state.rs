@@ -97,6 +97,12 @@ pub struct Settings {
     /// until the user first selects one. Persisted so the choice survives restart.
     #[serde(default)]
     pub active_group_id: Option<String>,
+    /// Show developer and expert options: test networks and the local devnet,
+    /// the diagnostics log, the Ed25519 ciphersuite, raw-message signing, and
+    /// coinholder voting. Off by default so the everyday screens stay focused
+    /// on the mainnet wallet.
+    #[serde(default)]
+    pub advanced_mode: Option<bool>,
 }
 
 /// Per-group rotating receive-address bookkeeping (#3). Non-secret; the actual

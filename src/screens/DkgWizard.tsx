@@ -11,6 +11,7 @@ import {
   Ciphersuite,
 } from "../ipc/commands";
 import { useCeremonies } from "../stores/ceremonies";
+import { useAdvancedMode } from "../lib/advanced";
 
 const DKG_PHASES: Record<string, string> = {
   connecting: "Connecting to server",
@@ -31,6 +32,10 @@ export default function DkgWizard() {
 
   const [role, setRole] = useState<"create" | "join">("create");
   const [suite, setSuite] = useState<Ciphersuite>("redpallas");
+  // Ed25519 (general-purpose signing) is an advanced option; everyone else gets
+  // RedPallas, the Zcash wallet ciphersuite, without having to choose.
+  const advanced = useAdvancedMode();
+  const effectiveSuite: Ciphersuite = advanced ? suite : "redpallas";
   const [description, setDescription] = useState("");
   const [threshold, setThreshold] = useState(2);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -82,14 +87,14 @@ export default function DkgWizard() {
       // so always fall back to something a person can recognise. The joiner's
       // threshold/participant inputs describe the ceremony they are joining, not
       // a group they defined, so don't spell those into their fallback.
-      const suiteName = suite === "redpallas" ? "RedPallas" : "Ed25519";
+      const suiteName = effectiveSuite === "redpallas" ? "RedPallas" : "Ed25519";
       const groupName =
         description.trim() ||
         (role === "create"
           ? `${suiteName} ${threshold}-of-${totalParticipants}`
           : `${suiteName} group`);
       const id = await startDkg({
-        suite,
+        suite: effectiveSuite,
         description: groupName,
         threshold,
         participants: role === "create" ? [...selected] : [],
@@ -228,21 +233,23 @@ export default function DkgWizard() {
 
         {role === "create" ? (
           <>
-            <label>Ciphersuite</label>
-            <select value={suite} onChange={(e) => setSuite(e.target.value as Ciphersuite)}>
-              <option value="redpallas">
-                RedPallas — Zcash shielded spend authority (Pallas, BLAKE2b-512)
-              </option>
-              <option value="ed25519">
-                Ed25519 — general-purpose Schnorr signatures (SHA-512)
-              </option>
-            </select>
-            <p className="dim" style={{ marginTop: -4, marginBottom: 12 }}>
-              These are the two ciphersuites the FROST tooling supports, so
-              groups stay compatible with the <span className="code-inline">frost-client</span>{" "}
-              CLI. Pick RedPallas for Zcash; Ed25519 for general signing. All
-              participants must choose the same one.
-            </p>
+            {advanced && (
+              <>
+                <label>Ciphersuite</label>
+                <select value={suite} onChange={(e) => setSuite(e.target.value as Ciphersuite)}>
+                  <option value="redpallas">
+                    RedPallas — Zcash shielded spend authority (Pallas, BLAKE2b-512)
+                  </option>
+                  <option value="ed25519">
+                    Ed25519 — general-purpose Schnorr signatures (SHA-512)
+                  </option>
+                </select>
+                <p className="dim" style={{ marginTop: -4, marginBottom: 12 }}>
+                  Pick RedPallas for a Zcash wallet, Ed25519 for general signing. All
+                  participants must choose the same one.
+                </p>
+              </>
+            )}
 
             <label>Participants (besides you)</label>
             {contacts.data?.length ? (
@@ -318,15 +325,19 @@ export default function DkgWizard() {
               participant, and enter the same threshold they chose — all
               participants must agree on it.
             </p>
-            <label>Ciphersuite (must match the initiator)</label>
-            <select value={suite} onChange={(e) => setSuite(e.target.value as Ciphersuite)}>
-              <option value="redpallas">
-                RedPallas — Zcash shielded spend authority (Pallas, BLAKE2b-512)
-              </option>
-              <option value="ed25519">
-                Ed25519 — general-purpose Schnorr signatures (SHA-512)
-              </option>
-            </select>
+            {advanced && (
+              <>
+                <label>Ciphersuite (must match the initiator)</label>
+                <select value={suite} onChange={(e) => setSuite(e.target.value as Ciphersuite)}>
+                  <option value="redpallas">
+                    RedPallas — Zcash shielded spend authority (Pallas, BLAKE2b-512)
+                  </option>
+                  <option value="ed25519">
+                    Ed25519 — general-purpose Schnorr signatures (SHA-512)
+                  </option>
+                </select>
+              </>
+            )}
             <label>Threshold (as chosen by the initiator)</label>
             <input
               type="number"

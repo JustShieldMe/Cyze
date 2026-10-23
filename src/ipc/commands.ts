@@ -40,6 +40,8 @@ export interface Settings {
   session_configured: boolean | null;
   /** The active wallet (group id) the app is focused on, or null if unset. */
   active_group_id: string | null;
+  /** Advanced options shown (null/false = hidden, the default). */
+  advanced_mode: boolean | null;
 }
 
 export interface SidecarStatus {
@@ -369,6 +371,10 @@ export const renameGroup = (id: string, description: string) =>
 // Server / sidecar
 export const getSettings = () => invoke<Settings>("get_settings");
 export const setServerUrl = (url: string) => invoke<void>("set_server_url", { url });
+/** Show or hide advanced options (test networks, diagnostics, Ed25519, raw
+ *  signing, voting). */
+export const setAdvancedMode = (enabled: boolean) =>
+  invoke<void>("set_advanced_mode", { enabled });
 /** Save the first-run session configuration (role + coordinator exposure). */
 export const setSessionConfig = (role: string, exposure?: string | null) =>
   invoke<void>("set_session_config", { role, exposure: exposure ?? null });

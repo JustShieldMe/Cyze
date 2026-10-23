@@ -100,6 +100,7 @@ pub fn run() {
             commands::wallet::wallet_rebroadcast,
             commands::server::get_settings,
             commands::server::set_server_url,
+            commands::server::set_advanced_mode,
             commands::server::set_session_config,
             commands::server::set_session_role,
             commands::server::get_active_wallet,

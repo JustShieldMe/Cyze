@@ -42,6 +42,7 @@ import {
   selectActiveSend,
   type CeremonyState,
 } from "../stores/ceremonies";
+import { useAdvancedMode } from "../lib/advanced";
 
 /** Amount display from zatoshis (1 unit = 1e8 zatoshis). */
 function zec(zats: number): string {
@@ -703,6 +704,12 @@ function GroupWallet({ group, network }: { group: GroupSummary; network: WalletN
       : "ironwood";
   const [err, setErr] = useState<string | null>(null);
   const [walletTab, setWalletTab] = useState<WalletTab>("receive");
+  // Coinholder voting (memo v1) is slated for replacement by Shielded Vote, so it
+  // stays behind the advanced switch until then.
+  const advanced = useAdvancedMode();
+  const walletTabs: WalletTab[] = advanced
+    ? ["receive", "send", "notes", "vote"]
+    : ["receive", "send", "notes"];
 
   const init = useMutation({
     mutationFn: () => walletInitAccount(group.id),
@@ -1256,7 +1263,7 @@ function GroupWallet({ group, network }: { group: GroupSummary; network: WalletN
               flexWrap: "wrap",
             }}
           >
-            {(["receive", "send", "notes", "vote"] as WalletTab[]).map((tab) => {
+            {walletTabs.map((tab) => {
               const active = walletTab === tab;
               const label =
                 tab === "receive"
@@ -1316,7 +1323,7 @@ function GroupWallet({ group, network }: { group: GroupSummary; network: WalletN
           )}
 
           {/* Vote tab */}
-          {walletTab === "vote" && (
+          {walletTab === "vote" && advanced && (
             <VoteTab
               network={network}
               disabledReason={
