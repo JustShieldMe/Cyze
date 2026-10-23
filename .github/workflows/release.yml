@@ -86,10 +86,10 @@ jobs:
       # Tauri externalBin naming convention: binaries/frostd-<target-triple>.
       - name: Build frostd sidecar
         shell: bash
-        env:
-          FROST_TOOLS_REV: 3d2985cfbc5df9314f3882a6d693bbe0d711051f
         run: |
           set -euxo pipefail
+          # One source of truth for the rev, shared with build-sidecar.sh.
+          FROST_TOOLS_REV="$(tr -d '[:space:]' < scripts/PINNED_REV)"
           # This step runs under Git-bash so the script is cross-platform, but on
           # Windows that puts Git's /usr/bin ahead of the MSVC toolchain on PATH.
           # Rust invokes the linker as bare `link.exe`, which then resolves to
@@ -117,30 +117,18 @@ jobs:
 
       # --- Fetch the cloudflared sidecar for this target -----------------
       # cloudflared is bundled (Apache-2.0) so the optional Cloudflare quick
-      # tunnel works with zero user setup — no separate install or PATH entry.
-      # Cloudflare ships prebuilt binaries per OS/arch; macOS is a .tgz, the
-      # rest are raw executables.
+      # tunnel works with zero user setup. The release is pinned and each
+      # download is checked against scripts/cloudflared.sha256, so a release
+      # build never ships whatever "latest" happens to be.
       - name: Fetch cloudflared sidecar
         shell: bash
         run: |
           set -euxo pipefail
-          case "${{ matrix.target }}" in
-            x86_64-unknown-linux-gnu) ASSET=cloudflared-linux-amd64;     EXT="" ;;
-            x86_64-pc-windows-msvc)   ASSET=cloudflared-windows-amd64.exe; EXT=".exe" ;;
-            aarch64-apple-darwin)     ASSET=cloudflared-darwin-arm64.tgz; EXT="" ;;
-            x86_64-apple-darwin)      ASSET=cloudflared-darwin-amd64.tgz; EXT="" ;;
-            *) echo "::error::no cloudflared asset mapping for ${{ matrix.target }}"; exit 1 ;;
-          esac
-          URL="https://github.com/cloudflare/cloudflared/releases/latest/download/$ASSET"
-          DEST="$GITHUB_WORKSPACE/src-tauri/binaries/cloudflared-${{ matrix.target }}${EXT}"
-          mkdir -p "$(dirname "$DEST")"
-          curl -fL "$URL" -o "$RUNNER_TEMP/cf-download"
-          case "$ASSET" in
-            *.tgz) tar -xzf "$RUNNER_TEMP/cf-download" -C "$RUNNER_TEMP"; cp "$RUNNER_TEMP/cloudflared" "$DEST" ;;
-            *)     cp "$RUNNER_TEMP/cf-download" "$DEST" ;;
-          esac
-          chmod +x "$DEST" || true
-          ls -la "$(dirname "$DEST")"
+          EXT=""
+          case "${{ matrix.target }}" in *windows*) EXT=".exe";; esac
+          scripts/fetch-cloudflared.sh "${{ matrix.target }}" \
+            "$GITHUB_WORKSPACE/src-tauri/binaries/cloudflared-${{ matrix.target }}${EXT}"
+          ls -la "$GITHUB_WORKSPACE/src-tauri/binaries/"
 
       # Guard: confirm the sidecar is present immediately before the app build,
       # so a missing/removed binary is reported here (not as a confusing tauri
