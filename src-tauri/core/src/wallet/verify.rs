@@ -429,22 +429,17 @@ mod tests {
     use super::*;
     use crate::wallet::RegtestUpgrade;
     use incrementalmerkletree::Retention;
-    use orchard::bundle::BundleVersion;
     use orchard::keys::SpendingKey;
     use orchard::tree::MerkleHashOrchard;
     use orchard::value::NoteValue;
     use pczt::roles::{creator::Creator, io_finalizer::IoFinalizer, signer::Signer};
-    use rand::rngs::OsRng;
     use shardtree::{store::memory::MemoryShardStore, ShardTree};
-    use zcash_note_encryption::try_note_decryption;
     use zcash_primitives::transaction::builder::{BuildConfig, Builder, BundlePadding, PcztResult};
     use zcash_primitives::transaction::fees::zip317;
     use zcash_protocol::memo::{Memo, MemoBytes};
     use zcash_protocol::value::Zatoshis;
 
     const NOTE: u64 = 1_000_000;
-    /// ZIP-317 fee for one spend and two outputs (two logical actions).
-    const FEE: u64 = 10_000;
     const DEVNET: WalletNetwork = WalletNetwork::Regtest(RegtestUpgrade::Nu6_3);
 
     /// A FROST group as Cyze sees it: an id (`ak`) and the viewing key derived
@@ -469,43 +464,47 @@ mod tests {
         pczt_hex: String,
         sighash_hex: String,
         alpha_hex: String,
+        fee: u64,
+    }
+
+    /// A note of `NOTE` zatoshis the group received in `pool`: a legacy
+    /// Orchard note (V2) or an Ironwood note (V3).
+    fn received_note(pool: Pool, fvk: &FullViewingKey) -> orchard::Note {
+        use orchard::note::{NoteVersion, RandomSeed, Rho};
+        use rand10::RngExt as _;
+        let mut rng = super::super::wallet_rng();
+        let version = match pool {
+            Pool::Orchard => NoteVersion::V2,
+            Pool::Ironwood => NoteVersion::V3,
+        };
+        loop {
+            let mut rho = rng.random::<[u8; 32]>();
+            rho[31] &= 0x3f; // below the Pallas base field modulus
+            let Some(rho) = Option::<Rho>::from(Rho::from_bytes(&rho)) else { continue };
+            let Some(rseed) = Option::<RandomSeed>::from(RandomSeed::from_bytes(rng.random(), &rho)) else {
+                continue;
+            };
+            let note = orchard::Note::from_parts(
+                fvk.address_at(0u32, Scope::External),
+                NoteValue::from_raw(NOTE),
+                rho,
+                rseed,
+                version,
+            );
+            if let Some(note) = Option::<orchard::Note>::from(note) {
+                return note;
+            }
+        }
     }
 
     /// Build an unsigned send of `pay` (with `memo`) from a note the group
-    /// received, with the rest coming back as change, the way `prepare_send`
-    /// builds one: Creator, then IO Finalizer.
+    /// received in `pool`, with the rest coming back as change, the way
+    /// `prepare_send` builds one after NU6.3: Creator, then IO Finalizer. New
+    /// value always lands in Ironwood, so spending a legacy Orchard note is a
+    /// "turnstile" transaction across both bundles.
     fn draft(pool: Pool, fvk: &FullViewingKey, pay: u64, memo: &str) -> Draft {
-        let mut rng = OsRng;
-        let version = match pool {
-            Pool::Orchard => BundleVersion::orchard_v2(),
-            Pool::Ironwood => BundleVersion::ironwood_v3(),
-        };
-        let note = {
-            let mut b = orchard::builder::Builder::new(
-                orchard::builder::BundleType::DEFAULT,
-                version,
-                version.default_flags(),
-                orchard::Anchor::empty_tree(),
-            )
-            .unwrap();
-            b.add_output(
-                None,
-                fvk.address_at(0u32, Scope::External),
-                NoteValue::from_raw(NOTE),
-                Memo::Empty.encode().into_bytes(),
-            )
-            .unwrap();
-            let (bundle, meta) = b.build::<i64>(&mut rng).unwrap().unwrap();
-            let action = &bundle.actions()[meta.output_action_index(0).unwrap()];
-            let ivk = fvk.to_ivk(Scope::External).prepare();
-            match pool {
-                Pool::Orchard => try_note_decryption(&OrchardDomain::for_action(action), &ivk, action),
-                Pool::Ironwood => try_note_decryption(&IronwoodDomain::for_action(action), &ivk, action),
-            }
-            .unwrap()
-            .0
-        };
-        let (anchor, path) = {
+        let note = received_note(pool, fvk);
+        let (anchor, path): (orchard::Anchor, orchard::tree::MerklePath) = {
             let leaf = MerkleHashOrchard::from_cmx(&note.commitment().into());
             let mut tree = ShardTree::<_, 32, 16>::new(MemoryShardStore::<MerkleHashOrchard, u32>::empty(), 100);
             tree.append(leaf, Retention::Marked).unwrap();
@@ -513,38 +512,42 @@ mod tests {
             let path = tree.witness_at_checkpoint_depth(0.into(), 0).unwrap().unwrap();
             (path.root(leaf).into(), path.into())
         };
-        let (network, orchard_anchor, ironwood_anchor) = match pool {
-            Pool::Orchard => (RegtestUpgrade::Nu6_2.local_network(), Some(anchor), None),
-            Pool::Ironwood => (RegtestUpgrade::Nu6_3.local_network(), None, Some(anchor)),
+        let (orchard_anchor, ironwood_anchor) = match pool {
+            Pool::Orchard => (Some(anchor), Some(orchard::Anchor::empty_tree())),
+            Pool::Ironwood => (None, Some(anchor)),
         };
-        let mut builder = Builder::new(
-            network,
-            1_000.into(),
-            BuildConfig::Standard {
-                sapling_anchor: None,
-                orchard_anchor,
-                ironwood_anchor,
-                orchard_padding: BundlePadding::DEFAULT,
-                ironwood_padding: BundlePadding::DEFAULT,
-            },
-        );
         let memo = if memo.is_empty() { MemoBytes::empty() } else { memo.parse::<Memo>().unwrap().encode() };
-        let change = Zatoshis::const_from_u64(NOTE - pay - FEE);
         let change_to = fvk.address_at(0u32, Scope::Internal);
         let (ext_ovk, int_ovk) = (Some(fvk.to_ovk(Scope::External)), Some(fvk.to_ovk(Scope::Internal)));
-        match pool {
-            Pool::Orchard => {
-                builder.add_orchard_spend::<zip317::FeeRule>(fvk.clone(), note, path).unwrap();
-                builder.add_orchard_output::<zip317::FeeRule>(ext_ovk, payee(), Zatoshis::const_from_u64(pay), memo).unwrap();
-                builder.add_orchard_output::<zip317::FeeRule>(int_ovk, change_to, change, MemoBytes::empty()).unwrap();
+        let builder_with_change = |change: u64| {
+            let mut builder = Builder::new(
+                RegtestUpgrade::Nu6_3.local_network(),
+                1_000.into(),
+                BuildConfig::Standard {
+                    sapling_anchor: None,
+                    orchard_anchor,
+                    ironwood_anchor,
+                    orchard_padding: BundlePadding::DEFAULT,
+                    ironwood_padding: BundlePadding::DEFAULT,
+                },
+            );
+            match pool {
+                Pool::Orchard => builder.add_orchard_spend::<zip317::FeeRule>(fvk.clone(), note, path.clone()).unwrap(),
+                Pool::Ironwood => builder.add_ironwood_spend::<zip317::FeeRule>(fvk.clone(), note, path.clone()).unwrap(),
             }
-            Pool::Ironwood => {
-                builder.add_ironwood_spend::<zip317::FeeRule>(fvk.clone(), note, path).unwrap();
-                builder.add_ironwood_output::<zip317::FeeRule>(ext_ovk, payee(), Zatoshis::const_from_u64(pay), memo).unwrap();
-                builder.add_ironwood_output::<zip317::FeeRule>(int_ovk, change_to, change, MemoBytes::empty()).unwrap();
-            }
-        }
-        let PcztResult { pczt_parts, .. } = builder.build_for_pczt(OsRng, &zip317::FeeRule::standard()).unwrap();
+            builder
+                .add_ironwood_output::<zip317::FeeRule>(ext_ovk.clone(), payee(), Zatoshis::const_from_u64(pay), memo.clone())
+                .unwrap();
+            builder
+                .add_ironwood_output::<zip317::FeeRule>(int_ovk.clone(), change_to, Zatoshis::const_from_u64(change), MemoBytes::empty())
+                .unwrap();
+            builder
+        };
+        // The fee depends only on the shape of the transaction, so ask a
+        // builder with placeholder change, then build with the real change.
+        let fee = u64::from(builder_with_change(0).get_fee(&zip317::FeeRule::standard()).unwrap());
+        let builder = builder_with_change(NOTE - pay - fee);
+        let PcztResult { pczt_parts, .. } = builder.build_for_pczt(super::super::wallet_rng(), &zip317::FeeRule::standard()).unwrap();
         let pczt = IoFinalizer::new(Creator::build_from_parts(pczt_parts).unwrap()).finalize_io().unwrap();
         let sighash = Signer::new(pczt.clone()).unwrap().shielded_sighash();
         let spends = super::super::spends_to_sign(pczt.clone()).unwrap();
@@ -553,14 +556,15 @@ mod tests {
             pczt_hex: hex::encode(pczt.serialize().unwrap()),
             sighash_hex: hex::encode(sighash),
             alpha_hex: spends[0].alpha_hex.clone(),
+            fee,
         }
     }
 
-    fn claims(recipient: String, amount: u64, memo: Option<&str>) -> SigningContext {
+    fn claims(d: &Draft, recipient: String, amount: u64, memo: Option<&str>) -> SigningContext {
         SigningContext {
             recipient,
             amount_zatoshis: amount,
-            fee_zatoshis: FEE,
+            fee_zatoshis: d.fee,
             memo: memo.map(str::to_string),
             is_unshield: false,
             network: "regtest".into(),
@@ -584,15 +588,15 @@ mod tests {
     }
 
     #[test]
-    fn an_honest_send_verifies_in_both_pools() {
+    fn an_honest_send_verifies_spending_from_either_pool() {
         let (ak, fvk) = group(1);
         for pool in [Pool::Orchard, Pool::Ironwood] {
             let d = draft(pool, &fvk, 100_000, "rent for May");
             let v = verify(&ak, &d, &pczt_for_signers(&d.pczt_hex).unwrap()).unwrap();
             assert_eq!(v.sighash_hex, d.sighash_hex);
             assert_eq!(v.spent_zatoshis, NOTE);
-            assert_eq!(v.change_zatoshis, NOTE - 100_000 - FEE);
-            assert_eq!(v.fee_zatoshis, FEE);
+            assert_eq!(v.change_zatoshis, NOTE - 100_000 - d.fee);
+            assert_eq!(v.fee_zatoshis, d.fee);
             assert_eq!(
                 v.payments,
                 vec![VerifiedPayment {
@@ -602,7 +606,7 @@ mod tests {
                     memo: Some("rent for May".into()),
                 }]
             );
-            check_coordinator_claims(DEVNET, &ak, &v, &claims(ua(payee()), 100_000, Some("rent for May"))).unwrap();
+            check_coordinator_claims(DEVNET, &ak, &v, &claims(&d, ua(payee()), 100_000, Some("rent for May"))).unwrap();
         }
     }
 
@@ -667,16 +671,16 @@ mod tests {
         let v = verify(&ak, &d, &pczt_for_signers(&d.pczt_hex).unwrap()).unwrap();
         let check = |c: SigningContext| check_coordinator_claims(DEVNET, &ak, &v, &c);
 
-        assert_refused(check(claims(ua(payee()), 1_000, Some("invoice 7"))), "but it pays");
+        assert_refused(check(claims(&d, ua(payee()), 1_000, Some("invoice 7"))), "but it pays");
         let elsewhere = FullViewingKey::from(&SpendingKey::from_bytes([3; 32]).unwrap()).address_at(0u32, Scope::External);
-        assert_refused(check(claims(ua(elsewhere), 100_000, Some("invoice 7"))), "but it pays");
-        assert_refused(check(claims(ua(payee()), 100_000, Some("invoice 8"))), "memo");
-        assert_refused(check(claims(ua(payee()), 100_000, None)), "memo");
-        assert_refused(check(SigningContext { fee_zatoshis: 1, ..claims(ua(payee()), 100_000, Some("invoice 7")) }), "fee");
-        assert_refused(check(SigningContext { is_unshield: true, ..claims(ua(payee()), 100_000, Some("invoice 7")) }), "transparent");
+        assert_refused(check(claims(&d, ua(elsewhere), 100_000, Some("invoice 7"))), "but it pays");
+        assert_refused(check(claims(&d, ua(payee()), 100_000, Some("invoice 8"))), "memo");
+        assert_refused(check(claims(&d, ua(payee()), 100_000, None)), "memo");
+        assert_refused(check(SigningContext { fee_zatoshis: 1, ..claims(&d, ua(payee()), 100_000, Some("invoice 7")) }), "fee");
+        assert_refused(check(SigningContext { is_unshield: true, ..claims(&d, ua(payee()), 100_000, Some("invoice 7")) }), "transparent");
         // "Sending to ourselves" can't hide a payment to someone else.
         let own = ua(fvk.address_at(0u32, Scope::External));
-        assert_refused(check(claims(own, 100_000, None)), "back to the group");
+        assert_refused(check(claims(&d, own, 100_000, None)), "back to the group");
     }
 
     #[test]
@@ -689,7 +693,7 @@ mod tests {
         assert!(compact.len() < full.len());
         let v = verify(&ak, &d, &compact).unwrap();
         assert_eq!(v.payments[0].memo.as_deref(), Some("compact me"));
-        assert_eq!(v.fee_zatoshis, FEE);
+        assert_eq!(v.fee_zatoshis, d.fee);
         // And too large even compacted is a clear error, not a silent truncation.
         assert!(pczt_for_signers_within(&d.pczt_hex, 100).is_err());
     }
