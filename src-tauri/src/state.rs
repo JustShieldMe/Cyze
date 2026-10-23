@@ -155,6 +155,12 @@ pub struct AppState {
     pub last_activity: AtomicI64,
 }
 
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AppState {
     pub fn new() -> Self {
         let data_dir = std::env::var("FROST_APP_DATA_DIR")

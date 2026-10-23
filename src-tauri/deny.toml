@@ -1,0 +1,13 @@
+# cargo-deny configuration, run in CI as `cargo deny check advisories`.
+# https://embarkstudios.github.io/cargo-deny/
+
+[advisories]
+# Vulnerabilities always fail the check. Yanked crates fail too: a yanked
+# release usually means "don't use this one".
+yanked = "deny"
+# Fail for unmaintained crates we depend on directly; transitive ones (deep in
+# the Tauri and Zcash trees) are reported but don't fail the build, since only
+# upstream can replace them.
+unmaintained = "workspace"
+# Anything listed here must say why it is safe to ignore and when to revisit.
+ignore = []

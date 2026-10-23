@@ -135,6 +135,8 @@ impl WalletNetwork {
     /// Parse the settings spelling. A regtest network parsed this way assumes
     /// the default upgrade level; callers that know the node's level construct
     /// `WalletNetwork::Regtest(level)` directly.
+    // Not `FromStr`: this never fails (unknown spellings mean testnet).
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
         match s {
             "main" => WalletNetwork::Main,
@@ -1601,6 +1603,7 @@ pub struct DraftTransaction {
 /// and the node rejects the tx ("must not be mined at a block height greater
 /// than its expiry"). The signing ceremony must still complete within the
 /// ~40-block expiry window (≈50 min on testnet) of the build.
+#[allow(clippy::too_many_arguments)]
 pub async fn prepare_send(
     data_dir: &Path,
     group_id: &str,
@@ -2295,7 +2298,7 @@ pub fn wallet_notes(
         }
     }
     // Largest notes first, across both pools.
-    notes.sort_by(|a, b| b.value_zatoshis.cmp(&a.value_zatoshis));
+    notes.sort_by_key(|n| std::cmp::Reverse(n.value_zatoshis));
     Ok(notes)
 }
 
