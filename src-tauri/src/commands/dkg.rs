@@ -117,6 +117,11 @@ pub(crate) async fn begin_dkg<R: tauri::Runtime>(app: &AppHandle<R>, args: Start
     let event_app = app.clone();
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.recv().await {
+            if let frost_app_core::events::DkgEvent::SessionReady { session_id, .. } = &event {
+                if let Ok(mut sessions) = event_app.state::<AppState>().dkg_sessions.lock() {
+                    sessions.insert(*session_id);
+                }
+            }
             let _ = event_app.emit(
                 "dkg:progress",
                 serde_json::json!({ "ceremony_id": ceremony_id, "event": event }),

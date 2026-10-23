@@ -479,8 +479,13 @@ pub async fn list_pending_sessions(
         frost_app_core::transport::FrostdClient::new(format!("https://{server_url}"), &trust)?;
     client.login(&comm_privkey, &comm_pubkey).await?;
 
+    let dkg_sessions = state.dkg_sessions.lock().map(|s| s.clone()).unwrap_or_default();
     let mut pending = Vec::new();
     for session_id in client.list_sessions().await?.session_ids {
+        // A key-generation session the organizer hasn't closed yet.
+        if dkg_sessions.contains(&session_id) {
+            continue;
+        }
         let info = client
             .get_session_info(&api::GetSessionInfoArgs { session_id })
             .await?;

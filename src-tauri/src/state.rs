@@ -221,6 +221,9 @@ pub struct AppState {
     /// send signs each note in its own round; once one round of a verified
     /// transaction is approved, its other rounds are approved automatically.
     pub approved_sighashes: Mutex<HashMap<String, std::time::Instant>>,
+    /// Sessions this app ran key generation in. The organizer keeps one open
+    /// briefly after it finishes, and it must not look like a signing request.
+    pub dkg_sessions: std::sync::Mutex<std::collections::HashSet<Uuid>>,
     /// Serializes read-modify-write cycles of the private settings.
     pub(crate) private_lock: Mutex<()>,
 }
@@ -269,6 +272,7 @@ impl AppState {
             unlocked_tx: tokio::sync::watch::channel(false).0,
             sync_service: crate::sync_service::SyncService::default(),
             approved_sighashes: Mutex::new(HashMap::new()),
+            dkg_sessions: Default::default(),
             private_lock: Mutex::new(()),
         }
     }
