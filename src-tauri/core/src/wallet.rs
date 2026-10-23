@@ -935,6 +935,7 @@ pub async fn init_group_account(
 ) -> Result<u64, CoreError> {
     use zcash_protocol::consensus::{NetworkUpgrade, Parameters};
 
+    let tag = crate::redact::log_tag(group_id);
     let (db_path, _) = wallet_paths(data_dir, group_id, network);
     let mut db = open_db(&db_path, network, db_key)?;
     if !db
@@ -942,7 +943,7 @@ pub async fn init_group_account(
         .map_err(|e| CoreError::Crypto(format!("wallet accounts: {e}")))?
         .is_empty()
     {
-        tracing::debug!(group = %group_id, "wallet setup: account already imported; nothing to do");
+        tracing::debug!(group = %tag, "wallet setup: account already imported; nothing to do");
         return Ok(0); // already imported
     }
 
@@ -956,7 +957,7 @@ pub async fn init_group_account(
     // wallet setup spinning forever with no error and no log line.
     let rpc_timeout = std::time::Duration::from_secs(30);
 
-    tracing::info!(group = %group_id, url = %lightwalletd_url, "wallet setup: connecting to lightwalletd");
+    tracing::info!(group = %tag, url = %lightwalletd_url, "wallet setup: connecting to lightwalletd");
     let mut client = connect(lightwalletd_url).await?;
     let tip = tokio::time::timeout(rpc_timeout, client.get_latest_block(ChainSpec {}))
         .await
@@ -968,7 +969,7 @@ pub async fn init_group_account(
         .map_err(|e| CoreError::Connection(format!("get_latest_block: {e}")))?
         .into_inner()
         .height;
-    tracing::info!(group = %group_id, tip, "wallet setup: connected; got chain tip");
+    tracing::info!(group = %tag, tip, "wallet setup: connected; got chain tip");
 
     let nu5 = params
         .activation_height(NetworkUpgrade::Nu5)
@@ -985,7 +986,7 @@ pub async fn init_group_account(
     // request the frontier as of the block *before* the first one to scan.
     // Fetching the treestate at `scan_from` itself would skip that block — and
     // with it the transaction that funded the group.
-    tracing::info!(group = %group_id, scan_from, "wallet setup: fetching tree state for the account birthday");
+    tracing::info!(group = %tag, scan_from, "wallet setup: fetching tree state for the account birthday");
     let treestate = tokio::time::timeout(
         rpc_timeout,
         client.get_tree_state(BlockId {
@@ -1006,7 +1007,7 @@ pub async fn init_group_account(
 
     db.import_account_ufvk(group_id, &ufvk, &birthday, AccountPurpose::ViewOnly, None)
         .map_err(|e| CoreError::Crypto(format!("import account: {e}")))?;
-    tracing::info!(group = %group_id, scan_from, "wallet setup: view-only account imported; will scan from this height");
+    tracing::info!(group = %tag, scan_from, "wallet setup: view-only account imported; will scan from this height");
     Ok(scan_from)
 }
 
