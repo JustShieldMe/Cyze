@@ -70,6 +70,13 @@ pub struct CreateInviteArgs {
     pub participants: Vec<String>,
     /// The server address members use (`GroupServer::public`).
     pub server: String,
+    /// Whether the session agrees on a viewing seed (as started).
+    #[serde(default = "agree_by_default")]
+    pub agree_viewing_key: bool,
+}
+
+fn agree_by_default() -> bool {
+    true
 }
 
 /// The invite for a session this user started.
@@ -111,6 +118,7 @@ pub async fn create_invite(state: State<'_, AppState>, args: CreateInviteArgs) -
         name: args.name.trim().to_string(),
         organizer,
         members,
+        agree_viewing_key: args.agree_viewing_key,
     };
     Ok(invite.encode()?)
 }
@@ -242,6 +250,7 @@ pub async fn accept_invite<R: tauri::Runtime>(app: AppHandle<R>, code: String, n
             participants: vec![],
             server_url: Some(invite.server),
             session_id: Some(invite.session_id),
+            agree_viewing_key: invite.agree_viewing_key,
         },
     )
     .await

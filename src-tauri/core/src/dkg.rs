@@ -40,6 +40,10 @@ pub struct DkgParams {
     /// Specific session to join (participants only). If none, the single
     /// active session on the server is used.
     pub session_id: Option<Uuid>,
+    /// For a RedPallas group, agree on a random viewing seed after key
+    /// generation ([`agree_viewing_seed`]). Every member must set the same:
+    /// upstream frost-client members don't run this round.
+    pub agree_viewing_key: bool,
 }
 
 pub struct DkgOutput {
@@ -47,6 +51,8 @@ pub struct DkgOutput {
     pub group_id: String,
     /// Config entry ready to be inserted into the keystore.
     pub group: Group,
+    /// The viewing seed the members agreed on, if they ran that round.
+    pub viewing_seed: Option<crate::viewing::ViewingSeed>,
 }
 
 /// Convert frost-client's boxed errors at the call site so the non-Send
@@ -329,6 +335,18 @@ async fn run_rounds<C: Ciphersuite + MaybeIntoEvenY + 'static>(
             .map_err(|e| CoreError::Ceremony(e.to_string()))?,
     );
 
+    let group_key = public_key_package
+        .verifying_key()
+        .serialize()
+        .map_err(|e| CoreError::Ceremony(e.to_string()))?;
+    let viewing_seed = if params.agree_viewing_key && C::ID == PallasBlake2b512::ID {
+        let _ = events.send(DkgEvent::ViewingKey).await;
+        let mut round = SessionIo { client, session_id, cipher: &mut cipher, cancel, pending: &mut pending };
+        Some(agree_viewing_seed(&mut round, &pubkeys, &params.comm_pubkey, identifier, &group_key).await?)
+    } else {
+        None
+    };
+
     // Build the config Group entry like upstream cli::dkg does.
     let identifier_to_pubkey: HashMap<Identifier<C>, PublicKey> =
         pubkeys.into_iter().map(|(k, v)| (v, k)).collect();
@@ -346,12 +364,7 @@ async fn run_rounds<C: Ciphersuite + MaybeIntoEvenY + 'static>(
         );
     }
 
-    let group_id = hex::encode(
-        public_key_package
-            .verifying_key()
-            .serialize()
-            .map_err(|e| CoreError::Ceremony(e.to_string()))?,
-    );
+    let group_id = hex::encode(&group_key);
     let group = Group {
         ciphersuite: C::ID.to_string(),
         description: params.description.clone(),
@@ -363,7 +376,146 @@ async fn run_rounds<C: Ciphersuite + MaybeIntoEvenY + 'static>(
         server_url: Some(params.server_url.clone()),
     };
 
-    Ok(DkgOutput { group_id, group })
+    Ok(DkgOutput { group_id, group, viewing_seed })
+}
+
+/// The encrypted session key generation runs over, for the rounds after it.
+struct SessionIo<'a> {
+    client: &'a FrostdClient,
+    session_id: Uuid,
+    cipher: &'a mut Cipher,
+    cancel: &'a CancellationToken,
+    /// Decrypted messages not consumed yet.
+    pending: &'a mut VecDeque<api::Msg>,
+}
+
+impl SessionIo<'_> {
+    async fn send_to(&mut self, recipients: &[PublicKey], bytes: &[u8]) -> Result<(), CoreError> {
+        for pk in recipients {
+            let msg = self.cipher.encrypt(Some(pk), bytes.to_vec()).map_err(|e| CoreError::Crypto(e.to_string()))?;
+            self.client.send(&api::SendArgs { session_id: self.session_id, recipients: vec![pk.clone()], msg }).await?;
+        }
+        Ok(())
+    }
+
+    /// Wait for more messages (or cancellation).
+    async fn receive_more(&mut self) -> Result<(), CoreError> {
+        let r = self.client.receive(&api::ReceiveArgs { session_id: self.session_id, as_coordinator: false }).await?;
+        if r.msgs.is_empty() {
+            tokio::select! {
+                _ = self.cancel.cancelled() => return Err(CoreError::Cancelled),
+                _ = tokio::time::sleep(std::time::Duration::from_secs(2)) => {}
+            }
+        }
+        for msg in r.msgs {
+            self.pending.push_back(self.cipher.decrypt(msg).map_err(|e| CoreError::Crypto(e.to_string()))?);
+        }
+        Ok(())
+    }
+}
+
+/// A message of the viewing-seed agreement. Tagged so it can't be mistaken
+/// for a FROST package.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(tag = "cyze_viewing_key", rename_all = "snake_case")]
+enum ViewingKeyMsg {
+    /// A member's random contribution to the seed.
+    Contribution { value: String },
+    /// A member's digest of the seed they computed.
+    Confirm { digest: String },
+}
+
+/// What has arrived from the other members so far.
+#[derive(Default)]
+struct ViewingKeyInbox {
+    contributions: HashMap<PublicKey, [u8; 32]>,
+    confirms: HashMap<PublicKey, [u8; 32]>,
+}
+
+impl ViewingKeyInbox {
+    /// Take the agreement's messages out of `pending`, leaving anything else.
+    fn absorb(&mut self, pending: &mut VecDeque<api::Msg>, others: &[PublicKey]) -> Result<(), CoreError> {
+        let malformed = || CoreError::Ceremony("a member sent a malformed viewing-key message".into());
+        let mut rest = VecDeque::new();
+        while let Some(msg) = pending.pop_front() {
+            let Ok(parsed) = serde_json::from_slice::<ViewingKeyMsg>(&msg.msg) else {
+                rest.push_back(msg);
+                continue;
+            };
+            if !others.contains(&msg.sender) {
+                continue;
+            }
+            let (map, value) = match parsed {
+                ViewingKeyMsg::Contribution { value } => (&mut self.contributions, value),
+                ViewingKeyMsg::Confirm { digest } => (&mut self.confirms, digest),
+            };
+            let value: [u8; 32] =
+                hex::decode(value).ok().and_then(|b| b.try_into().ok()).ok_or_else(malformed)?;
+            if map.insert(msg.sender.clone(), value).is_some_and(|prev| prev != value) {
+                return Err(CoreError::Ceremony("a member sent two different viewing-key messages".into()));
+            }
+        }
+        *pending = rest;
+        Ok(())
+    }
+}
+
+/// Agree on the group's viewing seed: every member sends every other member a
+/// random contribution, and the seed hashes all of them in identifier order
+/// ([`crate::viewing::combine`]), so no single member chooses it. Members then
+/// exchange digests of their seed and abort on any mismatch, which is what a
+/// member sending different contributions to different people would cause.
+async fn agree_viewing_seed<C: Ciphersuite>(
+    io: &mut SessionIo<'_>,
+    pubkeys: &HashMap<PublicKey, Identifier<C>>,
+    me: &PublicKey,
+    my_identifier: Identifier<C>,
+    group_key: &[u8],
+) -> Result<crate::viewing::ViewingSeed, CoreError> {
+    use rand::RngCore;
+    use zeroize::Zeroizing;
+
+    let others: Vec<PublicKey> = pubkeys.keys().filter(|p| *p != me).cloned().collect();
+    let encode = |m: &ViewingKeyMsg| serde_json::to_vec(m).map_err(|e| CoreError::Ceremony(e.to_string()));
+    let mut inbox = ViewingKeyInbox::default();
+
+    let mut own = Zeroizing::new([0u8; 32]);
+    OsRng.fill_bytes(&mut *own);
+    let contribution = Zeroizing::new(encode(&ViewingKeyMsg::Contribution { value: hex::encode(*own) })?);
+    io.send_to(&others, &contribution).await?;
+    loop {
+        inbox.absorb(io.pending, &others)?;
+        if inbox.contributions.len() == others.len() {
+            break;
+        }
+        io.receive_more().await?;
+    }
+
+    let mut all: Vec<(Vec<u8>, [u8; 32])> = inbox
+        .contributions
+        .iter()
+        .map(|(pk, value)| (pubkeys[pk].serialize(), *value))
+        .collect();
+    all.push((my_identifier.serialize(), *own));
+    let seed = crate::viewing::combine(group_key, &all);
+    let digest = crate::viewing::digest(group_key, &seed);
+
+    io.send_to(&others, &encode(&ViewingKeyMsg::Confirm { digest: hex::encode(digest) })?).await?;
+    loop {
+        inbox.absorb(io.pending, &others)?;
+        if inbox.confirms.len() == others.len() {
+            break;
+        }
+        io.receive_more().await?;
+    }
+    if inbox.confirms.values().any(|d| *d != digest) {
+        return Err(CoreError::Ceremony(
+            "the members ended up with different viewing keys, so the group wasn't created. Try again; if it \
+             keeps happening, a member's app may be tampering with the setup."
+                .into(),
+        ));
+    }
+    Ok(seed)
 }
 
 /// Poll `/receive`, decrypt and feed messages to the session state one at a

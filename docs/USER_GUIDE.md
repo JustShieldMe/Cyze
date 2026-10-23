@@ -207,7 +207,10 @@ share; the full private key never exists anywhere. Go to **Groups → New group*
    **Members besides you**, either from your contacts or by pasting the code.
 2. Enter a **name** and choose how many members must **approve a payment**.
 3. Groups are Zcash wallets (RedPallas). With **Show advanced options** on, you
-   can choose **Ed25519** instead, for general-purpose signing without a wallet.
+   can choose **Ed25519** instead, for general-purpose signing without a wallet,
+   and tick **A member uses the frost-client command-line tools** if one does.
+   That tool can't help agree on a private viewing key, so such a group's
+   payments are visible to anyone who learns its group key.
 4. Click **Create invite.** The app starts your server and a link members can
    reach, then shows the **invite**. Copy it and send it to the members.
 5. Keep the app open until everyone has joined.

@@ -339,9 +339,13 @@ async fn gate_wallet_request<R: tauri::Runtime>(
     let state = app.state::<AppState>();
     let settings = state.load_settings();
     let network = crate::commands::wallet::configured_network(&settings);
+    let seed = match state.viewing_seed(group_id).await {
+        Ok(seed) => seed,
+        Err(e) => return Verdict::Refused(format!("refused to sign: can't read the group's viewing key ({})", e.message)),
+    };
     let verdict = match context.and_then(|c| c.pczt.as_deref().map(|pczt| (c, pczt))) {
-        Some((claimed, pczt)) => verify::verify_signing_request(network, group_id, pczt, message_hex, randomizer_hex)
-            .and_then(|tx| verify::check_coordinator_claims(network, group_id, &tx, claimed).map(|()| tx))
+        Some((claimed, pczt)) => verify::verify_signing_request(network, group_id, seed.as_deref(), pczt, message_hex, randomizer_hex)
+            .and_then(|tx| verify::check_coordinator_claims(network, group_id, seed.as_deref(), &tx, claimed).map(|()| tx))
             .map_or_else(|e| Verdict::Refused(e.to_string()), |tx| Verdict::Verified { tx, auto_approved: false }),
         None if settings.advanced_mode.unwrap_or(false) => Verdict::Raw,
         None => Verdict::Refused(

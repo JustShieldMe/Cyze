@@ -31,6 +31,9 @@ export default function NewGroup() {
   const [selected, setSelected] = useState<string[]>([]);
   const [threshold, setThreshold] = useState(2);
   const [suite, setSuite] = useState<Ciphersuite>("redpallas");
+  // Members using the upstream command-line tools can't take part in agreeing
+  // on a private viewing key; their group's viewing key follows from its id.
+  const [cliMembers, setCliMembers] = useState(false);
   const [stage, setStage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -48,6 +51,7 @@ export default function NewGroup() {
       const server = await prepareGroupServer();
       setStage("Opening the group…");
       const label = name.trim() || `${Math.min(threshold, total)} of ${total} wallet`;
+      const agree = !(advanced && cliMembers);
       const id = await startDkg({
         suite: effectiveSuite,
         description: label,
@@ -55,6 +59,7 @@ export default function NewGroup() {
         participants: selected,
         server_url: server.local,
         session_id: null,
+        agree_viewing_key: agree,
       });
       setActiveDkg(id, label);
       setInvite(id, {
@@ -64,6 +69,7 @@ export default function NewGroup() {
           name: label,
           participants: selected,
           server: server.public,
+          agree_viewing_key: agree,
         },
       });
     } catch (e) {
@@ -122,6 +128,20 @@ export default function NewGroup() {
               <option value="redpallas">Zcash wallet (RedPallas)</option>
               <option value="ed25519">General signing, no wallet (Ed25519)</option>
             </select>
+            {suite === "redpallas" && (
+              <label className="row confirm" style={{ alignItems: "flex-start" }}>
+                <input
+                  type="checkbox"
+                  style={{ width: "auto", marginTop: 3 }}
+                  checked={cliMembers}
+                  onChange={(e) => setCliMembers(e.target.checked)}
+                />
+                <span>
+                  A member uses the frost-client command-line tools. The wallet's viewing key then follows
+                  from the group key, so anyone who learns the group key can see its payments.
+                </span>
+              </label>
+            )}
           </>
         )}
 

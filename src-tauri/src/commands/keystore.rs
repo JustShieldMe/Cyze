@@ -42,7 +42,9 @@ pub async fn create_keystore(state: State<'_, AppState>, passphrase: String) -> 
     config.communication_key = Some(CommunicationKey { privkey, pubkey });
     let toml = frost_app_core::config::serialize_config(&config)?;
     let (phrase, file) = state.keystore().create(toml.as_bytes(), &passphrase)?;
-    state.set_unlocked(Some(crate::state::UnlockedState { config, file })).await;
+    state
+        .set_unlocked(Some(crate::state::UnlockedState { config, extras: Default::default(), file }))
+        .await;
     state.touch_activity();
     Ok(phrase.to_string())
 }
@@ -66,9 +68,9 @@ pub async fn import_upstream_config(
     let toml_str = zeroize::Zeroizing::new(std::fs::read_to_string(&path).map_err(|e| {
         AppError::new("config", format!("cannot read {}: {e}", path.display()))
     })?);
-    let config = frost_app_core::config::parse_config(&toml_str)?;
+    frost_app_core::config::parse_config(&toml_str)?;
     let (phrase, file) = state.keystore().create(toml_str.as_bytes(), &passphrase)?;
-    state.set_unlocked(Some(crate::state::UnlockedState { config, file })).await;
+    state.set_unlocked(Some(crate::state::UnlockedState::from_plaintext(&toml_str, file)?)).await;
     state.touch_activity();
     Ok(phrase.to_string())
 }
@@ -78,13 +80,12 @@ pub async fn unlock_keystore(state: State<'_, AppState>, passphrase: String) -> 
     let (file, plaintext) = state.keystore().unlock(&passphrase)?;
     let toml_str = std::str::from_utf8(&plaintext)
         .map_err(|e| AppError::new("malformed_keystore", e.to_string()))?;
-    let config = frost_app_core::config::parse_config(toml_str)?;
     // If this was a legacy v1 keystore, persist the migrated v2 form now so it
     // gains the envelope format (a recovery code can then be added).
     if state.keystore().is_legacy() {
         let _ = state.keystore().save_file(&file, plaintext.as_slice());
     }
-    state.set_unlocked(Some(crate::state::UnlockedState { config, file })).await;
+    state.set_unlocked(Some(crate::state::UnlockedState::from_plaintext(toml_str, file)?)).await;
     state.touch_activity();
     Ok(())
 }
@@ -103,8 +104,7 @@ pub async fn recover_keystore(
     state.keystore().save_file(&file, plaintext.as_slice())?;
     let toml_str = std::str::from_utf8(&plaintext)
         .map_err(|e| AppError::new("malformed_keystore", e.to_string()))?;
-    let config = frost_app_core::config::parse_config(toml_str)?;
-    state.set_unlocked(Some(crate::state::UnlockedState { config, file })).await;
+    state.set_unlocked(Some(crate::state::UnlockedState::from_plaintext(toml_str, file)?)).await;
     state.touch_activity();
     Ok(())
 }
@@ -180,7 +180,6 @@ pub async fn generate_recovery_code(state: State<'_, AppState>) -> AppResult<Str
     let unlocked = guard.as_mut().ok_or_else(AppError::locked)?;
     let phrase = frost_app_core::keystore::generate_recovery_phrase()?;
     unlocked.file.set_recovery(&phrase)?;
-    let toml = frost_app_core::config::serialize_config(&unlocked.config)?;
-    state.keystore().save_file(&unlocked.file, toml.as_bytes())?;
+    state.keystore().save_file(&unlocked.file, unlocked.plaintext()?.as_bytes())?;
     Ok(phrase.to_string())
 }

@@ -48,6 +48,14 @@ pub struct Invite {
     pub organizer: String,
     /// Everyone in the session, the organizer included.
     pub members: Vec<Member>,
+    /// Whether members agree on a random viewing seed (see `dkg::DkgParams`).
+    /// Everyone must do the same, so the invite decides.
+    #[serde(default = "agree_by_default")]
+    pub agree_viewing_key: bool,
+}
+
+fn agree_by_default() -> bool {
+    true
 }
 
 fn invalid(why: impl Into<String>) -> CoreError {
@@ -155,6 +163,7 @@ mod tests {
                 Member { name: "bob".into(), pubkey: "bb".repeat(32) },
                 Member { name: "carol".into(), pubkey: "cc".repeat(32) },
             ],
+            agree_viewing_key: true,
         }
     }
 

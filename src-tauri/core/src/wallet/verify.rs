@@ -80,14 +80,14 @@ fn fail(msg: impl Into<String>) -> CoreError {
     CoreError::Verification(msg.into())
 }
 
-/// The group's Orchard full viewing key, derived from its id (its `ak`) the
-/// same way the wallet derives it.
-pub fn group_fvk(group_ak_hex: &str) -> Result<FullViewingKey, CoreError> {
+/// The group's Orchard full viewing key, from its id (its `ak`) and its viewing
+/// seed if it has one, the same way the wallet derives it.
+pub fn group_fvk(group_ak_hex: &str, seed: Option<&crate::zcash::ViewingSeed>) -> Result<FullViewingKey, CoreError> {
     let ak: [u8; 32] = hex::decode(group_ak_hex.trim())
         .ok()
         .and_then(|b| b.try_into().ok())
         .ok_or_else(|| fail("the group key is not 32 bytes of hex"))?;
-    FullViewingKey::from_bytes(&crate::zcash::orchard_fvk_bytes(&ak))
+    FullViewingKey::from_bytes(&crate::zcash::orchard_fvk_bytes(&ak, seed))
         .ok_or_else(|| fail("the group key is not a valid Orchard spend validating key"))
 }
 
@@ -263,11 +263,12 @@ fn describe<E: std::fmt::Debug>(e: OrchardError<E>) -> String {
 pub fn verify_signing_request(
     network: WalletNetwork,
     group_ak_hex: &str,
+    viewing_seed: Option<&crate::zcash::ViewingSeed>,
     pczt_b64: &str,
     message_hex: &str,
     randomizer_hex: Option<&str>,
 ) -> Result<VerifiedTransaction, CoreError> {
-    let fvk = group_fvk(group_ak_hex)?;
+    let fvk = group_fvk(group_ak_hex, viewing_seed)?;
     let net = network.network_type();
     let bytes = B64
         .decode(pczt_b64.trim())
@@ -376,10 +377,11 @@ fn is_group_address(address: &str, fvk: &FullViewingKey) -> bool {
 pub fn check_coordinator_claims(
     network: WalletNetwork,
     group_ak_hex: &str,
+    viewing_seed: Option<&crate::zcash::ViewingSeed>,
     verified: &VerifiedTransaction,
     claimed: &SigningContext,
 ) -> Result<(), CoreError> {
-    let fvk = group_fvk(group_ak_hex)?;
+    let fvk = group_fvk(group_ak_hex, viewing_seed)?;
     let net = network.network_type();
     let zec = |z: u64| format!("{}", z as f64 / 1e8);
     if claimed.fee_zatoshis != verified.fee_zatoshis {
@@ -447,7 +449,7 @@ mod tests {
     fn group(seed: u8) -> (String, FullViewingKey) {
         let sk = SpendingKey::from_bytes([seed; 32]).unwrap();
         let ak_hex = hex::encode(&FullViewingKey::from(&sk).to_bytes()[..32]);
-        let fvk = group_fvk(&ak_hex).unwrap();
+        let fvk = group_fvk(&ak_hex, None).unwrap();
         (ak_hex, fvk)
     }
 
@@ -577,7 +579,7 @@ mod tests {
     }
 
     fn verify(ak: &str, d: &Draft, pczt_b64: &str) -> Result<VerifiedTransaction, CoreError> {
-        verify_signing_request(DEVNET, ak, pczt_b64, &d.sighash_hex, Some(&d.alpha_hex))
+        verify_signing_request(DEVNET, ak, None, pczt_b64, &d.sighash_hex, Some(&d.alpha_hex))
     }
 
     fn assert_refused(result: Result<impl std::fmt::Debug, CoreError>, why: &str) {
@@ -606,8 +608,22 @@ mod tests {
                     memo: Some("rent for May".into()),
                 }]
             );
-            check_coordinator_claims(DEVNET, &ak, &v, &claims(&d, ua(payee()), 100_000, Some("rent for May"))).unwrap();
+            check_coordinator_claims(DEVNET, &ak, None, &v, &claims(&d, ua(payee()), 100_000, Some("rent for May"))).unwrap();
         }
+    }
+
+    /// A group with a viewing seed is verified with its seed. Without it, the
+    /// verifier sees a different wallet and refuses.
+    #[test]
+    fn a_seeded_group_verifies_only_with_its_seed() {
+        let (ak, _) = group(1);
+        let seed = [5u8; 32];
+        let fvk = group_fvk(&ak, Some(&seed)).unwrap();
+        let d = draft(Pool::Ironwood, &fvk, 100_000, "");
+        let b64 = pczt_for_signers(&d.pczt_hex).unwrap();
+        let v = verify_signing_request(DEVNET, &ak, Some(&seed), &b64, &d.sighash_hex, Some(&d.alpha_hex)).unwrap();
+        assert_eq!(v.change_zatoshis, NOTE - 100_000 - d.fee);
+        assert!(verify_signing_request(DEVNET, &ak, None, &b64, &d.sighash_hex, Some(&d.alpha_hex)).is_err());
     }
 
     #[test]
@@ -617,7 +633,7 @@ mod tests {
         let other = draft(Pool::Orchard, &fvk, 200_000, "");
         let b64 = pczt_for_signers(&d.pczt_hex).unwrap();
         assert_refused(
-            verify_signing_request(DEVNET, &ak, &b64, &other.sighash_hex, Some(&d.alpha_hex)),
+            verify_signing_request(DEVNET, &ak, None, &b64, &other.sighash_hex, Some(&d.alpha_hex)),
             "not this transaction's sighash",
         );
     }
@@ -629,11 +645,11 @@ mod tests {
         let b64 = pczt_for_signers(&d.pczt_hex).unwrap();
         let wrong = hex::encode(pasta_curves::pallas::Scalar::from(42u64).to_repr());
         assert_refused(
-            verify_signing_request(DEVNET, &ak, &b64, &d.sighash_hex, Some(&wrong)),
+            verify_signing_request(DEVNET, &ak, None, &b64, &d.sighash_hex, Some(&wrong)),
             "doesn't belong to any of the group's spends",
         );
         assert_refused(
-            verify_signing_request(DEVNET, &ak, &b64, &d.sighash_hex, None),
+            verify_signing_request(DEVNET, &ak, None, &b64, &d.sighash_hex, None),
             "must be re-randomized",
         );
     }
@@ -669,7 +685,7 @@ mod tests {
         let (ak, fvk) = group(1);
         let d = draft(Pool::Ironwood, &fvk, 100_000, "invoice 7");
         let v = verify(&ak, &d, &pczt_for_signers(&d.pczt_hex).unwrap()).unwrap();
-        let check = |c: SigningContext| check_coordinator_claims(DEVNET, &ak, &v, &c);
+        let check = |c: SigningContext| check_coordinator_claims(DEVNET, &ak, None, &v, &c);
 
         assert_refused(check(claims(&d, ua(payee()), 1_000, Some("invoice 7"))), "but it pays");
         let elsewhere = FullViewingKey::from(&SpendingKey::from_bytes([3; 32]).unwrap()).address_at(0u32, Scope::External);

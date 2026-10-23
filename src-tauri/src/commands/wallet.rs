@@ -274,7 +274,8 @@ pub(crate) async fn group_wallet_ctx(
     let cfg = resolve_config(state);
     let network = configured_network(&state.load_settings());
     // The group id is the hex of its verifying key (the Orchard ak).
-    let ufvk = frost_app_core::zcash::derive_orchard_keys_hex(group_id, network.network_type())?.ufvk;
+    let seed = state.viewing_seed(group_id).await?;
+    let ufvk = frost_app_core::zcash::derive_orchard_keys_hex(group_id, seed.as_deref(), network.network_type())?.ufvk;
     Ok((network, cfg.lightwalletd_url, ufvk))
 }
 
@@ -634,6 +635,7 @@ async fn resolve_receive_address(
     let db_key = state.wallet_db_key(group_id).await?;
     let wid = state.wallet_dir_id(group_id).await?;
     let current_notes = wallet::count_received_notes(&state.data_dir, &wid, network, db_key.as_ref())?;
+    let seed = state.viewing_seed(group_id).await?;
 
     let index = state
         .update_private(|p| {
@@ -649,7 +651,7 @@ async fn resolve_receive_address(
         .await?;
 
     let address =
-        frost_app_core::zcash::derive_orchard_address_at(group_id, network.network_type(), index)?;
+        frost_app_core::zcash::derive_orchard_address_at(group_id, seed.as_deref(), network.network_type(), index)?;
     Ok(ReceiveAddress { address, index })
 }
 

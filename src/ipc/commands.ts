@@ -451,6 +451,9 @@ export interface StartDkgArgs {
   participants: string[];
   server_url: string | null;
   session_id: string | null;
+  /** Agree on a random viewing key (default). Off only when a member uses the
+   *  upstream command-line tools, which don't take part in that step. */
+  agree_viewing_key?: boolean;
 }
 
 export interface PendingSession {
@@ -501,6 +504,7 @@ export interface CreateInviteArgs {
   name: string;
   participants: string[];
   server: string;
+  agree_viewing_key: boolean;
 }
 export const createInvite = (args: CreateInviteArgs) => invoke<string>("create_invite", { args });
 export interface InviteMember {

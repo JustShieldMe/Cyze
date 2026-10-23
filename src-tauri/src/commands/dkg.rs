@@ -23,6 +23,14 @@ pub struct StartDkgArgs {
     pub server_url: Option<String>,
     /// Session to join (participants only).
     pub session_id: Option<Uuid>,
+    /// Agree on a random viewing seed (see `dkg::DkgParams`). Off only for
+    /// groups with members using the upstream command-line tools.
+    #[serde(default = "agree_by_default")]
+    pub agree_viewing_key: bool,
+}
+
+fn agree_by_default() -> bool {
+    true
 }
 
 #[tauri::command]
@@ -91,6 +99,7 @@ pub(crate) async fn begin_dkg<R: tauri::Runtime>(app: &AppHandle<R>, args: Start
         participants,
         known_pubkeys,
         session_id: args.session_id,
+        agree_viewing_key: args.agree_viewing_key,
     };
 
     let ceremony_id = Uuid::new_v4();
@@ -125,7 +134,10 @@ pub(crate) async fn begin_dkg<R: tauri::Runtime>(app: &AppHandle<R>, args: Start
             Ok(output) => {
                 let group_id = output.group_id.clone();
                 let saved = state
-                    .mutate_config(move |config| {
+                    .mutate_keystore(move |config, extras| {
+                        if let Some(seed) = output.viewing_seed {
+                            extras.viewing_seeds.insert(output.group_id.clone(), hex::encode(seed));
+                        }
                         config.group.insert(output.group_id.clone(), output.group);
                         Ok(())
                     })

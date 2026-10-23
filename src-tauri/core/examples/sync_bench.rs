@@ -87,7 +87,7 @@ fn throwaway_ufvk(network: WalletNetwork) -> String {
         };
         let fvk = orchard::keys::FullViewingKey::from(&sk).to_bytes();
         let ak: [u8; 32] = fvk[..32].try_into().expect("32 bytes");
-        if let Ok(keys) = frost_app_core::zcash::derive_orchard_keys(&ak, network.network_type()) {
+        if let Ok(keys) = frost_app_core::zcash::derive_orchard_keys(&ak, None, network.network_type()) {
             return keys.ufvk;
         }
     }

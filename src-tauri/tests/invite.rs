@@ -73,6 +73,7 @@ async fn members_join_with_an_invite_and_get_the_same_group() {
             participants: vec![pubkey(1), pubkey(2)],
             server_url: Some(server_url.clone()),
             session_id: None,
+            agree_viewing_key: true,
         },
     )
     .await
@@ -96,6 +97,7 @@ async fn members_join_with_an_invite_and_get_the_same_group() {
             name: "Treasury".into(),
             participants: vec![pubkey(1), pubkey(2)],
             server: server_url.clone(),
+            agree_viewing_key: true,
         },
     )
     .await
@@ -129,6 +131,19 @@ async fn members_join_with_an_invite_and_get_the_same_group() {
         assert_eq!(g.id, groups[0].id, "everyone holds a share of the same key");
     }
     assert_eq!(groups[2].description, "Our treasury", "a member can name it their own way");
+
+    // Everyone sees the same wallet, through a viewing key that the group id
+    // (its ak) alone doesn't give away.
+    let mut ufvks = Vec::new();
+    for state in [alice, bob, carol] {
+        let keys = commands::groups::group_orchard_keys(state.clone(), groups[0].id.clone()).await.unwrap().unwrap();
+        ufvks.push(keys.ufvk);
+    }
+    assert!(ufvks.iter().all(|u| *u == ufvks[0]), "members agree on the viewing key");
+    let from_id_alone =
+        frost_app_core::zcash::derive_orchard_keys_hex(&groups[0].id, None, frost_app_core::wallet::WalletNetwork::Main.network_type())
+            .unwrap();
+    assert_ne!(ufvks[0], from_id_alone.ufvk);
 
     // Bob now has both other members as contacts and uses the invite's server.
     let bob_contacts = commands::contacts::list_contacts(bob.clone()).await.unwrap();

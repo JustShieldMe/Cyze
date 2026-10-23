@@ -78,13 +78,20 @@ Supports both frost-tools ciphersuites: **Ed25519** (generic signing) and
   under a key derived from the keystore. It opens only with your passphrase or
   recovery code, and neither half is enough alone. The app reminds you to back
   up whenever a group isn't in any backup yet.
-- **Nothing outside the keystore names a group.** A group's id is its Orchard
-  `ak`, from which its viewing key follows, so anything keyed by it would expose
-  the treasury's history. Per-group settings, contact nicknames, signed
-  transactions awaiting broadcast, and the ceremony history are encrypted
-  under keys derived from the keystore, and wallet folders have opaque names
-  derived the same way. Settings from earlier
-  versions move over on the first unlock.
+- **A private viewing key per group.** When a group is created, its members
+  agree on a random viewing seed: each sends the others a random contribution,
+  the seed hashes all of them (so no one member chooses it), and everyone
+  compares a digest of the result before the group is saved. The seed lives in
+  each member's keystore, so it's encrypted and backed up with their share.
+  Knowing the group's id (its Orchard `ak`) is then not enough to see its
+  payments. Groups created before this, or with a member using the upstream
+  command-line tools (an advanced option), still derive their viewing key
+  from `ak`.
+- **Nothing outside the keystore names a group.** Per-group settings, contact
+  nicknames, signed transactions awaiting broadcast, and the ceremony history
+  are encrypted under keys derived from the keystore, and wallet folders have
+  opaque names derived the same way. Settings from earlier versions move over
+  on the first unlock.
 - **Invites never add keys silently.** An invite lists every member's key; the
   app marks those already in your contacts and adds new ones only after you
   confirm, since whoever controls a listed key holds a share.
