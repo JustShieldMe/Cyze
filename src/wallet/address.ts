@@ -3,21 +3,6 @@ import {
 } from "../ipc/commands";
 import { networkLabel } from "../network";
 
-export type SendMode = "shielded" | "unshield";
-
-export const RECIPIENT_PLACEHOLDER: Record<SendMode, Record<WalletNetwork, string>> = {
-  unshield: {
-    main: "t1… or t3… (mainnet transparent)",
-    test: "tm… or t2… (testnet transparent)",
-    regtest: "tm… (devnet transparent)",
-  },
-  shielded: {
-    main: "u1… (mainnet)",
-    test: "utest1… (testnet)",
-    regtest: "uregtest1… (devnet)",
-  },
-};
-
 /** Network a transparent address belongs to (mainnet t1/t3 P2PKH/P2SH, or
  *  tm/t2 — shared by testnet and regtest), or null if not a transparent address. */
 export function transparentNet(a: string): WalletNetwork | "test-or-regtest" | null {
@@ -35,42 +20,30 @@ export function shieldedNet(a: string): WalletNetwork | null {
   return null;
 }
 
-/** Mode-aware recipient validation. Returns a human-readable error if the
- *  address is the wrong network OR the wrong kind for the selected mode (so the
- *  user catches a transparent/shielded mix-up before building). The backend
- *  Address::decode stays authoritative on submit; this is fast guidance. */
-export function validateRecipient(
-  address: string,
-  network: WalletNetwork,
-  mode: SendMode
-): string | null {
-  const a = address.trim();
-  if (!a) return null;
-  const t = transparentNet(a);
-  const sh = shieldedNet(a);
-  const here = networkLabel(network);
 
-  if (mode === "unshield") {
-    if (sh) {
-      return "This is a shielded address — switch to Send for shielded recipients. Unshield needs a transparent t-address.";
-    }
-    // tm/t2 is valid on both testnet and regtest, so only a clear mismatch is flagged.
-    if (t === "main" && network !== "main") {
-      return `This looks like a mainnet transparent address. You are on ${here}.`;
-    }
-    if (t === "test-or-regtest" && network === "main") {
-      return "This looks like a testnet transparent address. You are on Mainnet.";
-    }
-    return null;
-  }
-  // shielded mode
+/** What the send form needs to know about a typed recipient: whether it's a
+ *  transparent address (so the payment is public and carries no memo), and
+ *  anything wrong with it. The backend's address decoding stays authoritative. */
+export function checkRecipient(address: string, network: WalletNetwork): { transparent: boolean; error: string | null } {
+  const a = address.trim();
+  const t = transparentNet(a);
   if (t) {
-    return "This is a transparent address — switch to Unshield to send to a transparent t-address.";
+    const wrong =
+      (t === "main" && network !== "main") || (t === "test-or-regtest" && network === "main");
+    return {
+      transparent: true,
+      error: wrong ? `This address is for a different network. You're on ${networkLabel(network)}.` : null,
+    };
   }
+  const sh = shieldedNet(a);
   if (sh && sh !== network) {
-    return `This looks like a ${networkLabel(sh).toLowerCase()} address. You are on ${here}${
-      network === "main" ? " — check the address carefully" : ""
-    }.`;
+    return { transparent: false, error: `This address is for a different network. You're on ${networkLabel(network)}.` };
   }
-  return null;
+  return { transparent: false, error: null };
 }
+
+export const ADDRESS_PLACEHOLDER: Record<WalletNetwork, string> = {
+  main: "u1… address, t-address, or name.zcash",
+  test: "utest1… or tm… address",
+  regtest: "uregtest1… or tm… address",
+};

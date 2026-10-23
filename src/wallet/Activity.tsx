@@ -108,7 +108,7 @@ export function WalletTxHistory({ group, network }: { group: GroupSummary; netwo
 
   return (
     <div className="card" style={{ marginTop: 16 }}>
-      <h3 style={{ marginTop: 0 }}>Transaction history</h3>
+      <h3 style={{ marginTop: 0 }}>Activity</h3>
 
       {history.isLoading && <p className="dim">Loading…</p>}
       {history.isError && (
@@ -119,7 +119,7 @@ export function WalletTxHistory({ group, network }: { group: GroupSummary; netwo
       )}
       {history.isSuccess && !hasAny && (
         <p className="dim">
-          No transactions yet — balance updates appear here after syncing.
+          No payments yet.
         </p>
       )}
 
@@ -135,11 +135,11 @@ export function WalletTxHistory({ group, network }: { group: GroupSummary; netwo
           </colgroup>
           <thead>
             <tr>
-              <th style={{ textAlign: "left", paddingBottom: 6, fontWeight: 500 }}>Date & Time</th>
+              <th style={{ textAlign: "left", paddingBottom: 6, fontWeight: 500 }}>Date</th>
               <th style={{ textAlign: "left", paddingBottom: 6, fontWeight: 500 }}>Type</th>
               <th style={{ textAlign: "right", paddingBottom: 6, paddingRight: 12, fontWeight: 500 }}>Amount</th>
-              <th style={{ textAlign: "left", paddingBottom: 6, fontWeight: 500 }}>Address</th>
-              <th style={{ textAlign: "left", paddingBottom: 6, fontWeight: 500 }}>Tx Hash</th>
+              <th style={{ textAlign: "left", paddingBottom: 6, fontWeight: 500 }}>With</th>
+              <th style={{ textAlign: "left", paddingBottom: 6, fontWeight: 500 }}>Transaction</th>
               <th />
             </tr>
           </thead>

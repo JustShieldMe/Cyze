@@ -28,22 +28,9 @@ export function ReceiveShieldCard({ groupId, fallback }: { groupId: string; fall
   const address = recv.data?.address ?? fallback;
   if (!address) return null;
   return (
-    <div className="card" style={{ marginTop: 14, background: "var(--bg-elevated)" }}>
-      <h3 style={{ marginTop: 0 }}>Receive / Shield into group</h3>
-      <p className="dim" style={{ marginTop: 0 }}>
-        Send Zcash to this address to fund the group. Funds become spendable by
-        the threshold; sending from a transparent wallet shields them in the same
-        step.
-      </p>
-      <label>
-        Group unified address
-        {recv.data != null && (
-          <span className="dim" style={{ fontWeight: 400 }}>
-            {" "}
-            — address #{recv.data.index + 1}
-          </span>
-        )}
-      </label>
+    <div className="card panel">
+      <h3 style={{ marginTop: 0 }}>Receive</h3>
+      <p className="dim" style={{ marginTop: 0 }}>Anyone can pay the group at this address.</p>
       <div className="row" style={{ gap: 16, alignItems: "flex-start", flexWrap: "wrap" }}>
         {/* Scan target for a mobile wallet. The QR always renders dark-on-white
             regardless of the app theme — inverted codes fail on many scanners —
@@ -93,22 +80,21 @@ export function ReceiveShieldCard({ groupId, fallback }: { groupId: string; fall
                 setTimeout(() => setCopied(false), 1500);
               }}
             >
-              {copied ? "Copied!" : "Copy address"}
+              {copied ? "Copied" : "Copy address"}
             </button>
             <button
               className="secondary"
               onClick={() => rotate.mutate()}
               disabled={rotate.isPending}
             >
-              {rotate.isPending ? "Generating…" : "Generate fresh address"}
+              {rotate.isPending ? "Generating…" : "New address"}
             </button>
           </div>
         </div>
       </div>
       <p className="dim" style={{ fontSize: 12, marginTop: 8 }}>
-        For best privacy use a fresh address for each incoming payment — reusing a
-        shielded address lets an observer link your deposits. This address rotates
-        automatically once it has been paid.
+        Once this address is paid the next payment gets a new one, so payments
+        can't be linked to each other.
       </p>
     </div>
   );

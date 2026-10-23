@@ -15,16 +15,15 @@ import {
 
 import { zec, KeyRow } from "./common";
 
-/** Phase → human label for a wallet-send signing ceremony (coordinator side). */
-export const SEND_PHASES: { key: string; label: string }[] = [
-  { key: "connecting", label: "Connecting to server" },
-  { key: "session_created", label: "Session created — waiting for signers" },
-  { key: "waiting_for_commitments", label: "Collecting commitments" },
-  { key: "signing_package_sent", label: "Signing package sent" },
-  { key: "waiting_for_shares", label: "Collecting signature shares" },
-  { key: "aggregating", label: "Aggregating group signature" },
-  { key: "proving", label: "Proving & broadcasting" },
-  { key: "complete", label: "Sent — on-chain" },
+/** A payment's progress in four steps, from the signing ceremony's phases. */
+export const SEND_STEPS: { label: string; phases: string[] }[] = [
+  {
+    label: "Asking members to approve",
+    phases: ["connecting", "session_created", "waiting_for_commitments", "signing_package_sent", "waiting_for_shares"],
+  },
+  { label: "Signing", phases: ["aggregating"] },
+  { label: "Sending to the network", phases: ["proving"] },
+  { label: "Sent", phases: ["complete"] },
 ];
 
 /** Active signing session for a transaction: persisted session id (to convey to
@@ -50,15 +49,14 @@ export function SessionParticipants({
   ): { label: string; cls: string } => {
     switch (status) {
       case "coordinator":
-        // The coordinator signs locally with no approval gate, so it always
-        // contributes its share — show it as an implicit approval.
-        return { label: "Coordinator (you) ✓", cls: "green" };
+        // This device signs locally with no approval step.
+        return { label: "You ✓", cls: "green" };
       case "joined":
-        return { label: "Joined", cls: "blue" };
+        return { label: "Reviewing", cls: "blue" };
       case "approved":
         return { label: "Approved ✓", cls: "green" };
       default:
-        return { label: "Waiting…", cls: "" };
+        return { label: "Waiting", cls: "" };
     }
   };
 
@@ -72,9 +70,9 @@ export function SessionParticipants({
   return (
     <div style={{ marginTop: 14 }}>
       <label>
-        Participants{" "}
+        Approvals{" "}
         <span className="dim" style={{ fontWeight: 400 }}>
-          — {approvedCount}/{signers.length} approved
+          {approvedCount} of {signers.length}
         </span>
       </label>
       <table className="participants">
@@ -87,10 +85,7 @@ export function SessionParticipants({
             return (
               <tr key={pubkey}>
                 <td style={{ color: p.isSelf ? "var(--ok)" : undefined }}>
-                  {p.label}
-                  <div className="dim mono" style={{ fontSize: 11 }}>
-                    {p.shortPubkey}
-                  </div>
+                  {p.label} <span className="dim code-inline">{p.shortPubkey}</span>
                 </td>
                 <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
                   <span className={`badge ${badge.cls}`}>{badge.label}</span>
@@ -115,7 +110,6 @@ export function SendSessionPanel({
   onDismiss: () => void;
   network: WalletNetwork;
 }) {
-  const [copied, setCopied] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   // Track elapsed minutes so we can show a "stuck" warning when a signer
   // goes offline. Updates every 30 s while the ceremony is in flight.
@@ -139,169 +133,96 @@ export function SendSessionPanel({
   };
 
   const meta = ceremony.send;
-  const currentIdx = SEND_PHASES.findIndex((p) => p.key === ceremony.phase);
   const failed = ceremony.failed;
   const done = ceremony.done && !failed;
+  const currentIdx = done ? SEND_STEPS.length : Math.max(0, SEND_STEPS.findIndex((st) => st.phases.includes(ceremony.phase)));
 
   return (
-    <div className="card" style={{ marginTop: 18, background: "var(--bg-elevated)" }}>
-      <h3 style={{ marginTop: 0 }}>Signing session</h3>
+    <div className="card panel">
+      <h3 style={{ marginTop: 0 }}>{done ? "Payment sent" : failed ? "Payment failed" : "Payment in progress"}</h3>
       {meta && (
-        <>
-          {meta.isConsolidation && (
-            <div className="callout" style={{ marginBottom: 10 }}>
-              <span>Note consolidation — merging fragmented notes into one to simplify future sends.</span>
-            </div>
-          )}
-          {meta.isUnshield && (
-            <div className="callout warn" style={{ marginBottom: 10 }}>
-              <span>Unshield — moving funds to a transparent address (public on-chain).</span>
-            </div>
-          )}
-          <table className="participants">
-            <tbody>
+        <table className="participants">
+          <tbody>
+            <tr>
+              <td>Amount</td>
+              <td>{zec(meta.amountZatoshis)} {unit(network)}</td>
+            </tr>
+            <tr>
+              <td>To</td>
+              <td className="mono-cell" style={{ wordBreak: "break-all" }}>
+                {meta.isConsolidation ? "This wallet" : meta.recipient}
+              </td>
+            </tr>
+            <tr>
+              <td>Network fee</td>
+              <td>{zec(meta.feeZatoshis)} {unit(network)}</td>
+            </tr>
+            {meta.memo && (
               <tr>
-                <td>{meta.isUnshield ? "Unshielding" : "Sending"}</td>
-                <td>{zec(meta.amountZatoshis)} {unit(network)}</td>
+                <td>Memo</td>
+                <td style={{ wordBreak: "break-word" }}>{meta.memo}</td>
               </tr>
-              <tr>
-                <td>To</td>
-                <td className="dim mono-cell">
-                  {meta.isConsolidation ? "This group (self)" : meta.recipient}
-                </td>
-              </tr>
-              <tr>
-                <td>Fee</td>
-                <td>{zec(meta.feeZatoshis)} {unit(network)}</td>
-              </tr>
-              {meta.memo && (
-                <tr>
-                  <td>Memo</td>
-                  <td style={{ fontStyle: "italic", wordBreak: "break-word" }}>{meta.memo}</td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </>
+            )}
+          </tbody>
+        </table>
       )}
 
-      {ceremony.groupId && (
-        <KeyRow label="Public Key (ak) / Group ID (for CLI signers)" value={ceremony.groupId} />
+      {meta?.signers && meta.signers.length > 0 && !done && (
+        <SessionParticipants signers={meta.signers} participants={ceremony.participants} />
       )}
 
-      <label style={{ marginTop: 12 }}>Session ID</label>
-      {ceremony.sessionId ? (
-        <>
-          <div className="mono">{ceremony.sessionId}</div>
-          <button
-            className="secondary"
-            style={{ marginTop: 6 }}
-            onClick={async () => {
-              await navigator.clipboard.writeText(ceremony.sessionId!);
-              setCopied(true);
-              setTimeout(() => setCopied(false), 1500);
-            }}
-          >
-            {copied ? "Copied!" : "Copy session ID"}
-          </button>
-          <p className="dim" style={{ marginTop: 6 }}>
-            The other signers approve this in their <Link to="/inbox">Inbox</Link>;
-            share this ID if they need to find the session.
-          </p>
-        </>
-      ) : (
-        <div className="dim">Creating session…</div>
-      )}
-
-      {meta?.signers && meta.signers.length > 0 && (
-        <SessionParticipants
-          signers={meta.signers}
-          participants={ceremony.participants}
-        />
-      )}
-
-      <label style={{ marginTop: 12 }}>Progress</label>
-      {!done && !failed && (ceremony.spendTotal ?? 1) > 1 && (
-        <p className="dim" style={{ marginTop: 0 }}>
-          <strong style={{ color: "var(--accent)" }}>
-            Signing note {ceremony.spendIndex ?? 1} of {ceremony.spendTotal}
-          </strong>{" "}
-          — notes are signed one at a time, each a separate session/approval in
-          signers' inboxes.{" "}
-          <strong style={{ color: "var(--accent)" }}>
-            Each note uses a new Session ID (shown above) that must be provided to
-            any FROST CLI signers for that note.
-          </strong>{" "}
-          Signers approve each note in turn.
-        </p>
-      )}
-      {/* Stuck warning: shown after 10 minutes with no completion. */}
-      {!done && !failed && elapsedMin >= 10 && (
-        <div className="callout warn" style={{ marginTop: 4 }}>
-          <span>
-            Waiting {elapsedMin} min — a signer may be offline or the session
-            timed out. You can cancel and restart when everyone is available.
-          </span>
-        </div>
-      )}
       <ol className="send-steps">
-        {SEND_PHASES.map((p, i) => {
+        {SEND_STEPS.map((st, i) => {
           const state = failed
-            ? i < currentIdx
-              ? "done"
-              : i === currentIdx
-                ? "failed"
-                : "pending"
-            : done || i < currentIdx
-              ? "done"
-              : i === currentIdx
-                ? "active"
-                : "pending";
+            ? i < currentIdx ? "done" : i === currentIdx ? "failed" : "pending"
+            : done || i < currentIdx ? "done" : i === currentIdx ? "active" : "pending";
           return (
-            <li key={p.key} className={`send-step ${state}`}>
+            <li key={st.label} className={`send-step ${state}`}>
               <span className="send-step-mark">
-                {state === "done" ? "✓" : state === "failed" ? "✕" : i === currentIdx ? "●" : "○"}
+                {state === "done" ? "✓" : state === "failed" ? "✕" : state === "active" ? "●" : "○"}
               </span>
-              {p.label}
+              {st.label}
+              {state === "active" && i === 0 && (ceremony.spendTotal ?? 1) > 1 && (
+                <span className="dim"> · part {ceremony.spendIndex ?? 1} of {ceremony.spendTotal}</span>
+              )}
             </li>
           );
         })}
       </ol>
 
-      {done && (
-        <div className="callout" style={{ marginTop: 8 }}>
-          <span>
-            ✓ Sent. The group signed and the transaction was broadcast — it will
-            confirm on-chain in a few minutes.
-          </span>
+      {!done && !failed && elapsedMin >= 10 && (
+        <div className="callout warn" style={{ marginTop: 4 }}>
+          <span>Waiting {elapsedMin} minutes. A member may be offline; you can cancel and try again later.</span>
         </div>
       )}
-      {done && ceremony.txid && (
-        <>
-          <label style={{ marginTop: 12 }}>Transaction ID</label>
-          <div className="mono">{ceremony.txid}</div>
-        </>
-      )}
-      {failed && (
-        <div className="error" style={{ marginTop: 8 }}>
-          Signing session failed: {ceremony.error ?? "unknown error"}
-        </div>
-      )}
+      {done && <p className="ok">It confirms on the network in a few minutes.</p>}
+      {failed && <div className="error">{ceremony.error ?? "Something went wrong."}</div>}
 
       <div className="row" style={{ marginTop: 12, flexWrap: "wrap", gap: 8 }}>
-        <button className="secondary" onClick={onDismiss}>
-          {done || failed ? "Done — start a new transaction" : "Dismiss"}
+        <button className={done || failed ? "" : "secondary"} onClick={onDismiss}>
+          {done || failed ? "Done" : "Hide"}
         </button>
         {!done && !failed && (
-          <button
-            className="danger"
-            onClick={handleCancel}
-            disabled={cancelling}
-          >
-            {cancelling ? "Cancelling…" : "Cancel ceremony"}
+          <button className="danger" onClick={handleCancel} disabled={cancelling}>
+            {cancelling ? "Cancelling…" : "Cancel payment"}
           </button>
         )}
       </div>
+
+      <details style={{ marginTop: 14 }}>
+        <summary className="dim" style={{ cursor: "pointer", fontSize: 12 }}>Technical details</summary>
+        <p className="dim" style={{ fontSize: 12 }}>
+          Members approve in <Link to="/inbox">Approvals</Link>. Someone signing with the command-line
+          tools needs the session ID{ceremony.groupId ? " and group key" : ""}.
+        </p>
+        {ceremony.sessionId && (
+          <>
+            <KeyRow label="Session ID" value={ceremony.sessionId} />
+          </>
+        )}
+        {ceremony.groupId && <KeyRow label="Group key (ak)" value={ceremony.groupId} masked />}
+        {ceremony.txid && <KeyRow label="Transaction ID" value={ceremony.txid} />}
+      </details>
     </div>
   );
 }

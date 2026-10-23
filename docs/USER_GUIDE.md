@@ -236,20 +236,23 @@ threshold and participant count.
 Spending requires the coordinator to draft a transaction and a threshold of
 members to approve it.
 
-### Coordinator — draft and send
+### Coordinator — send a payment
 
 1. Open **Home**. With several wallets, pick this group's from the switcher at
    the top.
-2. Fund the group first if needed: copy the **receive address** (a `u1…` on
-   mainnet / `utest1…` on testnet) and send ZEC to it. Received funds need
-   **10 confirmations** before they are spendable (your own change needs 3).
-3. In the **Send** section, enter the **recipient address**, the **amount**, and
-   an optional **memo**. The **Prepare** button stays disabled — and explains why
-   — until there is enough spendable balance.
-4. Choose which members will **sign** (any subset that meets the threshold; you
-   are pre-selected).
-5. Click **Prepare draft transaction**, review the amount, recipient, and fee,
-   then **Sign and broadcast.** The signing ceremony starts.
+2. Fund the group first if needed: click **Receive** and send ZEC to the
+   address shown (a `u1…` on mainnet / `utest1…` on testnet). Received funds
+   need **10 confirmations** before they are spendable (your own change needs
+   3); until then the balance shows them as waiting for confirmations.
+3. Click **Send** and enter who to pay, the **amount**, and an optional
+   **memo**. A transparent (`t…`) address is detected automatically: the app
+   notes that the payment will be public, and memos aren't available. The
+   **Review payment** button explains why when it's disabled.
+4. Check the payment, fee, and total, and choose which members to **ask to
+   approve** (any set that meets the threshold; you are pre-selected). On
+   mainnet, tick **The recipient is correct**.
+5. Click **Request approvals.** The payment shows who has approved, then its
+   progress to **Sent**.
 
 ### Participant — review and approve
 
@@ -268,8 +271,8 @@ members to approve it.
 
 Once a threshold of members approves, the coordinator's app aggregates the
 signatures, builds the proof, broadcasts the transaction, and shows the **txid**.
-The transaction then appears in **Transaction history** on both sides, with its
-fee and memo shown inline.
+The transaction then appears under **Activity** on both sides, with its fee and
+memo shown inline.
 
 **What to verify:** the txid confirms on a block explorer, and the sender's
 balance and history update (use **Sync Now** on Home if needed).
@@ -281,8 +284,8 @@ balance and history update (use **Sync Now** on Home if needed).
 Network and light-client endpoint are set in **Settings → Wallet**.
 
 **Network.** Cyze defaults to **Mainnet**. The active network is shown as a small
-**Testnet / Devnet** label next to the wallet name, and a real mainnet send
-asks for one confirmation before it broadcasts. Switch to **Testnet** to test with
+**Testnet / Devnet** label next to the wallet name, and a mainnet payment
+asks you to confirm the recipient before it's sent for approval. Switch to **Testnet** to test with
 faucet funds, and back to Mainnet when ready. **Local devnet** is for development
 (see below). Balances, addresses, and history are kept entirely separate per
 network.
