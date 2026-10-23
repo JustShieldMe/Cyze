@@ -810,6 +810,10 @@ pub async fn wallet_send<R: tauri::Runtime>(
     }
     let message = hex::decode(draft.sighash_hex.trim())
         .map_err(|e| AppError::new("wallet", format!("sighash: {e}")))?;
+    // Co-signers verify the transaction itself, not our description of it
+    // (wallet::verify). Prepared now so an oversized transaction fails before
+    // anyone is asked to sign.
+    let signer_pczt = wallet::verify::pczt_for_signers(&draft.pczt_hex)?;
     // Each Orchard spend is re-randomized with its own α, so each needs its own
     // re-randomized FROST signature over the (shared) sighash.
     let spends = draft
@@ -946,6 +950,7 @@ pub async fn wallet_send<R: tauri::Runtime>(
                         spend_index: (i as u32) + 1,
                         spend_total: total as u32,
                         tx_sighash: sighash_hex.clone(),
+                        pczt: Some(signer_pczt.clone()),
                     })
                     .unwrap_or_default();
                     let params = CoordinatorParams {

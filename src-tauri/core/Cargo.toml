@@ -76,6 +76,10 @@ rusqlite = { version = "0.37", optional = true, features = ["bundled-sqlcipher-v
 prost = { version = "0.14", optional = true }
 async-trait = { version = "0.1", optional = true }
 zcash_primitives = { version = "0.30.0", optional = true }
+# Co-signer verification (wallet/verify.rs): memo recovery and transparent
+# recipients. Same versions the zcash stack above already resolves.
+zcash_note_encryption = { version = "0.4.2", optional = true }
+transparent = { package = "zcash_transparent", version = "0.10", optional = true }
 
 [features]
 # Orchard FVK / unified-address derivation from group key material.
@@ -93,11 +97,16 @@ wallet = [
     "dep:async-trait",
     "dep:zcash_primitives",
     "dep:pczt",
+    "dep:zcash_note_encryption",
+    "dep:transparent",
 ]
 
 [dev-dependencies]
 tempfile = "3"
 tracing-subscriber = { workspace = true }
+# Building test PCZTs (wallet/verify.rs); versions match the zcash stack's.
+shardtree = "0.7.1"
+incrementalmerkletree = "0.8.2"
 
 # Times a real wallet sync against lightwalletd; see the file header for usage.
 [[example]]
