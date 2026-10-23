@@ -54,6 +54,11 @@ function zec(zats: number): string {
  *  confirm — it stalled or expired, and is noise rather than pending state. */
 const STALE_PENDING_MS = 60 * 60 * 1000;
 
+/** How many blocks the wallet's scan may trail the chain tip and still build a
+ *  send. Mirrors `wallet::SEND_MAX_SCAN_LAG`, which the backend enforces against
+ *  the live tip (failing with code `not_synced`). */
+const SEND_MAX_SCAN_LAG = 3;
+
 /** Full-page overlay confirmation required before broadcasting a mainnet send.
  *  The user must explicitly check a box acknowledging irreversibility. */
 function MainnetConfirmModal({
@@ -807,11 +812,16 @@ function GroupWallet({ group, network }: { group: GroupSummary; network: WalletN
   const recipientErr = mustResolveName
     ? null
     : validateRecipient(effectiveRecipient, network, sendMode);
-  // Balances are read from the local wallet database, which is empty (or stale)
-  // until the first sync finishes. Building a transaction before then selects
-  // from notes the wallet hasn't scanned yet and fails with a spurious
-  // "insufficient funds", so hold sends until that first sync succeeds.
-  const initialSyncDone = lastSynced !== null;
+  // Sends need the wallet scanned to (nearly) the chain tip: any member can
+  // coordinate a send, so a note that looks unspent here may have been spent in
+  // a block this wallet hasn't scanned yet. Judge that from the wallet's own scan
+  // progress, not from whether a sync has finished since this page opened: the
+  // database is usually already current. The backend re-checks against the live
+  // tip when it builds the transaction.
+  const liveProgress = sync.isPending ? progress.data : undefined;
+  const scannedHeight = liveProgress?.[0] ?? status.data?.synced_height ?? 0;
+  const knownTip = liveProgress?.[1] ?? status.data?.chain_tip_height ?? 0;
+  const caughtUp = knownTip > 0 && knownTip - scannedHeight <= SEND_MAX_SCAN_LAG;
 
   // Gate the send form on what is actually spendable. Confirmed-but-unspendable
   // funds are the norm right after receiving (ZIP-317 wants 10 confirmations on
@@ -844,7 +854,13 @@ function GroupWallet({ group, network }: { group: GroupSummary; network: WalletN
       setIsVote(false);
       setDraft(d);
     },
-    onError: (e) => setErr((e as unknown as AppError).message),
+    onError: (e) => {
+      const appErr = e as unknown as AppError;
+      setErr(appErr.message);
+      // The live tip moved past what this wallet has scanned: catch up now
+      // rather than waiting for the next auto-sync tick.
+      if (appErr.code === "not_synced" && !sync.isPending) sync.mutate();
+    },
   });
 
   // Consolidation: self-transfer of nearly-all spendable balance. Forces the
@@ -1086,9 +1102,8 @@ function GroupWallet({ group, network }: { group: GroupSummary; network: WalletN
       : null;
   // Prefer the live probe while a sync is running; the cached status is stale
   // until the whole catch-up returns.
-  const live = sync.isPending ? progress.data : undefined;
-  const syncedHeight = live?.[0] ?? s?.synced_height ?? 0;
-  const tipHeight = live?.[1] ?? s?.chain_tip_height ?? 0;
+  const syncedHeight = scannedHeight;
+  const tipHeight = knownTip;
   const blocksRemaining = Math.max(0, tipHeight - syncedHeight);
   // "Syncing" should mean *fetching blocks*, not merely "a sync call is in
   // flight". At the tip a sync is a quick no-op check, and a stalled sync sits
@@ -1440,7 +1455,7 @@ function GroupWallet({ group, network }: { group: GroupSummary; network: WalletN
                     onClick={() => prepare.mutate()}
                     disabled={
                       prepare.isPending ||
-                      !initialSyncDone ||
+                      !caughtUp ||
                       noSpendableBalance ||
                       exceedsBalance ||
                       !recipient.trim() ||
@@ -1451,8 +1466,8 @@ function GroupWallet({ group, network }: { group: GroupSummary; network: WalletN
                   >
                     {prepare.isPending
                       ? "Building…"
-                      : !initialSyncDone
-                        ? "Syncing wallet…"
+                      : !caughtUp
+                        ? "Catching up…"
                         : noSpendableBalance
                           ? "No spendable balance"
                           : exceedsBalance
@@ -1465,7 +1480,7 @@ function GroupWallet({ group, network }: { group: GroupSummary; network: WalletN
                       need confirmations before they are spendable (ZIP-317: 10 for
                       received notes, 3 for our own change), so a balance that is
                       "there" but still pending is the common surprise. */}
-                  {initialSyncDone && noSpendableBalance && (
+                  {caughtUp && noSpendableBalance && (
                     <p className="dim" style={{ marginTop: 6, fontSize: 12 }}>
                       Nothing is spendable yet.
                       {pendingBalance > 0 ? (
@@ -1480,17 +1495,16 @@ function GroupWallet({ group, network }: { group: GroupSummary; network: WalletN
                       )}
                     </p>
                   )}
-                  {initialSyncDone && !noSpendableBalance && exceedsBalance && (
+                  {caughtUp && !noSpendableBalance && exceedsBalance && (
                     <p className="dim" style={{ marginTop: 6, fontSize: 12 }}>
                       You can spend at most {zec(spendableBalance)} {unit(network)}{" "}
                       right now (a network fee is taken on top of the amount).
                     </p>
                   )}
-                  {!initialSyncDone && (
+                  {!caughtUp && (
                     <p className="dim" style={{ marginTop: 6, fontSize: 12 }}>
-                      Waiting for the first sync to finish so the wallet knows
-                      which notes it can spend. Sending before this completes
-                      would fail with an incorrect “insufficient funds” error.
+                      Sending unlocks once the wallet has caught up with the
+                      chain{blocksRemaining > 0 && <> ({blocksRemaining.toLocaleString()} blocks to go)</>}.
                     </p>
                   )}
                   {draft && (

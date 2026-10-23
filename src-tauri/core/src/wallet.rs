@@ -1783,6 +1783,11 @@ pub async fn prepare_send(
         .height;
     db.update_chain_tip(BlockHeight::from_u32(tip_height as u32))
         .map_err(|e| CoreError::Crypto(format!("update chain tip: {e}")))?;
+    let scanned = db
+        .get_wallet_summary(ConfirmationsPolicy::default())
+        .map_err(|e| CoreError::Crypto(format!("wallet summary: {e}")))?
+        .map_or(0, |s| u64::from(s.fully_scanned_height()));
+    ensure_caught_up(scanned, tip_height)?;
 
     let account_id = *db
         .get_account_ids()
@@ -1940,6 +1945,25 @@ pub async fn prepare_vote(
         db_key,
     )
     .await
+}
+
+/// How many blocks the wallet's scan may trail the live chain tip and still
+/// build a transaction. Auto-sync keeps an open wallet within a block of the
+/// tip; this leaves room for blocks mined since the last scan.
+pub const SEND_MAX_SCAN_LAG: u64 = 3;
+
+/// Refuse to build from a wallet that hasn't scanned up to the chain tip.
+///
+/// Any member can coordinate a send, so a note this wallet still lists as
+/// unspent may have been spent in a block it hasn't scanned yet. Building on it
+/// would run a whole signing ceremony for a transaction the network rejects as a
+/// double spend.
+fn ensure_caught_up(scanned: u64, tip: u64) -> Result<(), CoreError> {
+    let behind = tip.saturating_sub(scanned);
+    if behind > SEND_MAX_SCAN_LAG {
+        return Err(CoreError::NotSynced { behind });
+    }
+    Ok(())
 }
 
 /// Collect every spend the group must FROST-sign, across both the Orchard and
@@ -2671,6 +2695,16 @@ pub fn ufvk_default_address(network: WalletNetwork, ufvk: &str) -> Result<String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sends_need_a_wallet_scanned_near_the_tip() {
+        assert!(ensure_caught_up(1_000, 1_000).is_ok());
+        assert!(ensure_caught_up(1_000 - SEND_MAX_SCAN_LAG, 1_000).is_ok());
+        let err = ensure_caught_up(1_000 - SEND_MAX_SCAN_LAG - 1, 1_000).unwrap_err();
+        assert!(matches!(err, CoreError::NotSynced { behind: 4 }), "{err}");
+        // A db whose recorded tip is ahead of the server's is not "behind".
+        assert!(ensure_caught_up(1_010, 1_000).is_ok());
+    }
 
     #[test]
     fn run_blocking_works_on_both_runtime_flavors() {

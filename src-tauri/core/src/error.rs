@@ -26,6 +26,12 @@ pub enum CoreError {
     Ceremony(String),
     #[error("ceremony was cancelled")]
     Cancelled,
+    #[error(
+        "the wallet is still catching up ({behind} blocks behind the chain tip). Try again \
+         once it has synced; until then it can't tell which funds other members may \
+         already have spent"
+    )]
+    NotSynced { behind: u64 },
     #[error("crypto error: {0}")]
     Crypto(String),
     #[error("TLS error: {0}")]
