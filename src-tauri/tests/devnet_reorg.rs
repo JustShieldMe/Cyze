@@ -93,8 +93,9 @@ async fn wallet_starting_at(server: &common::TestServer, start: u64) -> (Pair, S
 async fn start_height(p: &Pair, group_id: &str) -> Option<u64> {
     let alice = p.alice.app.state::<AppState>();
     let key = alice.wallet_db_key(group_id).await.unwrap();
+    let wid = alice.wallet_dir_id(group_id).await.unwrap();
     let network = frost_app_core::wallet::WalletNetwork::Regtest(frost_app_core::wallet::RegtestUpgrade::Nu6_3);
-    frost_app_core::wallet::wallet_start_height(&alice.data_dir, group_id, network, key.as_ref()).unwrap()
+    frost_app_core::wallet::wallet_start_height(&alice.data_dir, &wid, network, key.as_ref()).unwrap()
 }
 
 async fn wait_synced_to(p: &Pair, group_id: &str, height: u64, what: &str) {
@@ -133,6 +134,7 @@ async fn wallets_recover_from_reorgs_near_their_start() {
     let (a, group_a) = wallet_starting_at(&server, t - 8).await;
     wait_synced_to(&a, &group_a, t, "A before the reorg").await;
     let start_a = start_height(&a, &group_a).await;
+    assert!(start_a.is_some(), "A's wallet exists");
     reorg_from(t - 1, 4);
     wait_synced_to(&a, &group_a, tip(), "A after the reorg").await;
     assert_eq!(start_height(&a, &group_a).await, start_a, "A recovered in place, without a rebuild");
