@@ -85,6 +85,7 @@ pub async fn unlock_keystore(state: State<'_, AppState>, passphrase: String) -> 
         let _ = state.keystore().save_file(&file, plaintext.as_slice());
     }
     state.set_unlocked(Some(crate::state::UnlockedState { config, file })).await;
+    crate::commands::backup::apply_pending_restore(&state).await;
     state.touch_activity();
     Ok(())
 }
@@ -105,6 +106,7 @@ pub async fn recover_keystore(
         .map_err(|e| AppError::new("malformed_keystore", e.to_string()))?;
     let config = frost_app_core::config::parse_config(toml_str)?;
     state.set_unlocked(Some(crate::state::UnlockedState { config, file })).await;
+    crate::commands::backup::apply_pending_restore(&state).await;
     state.touch_activity();
     Ok(())
 }

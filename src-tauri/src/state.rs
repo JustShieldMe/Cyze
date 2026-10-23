@@ -116,6 +116,14 @@ pub struct Settings {
     /// on the mainnet wallet.
     #[serde(default)]
     pub advanced_mode: Option<bool>,
+    /// When the keystore was last backed up (unix seconds).
+    #[serde(default)]
+    pub last_backup_at: Option<u64>,
+    /// SHA-256 over the group ids the last backup contained, so the app can
+    /// tell when a newer group isn't in any backup yet. A digest rather than
+    /// the ids: a group id is enough to view its wallet.
+    #[serde(default)]
+    pub backup_fingerprint: Option<String>,
 }
 
 /// Per-group rotating receive-address bookkeeping (#3). Non-secret; the actual

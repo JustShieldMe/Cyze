@@ -17,6 +17,7 @@ import {
 } from "../ipc/commands";
 import { REGTEST_UPGRADES, devnetCanSend, upgradeLabel } from "../network";
 import { useAdvancedMode } from "../lib/advanced";
+import { BackupCard } from "../components/Backup";
 
 /** Known lightwalletd endpoints per network (user can also type their own). */
 const PRESETS: Record<WalletNetwork, { label: string; url: string }[]> = {
@@ -277,6 +278,7 @@ export default function Wallet() {
         {testErr && <div className="error" style={{ marginTop: 10 }}>{testErr}</div>}
       </div>
 
+      <BackupCard />
       {advanced && <LogsCard />}
       <AdvancedCard enabled={advanced} />
     </div>

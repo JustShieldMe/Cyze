@@ -47,6 +47,8 @@ export default function CeremonyListener() {
   useTauriEvent<CeremonyEventPayload>("dkg:complete", (p) => {
     onComplete("dkg", p);
     queryClient.invalidateQueries({ queryKey: ["groups"] });
+    // A new group isn't in any backup yet.
+    queryClient.invalidateQueries({ queryKey: ["backup-status"] });
   });
   useTauriEvent<CeremonyEventPayload>("dkg:failed", (p) => onFailed("dkg", p));
 

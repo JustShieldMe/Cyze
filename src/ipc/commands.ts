@@ -380,6 +380,22 @@ export const renameGroup = (id: string, description: string) =>
 // Server / sidecar
 export const getSettings = () => invoke<Settings>("get_settings");
 export const setServerUrl = (url: string) => invoke<void>("set_server_url", { url });
+/** Whether the keystore has a current backup (see `commands::backup`). */
+export interface BackupStatus {
+  /** When it was last backed up (unix seconds), if ever. */
+  last_backup_at: number | null;
+  /** The last backup holds every group this keystore has. */
+  up_to_date: boolean;
+  /** There is something worth backing up (any group). */
+  has_groups: boolean;
+}
+export const backupStatus = () => invoke<BackupStatus>("backup_status");
+/** Ask where to save a backup (native dialog), then write it. Null if
+ *  cancelled. */
+export const exportBackup = () => invoke<BackupStatus | null>("export_backup");
+/** Ask for a backup file (native dialog) and install it on a device with no
+ *  keystore. False if cancelled. */
+export const restoreBackup = () => invoke<boolean>("restore_backup");
 /** Show or hide advanced options (test networks, diagnostics, Ed25519, raw
  *  signing, voting). */
 export const setAdvancedMode = (enabled: boolean) =>

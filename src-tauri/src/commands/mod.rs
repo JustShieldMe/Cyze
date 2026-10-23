@@ -1,3 +1,4 @@
+pub mod backup;
 pub mod contacts;
 pub mod dkg;
 pub mod groups;

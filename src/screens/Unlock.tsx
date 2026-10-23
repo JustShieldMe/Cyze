@@ -6,6 +6,7 @@ import {
   createKeystore,
   importUpstreamConfig,
   recoverKeystore,
+  restoreBackup,
   setUsername,
   unlockKeystore,
   AppError,
@@ -32,10 +33,16 @@ function RecoveryBackup({
         <h2>Save your recovery code</h2>
         <div className="recovery-alert">
           <strong>This is the only time these words will ever be shown.</strong>{" "}
-          They are the <em>only</em> way to regain access if you forget your
-          passphrase. Anyone who obtains them can decrypt your keys. We never
-          store them and cannot recover them for you.
+          They unlock your keys if you forget your passphrase: on this device, or
+          on a new one together with a backup file. Anyone who has them and your
+          backup can use your keys. We never store them and can't recover them
+          for you.
         </div>
+        <p className="dim">
+          The code alone can't bring back your key shares if this computer is
+          lost. Once you're in a group, also save a backup file (you'll be
+          reminded).
+        </p>
         <p className="dim">
           Write them down on paper or save them in a password manager, in order.
           Do not screenshot them or store them in plain text on this device.
@@ -94,6 +101,7 @@ export default function Unlock() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [pendingPhrase, setPendingPhrase] = useState<string | null>(null);
+  const [restored, setRestored] = useState(false);
   const navigate = useNavigate();
 
   if (!loaded) return null;
@@ -103,6 +111,19 @@ export default function Unlock() {
     setUnlocked(true);
     await refresh();
     navigate("/");
+  };
+
+  const restore = async () => {
+    setError(null);
+    try {
+      if (await restoreBackup()) {
+        await refresh();
+        setRestored(true);
+        setMode("unlock");
+      }
+    } catch (err) {
+      setError((err as AppError).message ?? String(err));
+    }
   };
 
   // After create/import, hold here until the recovery code is acknowledged.
@@ -169,6 +190,12 @@ export default function Unlock() {
           <Logo markSize={32} showTagline />
         </div>
         <h2>{title}</h2>
+        {restored && effectiveMode === "unlock" && (
+          <p className="ok">
+            Backup restored. Unlock it with its passphrase, or with your recovery
+            code if you've forgotten it.
+          </p>
+        )}
         {effectiveMode === "create" && (
           <p className="dim">
             A new communication keypair will be generated and stored in a
@@ -282,6 +309,14 @@ export default function Unlock() {
                 Unlock existing keystore
               </a>
             )}
+          {!exists && (
+            <>
+              <a href="#" onClick={(e) => { e.preventDefault(); void restore(); }}>
+                Restore from a backup
+              </a>
+              <br />
+            </>
+          )}
           {!exists && effectiveMode !== "import" && (
             <a href="#" onClick={() => setMode("import")}>
               Import existing frost-client config instead
