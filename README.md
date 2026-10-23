@@ -80,9 +80,10 @@ Supports both frost-tools ciphersuites: **Ed25519** (generic signing) and
   up whenever a group isn't in any backup yet.
 - **Nothing outside the keystore names a group.** A group's id is its Orchard
   `ak`, from which its viewing key follows, so anything keyed by it would expose
-  the treasury's history. Per-group settings, contact nicknames, and signed
-  transactions awaiting broadcast are encrypted under keys derived from the
-  keystore, and wallet folders have opaque names derived the same way. Settings from earlier
+  the treasury's history. Per-group settings, contact nicknames, signed
+  transactions awaiting broadcast, and the ceremony history are encrypted
+  under keys derived from the keystore, and wallet folders have opaque names
+  derived the same way. Settings from earlier
   versions move over on the first unlock.
 - Keystore writes are atomic and flushed to disk, and the previous version is
   kept; unlocking falls back to it if the current file is damaged.

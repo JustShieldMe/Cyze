@@ -68,6 +68,8 @@ pub fn run() {
             commands::backup::backup_status,
             commands::backup::export_backup,
             commands::backup::restore_backup,
+            commands::ui_state::load_ui_state,
+            commands::ui_state::save_ui_state,
             commands::keystore::record_activity,
             commands::keystore::create_keystore,
             commands::keystore::import_upstream_config,

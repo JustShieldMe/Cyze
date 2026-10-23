@@ -80,3 +80,32 @@ async fn plaintext_group_settings_move_into_encrypted_storage_on_unlock() {
     let private = state.load_private().await.unwrap();
     assert_eq!(private.contact_aliases.get(PUBKEY).map(String::as_str), Some("Alice (ops)"));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ui_history_is_encrypted_and_needs_the_keystore_unlocked() {
+    let user = make_user();
+    let state = user.app.state::<AppState>();
+    commands::keystore::create_keystore(state.clone(), "passphrase".into()).await.unwrap();
+    use commands::ui_state::{load_ui_state, save_ui_state};
+
+    let key = "frost-ceremonies".to_string();
+    assert_eq!(load_ui_state(state.clone(), key.clone()).await.unwrap(), None);
+    let history = r#"{"state":{"ceremonies":{"c1":{"memo":"rent for march"}}},"version":0}"#;
+    save_ui_state(state.clone(), key.clone(), Some(history.into())).await.unwrap();
+    let on_disk = std::fs::read(state.data_dir.join("ui-frost-ceremonies.enc")).unwrap();
+    assert!(!on_disk.windows(4).any(|w| w == b"rent"), "saved in the clear");
+    assert_eq!(load_ui_state(state.clone(), key.clone()).await.unwrap().as_deref(), Some(history));
+
+    for bad in ["../settings", "UPPER", "", "a/b"] {
+        assert!(save_ui_state(state.clone(), bad.into(), Some("x".into())).await.is_err(), "{bad:?}");
+    }
+
+    commands::keystore::lock_keystore(state.clone()).await.unwrap();
+    assert!(load_ui_state(state.clone(), key.clone()).await.is_err());
+    assert!(save_ui_state(state.clone(), key.clone(), Some("{}".into())).await.is_err());
+    commands::keystore::unlock_keystore(state.clone(), "passphrase".into()).await.unwrap();
+    assert_eq!(load_ui_state(state.clone(), key.clone()).await.unwrap().as_deref(), Some(history));
+
+    save_ui_state(state.clone(), key.clone(), None).await.unwrap();
+    assert_eq!(load_ui_state(state.clone(), key).await.unwrap(), None);
+}
