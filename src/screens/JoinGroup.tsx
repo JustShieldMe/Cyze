@@ -150,7 +150,10 @@ function InviteReview({
             <span>{m.status === "you" ? "You" : m.name}</span>
             <span className="dim mono">{shortKey(m.pubkey)}</span>
             {m.status === "contact" && (
-              <span className="badge green">{m.contact_name === m.name ? "in your contacts" : `your contact ${m.contact_name}`}</span>
+              <span className="badge green">
+                {m.contact_name === m.name ? "in your contacts" : `your contact ${m.contact_name}`}
+                {m.verified ? ", verified" : ""}
+              </span>
             )}
             {m.status === "new" && <span className="badge blue">new</span>}
           </div>

@@ -142,6 +142,8 @@ pub struct Identity {
     pub username: Option<String>,
     /// Hex-encoded communication public key of the local user.
     pub pubkey: Option<String>,
+    /// The user's own safety code, to read to the people they add.
+    pub safety_code: Option<String>,
 }
 
 /// The local user's identity: their display name and own communication pubkey,
@@ -155,8 +157,12 @@ pub async fn get_identity(state: State<'_, AppState>) -> AppResult<Identity> {
         .await
         .as_ref()
         .and_then(|u| u.config.communication_key.as_ref())
-        .map(|k| hex::encode(&k.pubkey.0));
-    Ok(Identity { username, pubkey })
+        .map(|k| k.pubkey.0.clone());
+    Ok(Identity {
+        username,
+        safety_code: pubkey.as_deref().map(frost_app_core::safety::safety_code),
+        pubkey: pubkey.map(hex::encode),
+    })
 }
 
 /// Set (or change) the local user's display name.

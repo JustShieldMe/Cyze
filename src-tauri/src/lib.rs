@@ -68,6 +68,7 @@ pub fn run() {
             commands::backup::backup_status,
             commands::backup::export_backup,
             commands::backup::restore_backup,
+            commands::contacts::set_contact_verified,
             commands::invite::prepare_group_server,
             commands::invite::create_invite,
             commands::invite::read_invite,

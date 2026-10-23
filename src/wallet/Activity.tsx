@@ -255,7 +255,7 @@ export function TxDetail({
   }
   if (memo) rows.push({ label: "Memo", value: memo });
   if (signers && signers.length > 0 && contacts) {
-    const identityObj = myPubkey ? { pubkey: myPubkey, username: null } : undefined;
+    const identityObj = myPubkey ? { pubkey: myPubkey, username: null, safety_code: null } : undefined;
     rows.push({
       label: "Signed by",
       value: (

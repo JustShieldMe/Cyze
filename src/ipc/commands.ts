@@ -16,6 +16,10 @@ export interface ContactDto {
   pubkey: string;
   alias: string | null;
   text: string;
+  /** 30 digits to compare with the person out loud. */
+  safety_code: string;
+  /** The user compared the safety code with them. */
+  verified: boolean;
 }
 
 export interface GroupSummary {
@@ -112,6 +116,8 @@ export const generateRecoveryCode = () =>
 export interface Identity {
   username: string | null;
   pubkey: string | null;
+  /** The user's own safety code, to read to the people they add. */
+  safety_code: string | null;
 }
 export const getIdentity = () => invoke<Identity>("get_identity");
 export const setUsername = (username: string) =>
@@ -364,6 +370,8 @@ export const setContactAlias = (pubkey: string, alias: string) =>
   invoke<void>("set_contact_alias", { pubkey, alias });
 export const exportMyContact = (name: string) =>
   invoke<ContactDto>("export_my_contact", { name });
+export const setContactVerified = (pubkey: string, verified: boolean) =>
+  invoke<void>("set_contact_verified", { pubkey, verified });
 
 // Groups
 export interface OrchardKeys {
@@ -512,6 +520,7 @@ export interface InviteMember {
   pubkey: string;
   status: "you" | "contact" | "new";
   contact_name: string | null;
+  verified: boolean;
 }
 export interface InviteSummary {
   name: string;

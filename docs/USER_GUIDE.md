@@ -114,6 +114,12 @@ public key. They're listed under **Groups**, below your groups.
 Imported contacts appear in your **address book** and become selectable when you
 create a DKG ceremony. Exchange contacts in both directions before continuing.
 
+**Check safety codes.** A contact code passed through chat could be swapped by
+someone in between. Click **Check** next to a contact, ask them to read you
+their safety code by phone or in person, and tick **It matches** if it's the
+number shown. Read them yours too (it's under **Your contact code**). Verified
+contacts are marked in the list and in invites.
+
 ---
 
 ## 4. Setting up the FROSTd server

@@ -760,3 +760,5 @@ button.link-button {
 }
 button.link-button:hover { text-decoration: underline; filter: none; }
 .card.panel { background: var(--bg-card); }
+.safety-check { background: var(--bg-elevated); border-radius: 8px; padding: 12px 14px; margin: 4px 0 8px; }
+.safety-code { font-size: 18px; letter-spacing: 0.08em; color: var(--accent); margin-bottom: 8px; }
