@@ -331,6 +331,17 @@ pub async fn wallet_init_account(
     )
     .await?;
 
+    // A freshly imported account lives in a new database that has no subtree
+    // roots yet, so its first sync must fetch them even if an earlier database
+    // for this group did so this session.
+    if scan_from > 0 {
+        state
+            .subtree_roots_fetched
+            .lock()
+            .await
+            .remove(&crate::state::wallet_session_key(&group_id, network.dir_name()));
+    }
+
     // Remember where this wallet starts, so a later rebuild of the (deleted)
     // wallet database scans from here again rather than from the chain tip.
     // `scan_from == 0` means the account already existed; nothing was imported.
@@ -388,13 +399,39 @@ pub async fn wallet_sync(state: State<'_, AppState>, group_id: String) -> AppRes
     // cancelled one's still-open db connection — the "database is locked" case.
     let _gate = state.sync_gate.lock().await;
 
+    let lightwalletd = shared_lightwalletd(&state, &url).await?;
+    let roots_key = crate::state::wallet_session_key(&group_id, network.dir_name());
+    let roots_fresh = state
+        .subtree_roots_fetched
+        .lock()
+        .await
+        .get(&roots_key)
+        .is_some_and(|at| at.elapsed() < crate::state::SUBTREE_ROOTS_REFRESH);
     let opts = wallet::SyncOptions {
         batch_size: state.load_settings().sync_batch_size,
+        skip_subtree_roots: roots_fresh,
     };
     let result = wallet::sync_group(
-        &state.data_dir, &group_id, network, &url, db_key.as_ref(), opts, &cancel,
+        &state.data_dir, &group_id, network, &lightwalletd, db_key.as_ref(), opts, &cancel,
     )
     .await;
+    match &result {
+        Ok(_) if !roots_fresh => {
+            state
+                .subtree_roots_fetched
+                .lock()
+                .await
+                .insert(roots_key, std::time::Instant::now());
+        }
+        // The connection may be dead (server restart, network change), or the
+        // user restarted a stalled sync. Drop it so the next sync starts on a
+        // fresh connection. Both paths hold the sync gate, so this can't race
+        // the next sync picking it up.
+        Err(frost_app_core::CoreError::Connection(_) | frost_app_core::CoreError::Cancelled) => {
+            state.lightwalletd.lock().await.take();
+        }
+        _ => {}
+    }
 
     // Tidy the registry. If our token was cancelled, either a newer sync replaced
     // us (its token is now the registry entry — leave it) or a cancel request did
@@ -413,6 +450,18 @@ pub async fn wallet_sync(state: State<'_, AppState>, group_id: String) -> AppRes
         &ufvk,
         db_key.as_ref(),
     )?)
+}
+
+/// The app's lightwalletd connection for `url`: the open one if it points at
+/// the same endpoint, otherwise a fresh connection that replaces it.
+async fn shared_lightwalletd(state: &AppState, url: &str) -> AppResult<wallet::Lightwalletd> {
+    let mut slot = state.lightwalletd.lock().await;
+    if let Some(conn) = slot.as_ref().filter(|c| c.url() == url.trim()) {
+        return Ok(conn.clone());
+    }
+    let conn = wallet::Lightwalletd::connect(url).await?;
+    *slot = Some(conn.clone());
+    Ok(conn)
 }
 
 /// Cancel the in-flight sync for a group, if any. The current `wallet_sync`

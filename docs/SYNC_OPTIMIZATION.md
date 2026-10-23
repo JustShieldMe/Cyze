@@ -1,11 +1,11 @@
 # Sync optimization — design & roadmap
 
-Status: **driver implemented, pending testnet validation** (branch
-`feat/sync-optimizations`). The pipelined driver is built and off by default; it
-becomes the default only after the validation gate below passes. This is the next
-major targeted update. Its goal is to cut the wall-clock latency of wallet
-sync — especially the recovery / large-range case — without leaving the
-Ironwood-capable `zcash_client_backend` (ECC) stack.
+Status: **the pipelined driver is the standard, only sync path** (validated on
+testnet; see "Status: standard driver" below). Its goal is to cut the wall-clock
+latency of wallet sync, especially the recovery / large-range case, without
+leaving the Ironwood-capable `zcash_client_backend` (ECC) stack. Measured numbers
+and what they imply for the next steps are under
+[Measurements](#measurements-2026-10-23).
 
 ## Why we stay on the ECC stack
 
@@ -53,13 +53,14 @@ loop ourselves instead of calling `sync::run`:
    gate below is a clean equality check. Adaptive sizing changes the scan units,
    so it lands as a separate follow-up once pipelining is validated and default.
 
-A third lever is crate-gated:
+A third lever turned out to be in place already:
 
-3. **Parallel trial decryption** — the pinned `zcash_note_encryption` 0.4.2 does
-   batch decryption single-threaded. Getting multi-core decryption needs either a
-   `zcash_note_encryption` with the `multicore` feature or wiring the
-   `zcash_client_backend` `sync-decryptor` (rayon) pipeline. Deferred to the next
-   crate-cohort bump; tracked here so it isn't forgotten.
+3. **Parallel trial decryption.** An earlier version of this doc said decryption
+   was single-threaded. It isn't: `scan_cached_blocks` decrypts through
+   `zcash_client_backend`'s `BatchRunner`, which fans batches of outputs out to
+   the rayon thread pool (`rayon::spawn_fifo` in `scan.rs`). There is nothing to
+   enable. The measurements below show decryption threads are mostly idle; the
+   limit is single-threaded work elsewhere in the scan.
 
 ## Approach: a custom pipelined driver, alongside `sync::run`
 
@@ -89,10 +90,10 @@ mutex contended between producer and consumer, and nothing to truncate on a
 reorg rewind (only the db is rewound).
 
 **Transparent UTXO refresh is intentionally omitted.** Upstream `running` performs
-it only under the `transparent-inputs` feature, which our `zcash_client_backend`
-build does not enable (group accounts are Orchard-only view keys). The stock
-driver we run today therefore does not perform it either, so omitting it keeps
-the two byte-identical.
+it under the `transparent-inputs` feature. That feature *is* on in our build (the
+`pczt` feature enables it), but a group account is an Orchard-only view key with
+no transparent receivers, so the refresh would have nothing to fetch. Omitting it
+changes no wallet state and saves a round trip per sync.
 
 Correctness-critical logic (reorg rewind, verify ranges, subtree roots,
 chain-tip update, batch splitting) is **ported faithfully** from the upstream
@@ -102,13 +103,27 @@ the upstream step-7 splitter.
 
 ### A note on overlap and the runtime
 
-`scan_cached_blocks` is synchronous and CPU-bound; the consumer calls it directly
-on the async task. On the multi-threaded Tokio runtime the app uses, the producer
-keeps downloading the next batches on other worker threads while the consumer
-thread scans — which is where the latency win comes from. On a single-threaded
-runtime the code is still correct (no overlap, identical result). Moving the scan
-onto `spawn_blocking` to guarantee overlap regardless of runtime is a possible
-future refinement; it is not needed for correctness.
+`scan_cached_blocks` is synchronous and CPU-bound. The consumer used to call it
+directly on its Tokio worker, which quietly undermines the overlap: when the
+consumer's `recv` frees a channel slot, it wakes the waiting producer into *that
+worker's* LIFO slot, the one task Tokio's other workers cannot steal. The next
+download then waits until the scan finishes. The consumer now scans inside
+`run_blocking` (`block_in_place` on the multi-threaded runtime), which hands the
+worker's queue, LIFO slot included, to another thread first. On a single-threaded
+runtime (unit tests) the closure just runs inline.
+
+On a fast link this measured neutral (downloads are about 5% of sync time, so
+there is little overlap to protect). It matters when download time approaches scan
+time: slow or high-latency links, and Tor if that lands.
+
+### Reused connection and cached subtree roots
+
+`sync_group` takes a long-lived `Lightwalletd` connection, and the app keeps one in
+`AppState` (dropped after a connection error so the next sync reconnects).
+Subtree roots are fetched on a wallet's first sync of the session and then at most
+hourly (`SyncOptions::skip_subtree_roots`). Once caught up, the wallet re-syncs
+every 10 s, and that cycle used to cost a fresh TLS handshake plus three
+subtree-root streams every time.
 
 ### Status: standard driver
 
@@ -128,17 +143,60 @@ Before flipping the default to the pipelined driver:
 2. A reorg is exercised (or simulated) and recovers correctly.
 3. A shielded send after a pipelined sync builds, signs, and broadcasts.
 
+## Measurements (2026-10-23)
+
+Taken with the benchmark in `core/examples/sync_bench.rs`. It imports a throwaway
+Orchard-only viewing key, derived exactly as a group's is, scans the last N
+blocks, then times re-syncs at the tip:
+
+```sh
+cd src-tauri
+cargo run --release -p frost-app-core --features wallet --example sync_bench -- \
+    --network main --blocks 20000            # add --fresh-connection for the old re-sync behaviour
+```
+
+Setup: mainnet via `https://zec.rocks:443` (about 50 ms connect), tip about
+3.527M, a 12-thread Linux desktop. Every sync also logs a `sync finished: ...` line
+with the same breakdown (`SyncStats`).
+
+| Scenario | Result |
+|---|---|
+| Re-sync at the tip, old behaviour (new connection and subtree roots each time) | about 2,000 ms per cycle, about 1,900 ms of it subtree roots |
+| Re-sync at the tip, reused connection and cached roots | about 54 ms per cycle |
+| Catch up 10,000 blocks (about 9 days) | 16.8 s, 595 blocks/s |
+| Catch up 20,000 blocks | 29.6–32.2 s (620–675 blocks/s), of which scan 29.0–29.9 s, download 1.2–2.8 s |
+| Batch size 1,000 / 2,500 / 5,000 / 10,000 (20k blocks) | 33.9 / 30.9 / 31.8 / 31.4 s |
+| 256 MiB SQLite page cache (20k blocks) | no change |
+
+What it says:
+
+- **Re-sync overhead was the cheap, large win:** about 2 s down to about 54 ms per
+  10-second auto-sync cycle.
+- **A catch-up is scan-bound, not network-bound.** Scanning took about 95% of
+  the time. Average CPU was about 2.3–2.7 cores out of 12. During the scan, one
+  thread (the scan loop) ran at about 84% while each rayon decryption thread
+  sat around 15–17%. The critical path is single-threaded work inside
+  `scan_cached_blocks` (block parsing, commitment-tree updates, SQLCipher
+  writes), not trial decryption.
+- **Batch size is not a lever** between 2,500 and 10,000; 5,000 stays the default.
+  Adaptive sizing is unlikely to pay off on today's blocks.
+- **Next:** profile that single thread (needs `perf` with
+  `kernel.perf_event_paranoid` ≤ 2) to see whether tree insertion, SQLCipher, or
+  block decoding dominates. That decides between an upstream change (e.g. skipping
+  Sapling tree work for an Orchard-only account) and local db tuning.
+
 ## Sequencing
 
-1. **[done] Settings gate + custom pipelined driver** (prefetch download while
-   scanning), off by default. ← core of the work; `run_pipelined` in `wallet.rs`.
-2. **[next] Testnet validation** against the stock driver; flip default if it
-   passes (see the validation gate above).
-3. **[follow-up] Adaptive batch size** — grow/shrink the batch by range density,
-   once pipelining is the validated default.
-4. **[next crate bump] Parallel trial decryption** via note-encryption
-   `multicore` / the `sync-decryptor` pipeline.
-5. **[optional, infra] Zaino indexer** — evaluate a Rust indexer (Zingo's path)
+1. **[done] Custom pipelined driver** (prefetch download while scanning);
+   `run_pipelined` in `wallet.rs`.
+2. **[done] Testnet validation** against the stock driver; it is now the only
+   driver (see the validation gate above).
+3. **[done] Reused connection, cached subtree roots, scan off the async worker,
+   per-sync `SyncStats`, and the `sync_bench` benchmark.**
+4. **[next] Profile the single-threaded part of the scan** (see Measurements).
+5. **[deprioritized] Adaptive batch size.** The batch-size sweep shows little to
+   gain. ~~Parallel trial decryption~~ is already in place upstream.
+6. **[optional, infra] Zaino indexer** — evaluate a Rust indexer (Zingo's path)
    in place of stock lightwalletd for richer per-request data. Composes with the
    above; not a wallet rewrite.
 

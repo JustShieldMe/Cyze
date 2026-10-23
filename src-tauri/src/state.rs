@@ -151,8 +151,27 @@ pub struct AppState {
     /// one sync ever runs, a restarting sync can no longer race a cancelled one's
     /// still-open db connection, so the "database is locked" fix comes for free.
     pub sync_gate: Mutex<()>,
+    /// The lightwalletd connection syncs reuse, so a re-sync every few seconds
+    /// doesn't pay a fresh TCP + TLS handshake each time. Replaced when the
+    /// configured endpoint changes; dropped after a connection error so the
+    /// next sync reconnects.
+    pub lightwalletd: Mutex<Option<frost_app_core::wallet::Lightwalletd>>,
+    /// When each wallet (keyed by [`wallet_session_key`]) last fetched its
+    /// note-commitment subtree roots this session. Roots change rarely, so syncs
+    /// skip the fetch until [`SUBTREE_ROOTS_REFRESH`] has passed.
+    pub subtree_roots_fetched: Mutex<HashMap<String, std::time::Instant>>,
     /// Epoch-millis of the last user activity, used to drive the idle auto-lock.
     pub last_activity: AtomicI64,
+}
+
+/// How long a sync may go without re-fetching subtree roots. A pool gains one
+/// root per 2^16 notes (days apart on mainnet); hourly keeps them current at
+/// negligible cost.
+pub const SUBTREE_ROOTS_REFRESH: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
+/// Session-cache key for one group's wallet on one network.
+pub fn wallet_session_key(group_id: &str, network: &str) -> String {
+    format!("{network}/{group_id}")
 }
 
 impl Default for AppState {
@@ -183,6 +202,8 @@ impl AppState {
             tailscale: Mutex::new(None),
             sync_cancels: Mutex::new(HashMap::new()),
             sync_gate: Mutex::new(()),
+            lightwalletd: Mutex::new(None),
+            subtree_roots_fetched: Mutex::new(HashMap::new()),
             last_activity: AtomicI64::new(now_millis()),
         }
     }

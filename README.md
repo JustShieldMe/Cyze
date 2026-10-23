@@ -151,6 +151,13 @@ cd src-tauri && cargo test -p frost-app-core
 keystore tests cover the envelope format and recovery code. A headless smoke test
 drives the full Tauri command layer (`cargo test -p frost-app --test smoke`).
 
+To time a real wallet sync against lightwalletd, use the sync benchmark (see
+[`docs/SYNC_OPTIMIZATION.md`](docs/SYNC_OPTIMIZATION.md#measurements-2026-10-23)):
+
+```sh
+cd src-tauri && cargo run --release -p frost-app-core --features wallet --example sync_bench -- --blocks 20000
+```
+
 ## Layout
 
 - `src-tauri/core` — `frost-app-core`: keystore, frostd transport (pinned-cert
