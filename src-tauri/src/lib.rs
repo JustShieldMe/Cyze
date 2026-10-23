@@ -2,6 +2,7 @@ pub mod commands;
 pub mod devnet;
 pub mod error;
 pub mod logbuf;
+pub mod private;
 pub mod sidecar;
 pub mod state;
 pub mod sync_service;

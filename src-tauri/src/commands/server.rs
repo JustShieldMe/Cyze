@@ -58,7 +58,7 @@ pub async fn set_session_role(state: State<'_, AppState>, role: String) -> AppRe
 /// one yet. Wallet actions are scoped to this group.
 #[tauri::command]
 pub async fn get_active_wallet(state: State<'_, AppState>) -> AppResult<Option<String>> {
-    Ok(state.load_settings().active_group_id)
+    Ok(state.load_private().await?.active_group_id)
 }
 
 /// Make `group_id` the active wallet. Cancels the previously active group's
@@ -67,14 +67,12 @@ pub async fn get_active_wallet(state: State<'_, AppState>) -> AppResult<Option<S
 /// sync is safe to cancel — it resumes from where it left off next time).
 #[tauri::command]
 pub async fn set_active_wallet(state: State<'_, AppState>, group_id: String) -> AppResult<()> {
-    let mut settings = state.load_settings();
     // Already active — nothing to change (the wallet page re-asserts this on every
     // open, so skip the redundant disk write and sync-cancel).
-    if settings.active_group_id.as_deref() == Some(group_id.as_str()) {
+    if state.load_private().await?.active_group_id.as_deref() == Some(group_id.as_str()) {
         return Ok(());
     }
-    let previous = settings.active_group_id.replace(group_id);
-    state.save_settings(&settings)?;
+    let previous = state.update_private(|p| p.active_group_id.replace(group_id)).await?;
 
     // Changing wallets: stop the old one's sync so processing follows the switch.
     if let Some(prev) = previous {

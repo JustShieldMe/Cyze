@@ -83,7 +83,8 @@ On first launch you create your local keystore.
   independently, so either can recover access.
 - A wrong passphrase or code is rejected cleanly.
 
-Your key shares and contacts are stored encrypted at rest. The passphrase and the
+Your key shares, contacts, and everything that names a group (wallets, signing
+history, contact nicknames) are stored encrypted at rest. The passphrase and the
 recovery code each unlock the keystore.
 
 **Back up your keys** once you're in a group. A banner reminds you, or use
@@ -328,9 +329,10 @@ a devnet is real money: addresses start with `uregtest1…` and amounts show as
 - ZcashNames don't resolve on a devnet.
 - **Resetting the devnet starts a brand-new chain.** A group's devnet wallet
   still holds the old chain, so after `thus-spoke-zakura reset` (or recreating
-  it), delete that wallet's data: the `wallets/<group id>/regtest/` folder in
-  Cyze's data directory. It is rebuilt on the next sync. This only affects
-  devnet data. Testnet and mainnet wallets are stored separately.
+  it), delete the devnet wallet data: the `regtest` folders inside `wallets/`
+  in Cyze's data directory (the folders above them have random-looking names).
+  They are rebuilt on the next sync. This only affects devnet data. Testnet
+  and mainnet wallets are stored separately.
 
 **Diagnostics log.** Wallet Settings has a **Diagnostics log** card that captures
 what the app logs while running (sync steps, errors). Use **Copy all** to grab it

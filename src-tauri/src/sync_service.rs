@@ -107,7 +107,7 @@ pub async fn active_wallet(state: &AppState) -> Option<String> {
         })
         .await
         .ok()?;
-    match state.load_settings().active_group_id {
+    match state.load_private().await.ok()?.active_group_id {
         Some(id) if pallas.contains(&id) => Some(id),
         _ if pallas.len() == 1 => pallas.into_iter().next(),
         _ => None,

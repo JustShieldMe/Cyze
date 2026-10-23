@@ -17,7 +17,7 @@ pub struct ContactDto {
 
 #[tauri::command]
 pub async fn list_contacts(state: State<'_, AppState>) -> AppResult<Vec<ContactDto>> {
-    let aliases = state.load_settings().contact_aliases;
+    let aliases = state.load_private().await?.contact_aliases;
     state
         .with_config(|config| {
             config
@@ -44,14 +44,16 @@ pub async fn set_contact_alias(
     pubkey: String,
     alias: String,
 ) -> AppResult<()> {
-    let mut settings = state.load_settings();
-    let trimmed = alias.trim();
-    if trimmed.is_empty() {
-        settings.contact_aliases.remove(&pubkey);
-    } else {
-        settings.contact_aliases.insert(pubkey, trimmed.to_string());
-    }
-    state.save_settings(&settings)
+    let trimmed = alias.trim().to_string();
+    state
+        .update_private(|p| {
+            if trimmed.is_empty() {
+                p.contact_aliases.remove(&pubkey);
+            } else {
+                p.contact_aliases.insert(pubkey, trimmed);
+            }
+        })
+        .await
 }
 
 #[tauri::command]
@@ -89,9 +91,8 @@ pub async fn add_contact(
         (!a.is_empty()).then_some(a)
     });
     if let Some(alias) = &alias {
-        let mut settings = state.load_settings();
-        settings.contact_aliases.insert(pubkey.clone(), alias.clone());
-        state.save_settings(&settings)?;
+        let (key, alias) = (pubkey.clone(), alias.clone());
+        state.update_private(|p| p.contact_aliases.insert(key, alias)).await?;
     }
     Ok(ContactDto {
         name: contact.name.clone(),
@@ -115,10 +116,7 @@ pub async fn remove_contact(state: State<'_, AppState>, pubkey: String) -> AppRe
         })
         .await?;
     // Drop any alias for the removed contact.
-    let mut settings = state.load_settings();
-    if settings.contact_aliases.remove(&pubkey).is_some() {
-        state.save_settings(&settings)?;
-    }
+    state.update_private(|p| p.contact_aliases.remove(&pubkey)).await?;
     Ok(())
 }
 

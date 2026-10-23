@@ -62,14 +62,14 @@ async fn service_sets_up_and_syncs_a_new_group() {
     let key = wallet_session_key(&group_id, "mainnet");
     let mut birthday = None;
     for _ in 0..60 {
-        birthday = alice_state.load_settings().network_birthdays.get(&key).copied();
+        birthday = alice_state.load_private().await.unwrap().network_birthdays.get(&key).copied();
         if birthday.is_some() {
             break;
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
     let birthday = birthday.expect("DKG must record the group's birthday");
-    assert!(alice_state.load_settings().group_created_at.contains_key(&group_id));
+    assert!(alice_state.load_private().await.unwrap().group_created_at.contains_key(&group_id));
     eprintln!("birthday recorded at DKG: {birthday}");
 
     // The service picks up the only RedPallas group by itself: setup, sync, done.
@@ -85,7 +85,7 @@ async fn service_sets_up_and_syncs_a_new_group() {
         "the first sync must tell the UI to re-read the wallet"
     );
     // Setup reused the DKG birthday rather than starting from a fresh tip.
-    assert_eq!(alice_state.load_settings().network_birthdays.get(&key), Some(&birthday));
+    assert_eq!(alice_state.load_private().await.unwrap().network_birthdays.get(&key), Some(&birthday));
     let status = commands::wallet::wallet_group_status(alice_state.clone(), group_id.clone()).await.unwrap();
     assert!(status.initialized);
 
