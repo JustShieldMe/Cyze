@@ -17,9 +17,76 @@ use crate::error::CoreError;
 pub enum ServerTrust {
     /// Standard WebPKI roots only (public servers with real certificates).
     SystemRoots,
-    /// Additionally trust one specific certificate (PEM) — used for the
-    /// embedded sidecar's self-signed cert and TOFU-imported external certs.
+    /// Trust exactly this certificate (PEM) and nothing else: the embedded
+    /// server's self-signed certificate, or one imported for an external
+    /// server. A certificate a public CA issued for the same host is refused.
     PinnedCertificate(Vec<u8>),
+}
+
+/// Accepts a server only if its certificate is byte-for-byte the pinned one,
+/// and still checks the handshake signature against that certificate's key.
+/// Names and expiry don't apply: the certificate itself is what's trusted.
+#[derive(Debug)]
+struct PinnedCertVerifier {
+    pinned: Vec<u8>,
+    provider: std::sync::Arc<rustls::crypto::CryptoProvider>,
+}
+
+impl rustls::client::danger::ServerCertVerifier for PinnedCertVerifier {
+    fn verify_server_cert(
+        &self,
+        end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        _server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        if end_entity.as_ref() == self.pinned.as_slice() {
+            Ok(rustls::client::danger::ServerCertVerified::assertion())
+        } else {
+            Err(rustls::Error::General(
+                "the server's certificate isn't the one you trusted for it".into(),
+            ))
+        }
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(message, cert, dss, &self.provider.signature_verification_algorithms)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(message, cert, dss, &self.provider.signature_verification_algorithms)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.provider.signature_verification_algorithms.supported_schemes()
+    }
+}
+
+fn pinned_tls_config(pem: &[u8]) -> Result<rustls::ClientConfig, CoreError> {
+    let pem = std::str::from_utf8(pem).map_err(|e| CoreError::Tls(e.to_string()))?;
+    let pinned = crate::tls::pem_to_der(pem)?;
+    let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
+    let verifier = std::sync::Arc::new(PinnedCertVerifier { pinned, provider: provider.clone() });
+    let mut config = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|e| CoreError::Tls(e.to_string()))?
+        .dangerous()
+        .with_custom_certificate_verifier(verifier)
+        .with_no_client_auth();
+    // reqwest is built without HTTP/2 here, so offer only HTTP/1.1.
+    config.alpn_protocols = vec![b"http/1.1".to_vec()];
+    Ok(config)
 }
 
 /// A frostd client bound to one server URL.
@@ -34,9 +101,7 @@ impl FrostdClient {
     pub fn new(base_url: String, trust: &ServerTrust) -> Result<Self, CoreError> {
         let mut builder = reqwest::Client::builder();
         if let ServerTrust::PinnedCertificate(pem) = trust {
-            let cert = reqwest::Certificate::from_pem(pem)
-                .map_err(|e| CoreError::Tls(e.to_string()))?;
-            builder = builder.add_root_certificate(cert);
+            builder = builder.use_preconfigured_tls(pinned_tls_config(pem)?);
         }
         let client = builder
             .build()
