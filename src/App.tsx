@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import {
   createBrowserRouter,
   RouterProvider,
@@ -17,6 +17,7 @@ import {
   recordActivity,
   getSettings,
   getActiveWallet,
+  joinSigningSession,
   listPendingSessions,
 } from "./ipc/commands";
 import CeremonyListener from "./CeremonyListener";
@@ -84,7 +85,7 @@ const NAV_SECTIONS: { title: string; links: { to: string; label: string }[] }[] 
   {
     title: "3 · Signing",
     links: [
-      { to: "/inbox", label: "Inbox" },
+      { to: "/inbox", label: "Approvals" },
     ],
   },
   {
@@ -133,6 +134,26 @@ function Layout() {
     retry: false,
   });
   const pendingCount = pendingSessions.data?.length ?? 0;
+
+  // Join new signing requests in the background, so they arrive verified and
+  // ready to review instead of waiting for the user to open each one. Joining
+  // only sends message-independent commitments: nothing is signed until the
+  // user approves, and wallet requests must verify first. A session that
+  // matches several groups is left for the user to choose; a failed join is
+  // not retried (it can still be opened by hand).
+  const joinedSessions = useCeremonies((s) => s.joinedSessions);
+  const recordJoin = useCeremonies((s) => s.recordJoin);
+  const joining = useRef(new Set<string>());
+  useEffect(() => {
+    for (const s of pendingSessions.data ?? []) {
+      if (s.matching_groups.length !== 1) continue;
+      if (joinedSessions[s.session_id] || joining.current.has(s.session_id)) continue;
+      joining.current.add(s.session_id);
+      joinSigningSession({ group_id: s.matching_groups[0], session_id: s.session_id, server_url: null })
+        .then((ceremonyId) => recordJoin(s.session_id, ceremonyId))
+        .catch(() => {});
+    }
+  }, [pendingSessions.data, joinedSessions, recordJoin]);
 
   // Auto-lock: reflect a backend-initiated idle lock in the UI, and report user
   // activity (throttled) so the idle timer only fires when truly inactive.
@@ -194,7 +215,7 @@ function Layout() {
                   {link.to === "/inbox" && pendingCount > 0 && (
                     <AttentionBadge
                       title={`${pendingCount} signing ${
-                        pendingCount === 1 ? "session is" : "sessions are"
+                        pendingCount === 1 ? "request is" : "requests are"
                       } waiting for you`}
                     />
                   )}

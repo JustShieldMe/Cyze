@@ -1,7 +1,9 @@
 use frost_app_core::ciphersuite::Suite;
+use frost_app_core::events::{ParticipantEvent, SigningContext};
 use frost_app_core::signing::{
     run_coordinator, run_participant, CoordinatorParams, ParticipantParams,
 };
+use frost_app_core::wallet::verify::{self, VerifiedTransaction};
 use frost_client::api::{self, PublicKey};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -10,7 +12,11 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
-use crate::state::{AppState, CeremonyHandle};
+use crate::state::{AppState, ApprovalGate, CeremonyHandle};
+
+/// How long an approved transaction's other per-note rounds are approved
+/// automatically: longer than a send's 35-minute signing budget.
+const APPROVAL_MEMORY: std::time::Duration = std::time::Duration::from_secs(40 * 60);
 
 /// Resolve a group from the keystore plus the server/trust to use for it.
 pub(crate) async fn group_context(
@@ -138,6 +144,7 @@ pub async fn create_signing_session<R: tauri::Runtime>(
         CeremonyHandle {
             cancel: cancel.clone(),
             approval: None,
+            gate: ApprovalGate::Open,
         },
     );
 
@@ -229,22 +236,39 @@ pub async fn join_signing_session<R: tauri::Runtime>(
     let ceremony_id = Uuid::new_v4();
     let cancel = CancellationToken::new();
     let (approve_tx, approve_rx) = oneshot::channel();
+    // A RedPallas key spends the group's funds: nothing is signed with it until
+    // the request's transaction has been verified (see `gate_wallet_request`).
+    let wallet_group = suite == Suite::RedPallas;
     state.ceremonies.lock().await.insert(
         ceremony_id,
         CeremonyHandle {
             cancel: cancel.clone(),
             approval: Some(approve_tx),
+            gate: if wallet_group { ApprovalGate::Pending } else { ApprovalGate::Open },
         },
     );
 
     let (tx, mut rx) = mpsc::channel(64);
     let event_app = app.clone();
+    let gate_group = args.group_id.clone();
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.recv().await {
-            let _ = event_app.emit(
-                "signing:progress",
-                serde_json::json!({ "ceremony_id": ceremony_id, "event": event }),
-            );
+            let mut payload = serde_json::json!({ "ceremony_id": ceremony_id, "event": event });
+            if let (true, ParticipantEvent::AwaitingApproval { message_hex, context, randomizer_hex }) =
+                (wallet_group, &event)
+            {
+                gate_wallet_request(
+                    &event_app,
+                    ceremony_id,
+                    &gate_group,
+                    message_hex,
+                    context.as_ref(),
+                    randomizer_hex.as_deref(),
+                )
+                .await
+                .annotate(&mut payload["event"]);
+            }
+            let _ = event_app.emit("signing:progress", payload);
         }
     });
 
@@ -252,7 +276,11 @@ pub async fn join_signing_session<R: tauri::Runtime>(
     tauri::async_runtime::spawn(async move {
         let result = run_participant(suite, params, approve_rx, tx, cancel).await;
         let state = task_app.state::<AppState>();
-        state.ceremonies.lock().await.remove(&ceremony_id);
+        let handle = state.ceremonies.lock().await.remove(&ceremony_id);
+        let result = match (result, handle.map(|h| h.gate)) {
+            (Err(_), Some(ApprovalGate::Refused(reason))) => Err(reason),
+            (result, _) => result.map_err(|e| e.to_string()),
+        };
         match result {
             Ok(()) => {
                 let _ = task_app.emit(
@@ -263,13 +291,96 @@ pub async fn join_signing_session<R: tauri::Runtime>(
             Err(e) => {
                 let _ = task_app.emit(
                     "signing:failed",
-                    serde_json::json!({ "ceremony_id": ceremony_id, "error": e.to_string() }),
+                    serde_json::json!({ "ceremony_id": ceremony_id, "error": e }),
                 );
             }
         }
     });
 
     Ok(ceremony_id)
+}
+
+/// What the approval gate decided about a wallet signing request.
+enum Verdict {
+    /// The transaction verified; the user decides, unless it is another round
+    /// of a transaction they already approved.
+    Verified { tx: VerifiedTransaction, auto_approved: bool },
+    /// No transaction attached, and raw signing is allowed (advanced options).
+    Raw,
+    /// Refused automatically, for this reason.
+    Refused(String),
+}
+
+impl Verdict {
+    /// Add the decision to the `awaiting_approval` event the UI receives.
+    fn annotate(&self, event: &mut serde_json::Value) {
+        match self {
+            Verdict::Verified { tx, auto_approved } => {
+                event["verified"] = serde_json::json!(tx);
+                event["auto_approved"] = serde_json::json!(auto_approved);
+            }
+            Verdict::Raw => event["unverified"] = serde_json::json!(true),
+            Verdict::Refused(reason) => event["refused"] = serde_json::json!(reason),
+        }
+    }
+}
+
+/// Verify a wallet signing request before its approval can be given (see
+/// `frost_app_core::wallet::verify`), and settle or refuse the ceremony's gate
+/// accordingly.
+async fn gate_wallet_request<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    ceremony_id: Uuid,
+    group_id: &str,
+    message_hex: &str,
+    context: Option<&SigningContext>,
+    randomizer_hex: Option<&str>,
+) -> Verdict {
+    let state = app.state::<AppState>();
+    let settings = state.load_settings();
+    let network = crate::commands::wallet::configured_network(&settings);
+    let verdict = match context.and_then(|c| c.pczt.as_deref().map(|pczt| (c, pczt))) {
+        Some((claimed, pczt)) => verify::verify_signing_request(network, group_id, pczt, message_hex, randomizer_hex)
+            .and_then(|tx| verify::check_coordinator_claims(network, group_id, &tx, claimed).map(|()| tx))
+            .map_or_else(|e| Verdict::Refused(e.to_string()), |tx| Verdict::Verified { tx, auto_approved: false }),
+        None if settings.advanced_mode.unwrap_or(false) => Verdict::Raw,
+        None => Verdict::Refused(
+            "refused to sign: the request has no transaction attached, so there's no way to check \
+             what it would authorize. Signing raw messages with a wallet key is an advanced option."
+                .into(),
+        ),
+    };
+
+    let mut ceremonies = state.ceremonies.lock().await;
+    let Some(handle) = ceremonies.get_mut(&ceremony_id) else {
+        return verdict;
+    };
+    match verdict {
+        Verdict::Verified { tx, .. } => {
+            let approved_before = state
+                .approved_sighashes
+                .lock()
+                .await
+                .get(&tx.sighash_hex)
+                .is_some_and(|at| at.elapsed() < APPROVAL_MEMORY);
+            handle.gate = ApprovalGate::Verified { sighash_hex: tx.sighash_hex.clone() };
+            let auto_approved = approved_before
+                && handle.approval.take().is_some_and(|approval| approval.send(true).is_ok());
+            Verdict::Verified { tx, auto_approved }
+        }
+        Verdict::Raw => {
+            handle.gate = ApprovalGate::Open;
+            Verdict::Raw
+        }
+        Verdict::Refused(reason) => {
+            tracing::warn!("signing request refused: {reason}");
+            handle.gate = ApprovalGate::Refused(reason.clone());
+            if let Some(approval) = handle.approval.take() {
+                let _ = approval.send(false);
+            }
+            Verdict::Refused(reason)
+        }
+    }
 }
 
 /// Resolve the approval gate for a participant ceremony.
@@ -283,6 +394,22 @@ pub async fn respond_to_signing(
     let handle = ceremonies
         .get_mut(&ceremony_id)
         .ok_or_else(|| AppError::new("ceremony", "ceremony not found"))?;
+    if approve {
+        match &handle.gate {
+            ApprovalGate::Open => {}
+            ApprovalGate::Verified { sighash_hex } => {
+                let mut approved = state.approved_sighashes.lock().await;
+                approved.retain(|_, at| at.elapsed() < APPROVAL_MEMORY);
+                approved.insert(sighash_hex.clone(), std::time::Instant::now());
+            }
+            ApprovalGate::Pending => {
+                return Err(AppError::new("verification_failed", "this request is still being verified"));
+            }
+            ApprovalGate::Refused(reason) => {
+                return Err(AppError::new("verification_failed", reason.clone()));
+            }
+        }
+    }
     let approval = handle
         .approval
         .take()

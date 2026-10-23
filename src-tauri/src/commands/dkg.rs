@@ -94,6 +94,7 @@ pub async fn start_dkg<R: tauri::Runtime>(app: AppHandle<R>, args: StartDkgArgs)
         CeremonyHandle {
             cancel: cancel.clone(),
             approval: None,
+            gate: crate::state::ApprovalGate::Open,
         },
     );
 

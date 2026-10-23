@@ -78,8 +78,17 @@ Supports both frost-tools ciphersuites: **Ed25519** (generic signing) and
 - Self-signed server certificates are **pinned explicitly** (trust-on-first-use
   with fingerprint display), never blanket-accepted. A Cloudflare tunnel presents
   a publicly valid certificate, so peers using its URL skip cert trust.
-- Signers see the **exact message** (hex + UTF-8) and must approve before their
-  round-2 signature share is computed. Round-1 commitments are
+- Signers **verify the transaction itself** before approving. The coordinator
+  attaches the unsigned transaction (PCZT). Each signer's app checks:
+  - the message to sign is that transaction's sighash
+  - every input carrying value is one of the group's own notes
+  - every recipient and amount matches its on-chain commitment
+  - the coordinator's description matches what was proven
+
+  If any check fails, it refuses automatically. A multi-note send needs one
+  approval; its other rounds are approved after they verify as the same
+  transaction. Wallet keys never sign a request without a transaction
+  attached, unless advanced options are on. Round-1 commitments are
   message-independent, so nothing is at risk before approval.
 
 ## Getting started

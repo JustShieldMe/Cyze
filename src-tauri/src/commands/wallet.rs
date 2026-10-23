@@ -868,6 +868,7 @@ pub async fn wallet_send<R: tauri::Runtime>(
         CeremonyHandle {
             cancel: cancel.clone(),
             approval: None,
+            gate: crate::state::ApprovalGate::Open,
         },
     );
 
