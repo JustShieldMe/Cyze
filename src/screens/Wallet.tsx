@@ -415,9 +415,9 @@ function DevnetPanel({
       {!devnetCanSend(effectiveUpgrade) && (
         <div className="callout warn" style={{ marginTop: 4 }}>
           <span>
-            <strong>Sending needs NU6.3; this devnet runs {upgradeLabel(effectiveUpgrade)}.</strong>{" "}
-            Cyze builds only NU6.3 (Ironwood) transactions. Syncing, receiving, and balances
-            work normally. To test sends, run a devnet that activates NU6.3.
+            <strong>Sending needs NU6.3 or later; this devnet runs {upgradeLabel(effectiveUpgrade)}.</strong>{" "}
+            Cyze builds only Ironwood-era transactions. Syncing, receiving, and balances
+            work normally. To test sends, run a devnet at NU6.3 or NU7.
           </span>
         </div>
       )}

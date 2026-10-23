@@ -79,7 +79,7 @@ pub async fn get_wallet_config(state: State<'_, AppState>) -> AppResult<WalletCo
 
 /// Save the wallet network and endpoint. An empty URL clears the override,
 /// reverting to the network's default endpoint. `regtest_upgrade` forces a
-/// devnet upgrade level (`"nu6"` … `"nu6_3"`); omitted or empty means auto.
+/// devnet upgrade level (`"nu6"` … `"nu7"`); omitted or empty means auto.
 #[tauri::command]
 pub async fn set_wallet_config(
     state: State<'_, AppState>,
@@ -148,7 +148,7 @@ pub struct DevnetStatus {
     pub dashboard: Option<String>,
     /// Chain height reported by the devnet's lightwalletd, when running.
     pub block_height: Option<u64>,
-    /// The upgrade level read from the node (`nu6` … `nu6_3`), when running.
+    /// The upgrade level read from the node (`nu6` … `nu7`), when running.
     pub detected_upgrade: Option<String>,
     /// Why the devnet isn't usable yet, phrased as what to do next.
     pub detail: Option<String>,
@@ -313,13 +313,10 @@ pub async fn wallet_init_account(
     init_account(&state, &group_id, birthday_height).await
 }
 
-/// Average block interval on mainnet and testnet since Blossom.
-const BLOCK_INTERVAL_SECS: u64 = 75;
-
-/// Slack subtracted from a birthday estimated from the group's creation time,
-/// covering clock skew and block-time variance. A day of blocks scans in a few
-/// seconds; starting late would hide funds.
-const ESTIMATED_BIRTHDAY_MARGIN_BLOCKS: u64 = 1_152;
+/// Slack added to a group's age when estimating its birthday from its creation
+/// time, covering clock skew and block-time variance. A day of blocks scans in
+/// a few seconds; starting late would hide funds.
+const ESTIMATED_BIRTHDAY_MARGIN_SECS: u64 = 24 * 60 * 60;
 
 /// Set up a group's view-only account (see [`wallet_init_account`]). Shared by
 /// the command and the background sync service.
@@ -355,8 +352,8 @@ pub(crate) async fn init_account(
     let estimated = match (recorded, private.group_created_at.get(group_id)) {
         (None, Some(&created)) if !is_devnet && birthday_height.is_none() => {
             let tip = shared_lightwalletd(state, &url).await?.latest_height().await?;
-            let age_blocks = unix_now().saturating_sub(created) / BLOCK_INTERVAL_SECS;
-            Some(tip.saturating_sub(age_blocks + ESTIMATED_BIRTHDAY_MARGIN_BLOCKS))
+            let age = unix_now().saturating_sub(created);
+            Some(wallet::height_before(network, tip, age + ESTIMATED_BIRTHDAY_MARGIN_SECS))
         }
         _ => None,
     };

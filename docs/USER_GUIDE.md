@@ -337,11 +337,11 @@ a devnet is real money: addresses start with `uregtest1…` and amounts show as
    chain, so funds sent before you opened the wallet still show up.
 
 **Limitations:**
-- **Sends need NU6.3.** Cyze builds only NU6.3 (Ironwood) transactions.
-  thus-spoke-zakura 0.3 activates NU6.3 from block 1; older launchers (0.2.x)
-  run NU6, where syncing, receiving and balances work but sending is refused,
-  and the settings page says so. Launchers from 0.4.0 start new chains at NU7,
-  which Cyze doesn't support yet; install 0.3.x with `ths update 0.3.0`.
+- **Sends need NU6.3 or NU7.** Cyze builds only Ironwood-era transactions.
+  thus-spoke-zakura 0.4 starts new chains at NU7 and 0.3 at NU6.3; both work
+  (**Detect local devnet** reads which). Older launchers (0.2.x) run NU6,
+  where syncing, receiving and balances work but sending is refused, and the
+  settings page says so.
 - **Pick free ports for a second devnet.** `ths start --port-offset 700` shifts
   every port if another node already uses the defaults (18232, 9067).
 - **Before Ironwood, the balance is the Orchard pool.** Until the devnet

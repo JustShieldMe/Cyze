@@ -49,14 +49,17 @@ pub enum RegtestUpgrade {
     Nu6_2,
     /// NU6.3 — Ironwood.
     Nu6_3,
+    /// NU7 — what thus-spoke-zakura 0.4 starts new chains at.
+    Nu7,
 }
 
 impl RegtestUpgrade {
-    pub const ALL: [RegtestUpgrade; 4] = [
+    pub const ALL: [RegtestUpgrade; 5] = [
         RegtestUpgrade::Nu6,
         RegtestUpgrade::Nu6_1,
         RegtestUpgrade::Nu6_2,
         RegtestUpgrade::Nu6_3,
+        RegtestUpgrade::Nu7,
     ];
 
     /// The settings/IPC spelling (`nu6`, `nu6_1`, …).
@@ -66,6 +69,18 @@ impl RegtestUpgrade {
             RegtestUpgrade::Nu6_1 => "nu6_1",
             RegtestUpgrade::Nu6_2 => "nu6_2",
             RegtestUpgrade::Nu6_3 => "nu6_3",
+            RegtestUpgrade::Nu7 => "nu7",
+        }
+    }
+
+    fn branch_id(self) -> zcash_protocol::consensus::BranchId {
+        use zcash_protocol::consensus::BranchId;
+        match self {
+            RegtestUpgrade::Nu6 => BranchId::Nu6,
+            RegtestUpgrade::Nu6_1 => BranchId::Nu6_1,
+            RegtestUpgrade::Nu6_2 => BranchId::Nu6_2,
+            RegtestUpgrade::Nu6_3 => BranchId::Nu6_3,
+            RegtestUpgrade::Nu7 => BranchId::Nu7,
         }
     }
 
@@ -77,13 +92,8 @@ impl RegtestUpgrade {
     /// in [`LightwalletdInfo::consensus_branch_id`]). `None` for a branch older
     /// than NU6 or one this build doesn't know.
     pub fn from_branch_id(branch_hex: &str) -> Option<Self> {
-        match branch_hex.trim().to_ascii_lowercase().as_str() {
-            "c8e71055" => Some(RegtestUpgrade::Nu6),
-            "4dec4df0" => Some(RegtestUpgrade::Nu6_1),
-            "5437f330" => Some(RegtestUpgrade::Nu6_2),
-            NU6_3_BRANCH_ID => Some(RegtestUpgrade::Nu6_3),
-            _ => None,
-        }
+        let wanted = branch_hex.trim().to_ascii_lowercase();
+        Self::ALL.into_iter().find(|u| format!("{:08x}", u32::from(u.branch_id())) == wanted)
     }
 
     /// Regtest consensus parameters: every upgrade up to and including this one
@@ -102,7 +112,7 @@ impl RegtestUpgrade {
             nu6_1: upto(RegtestUpgrade::Nu6_1),
             nu6_2: upto(RegtestUpgrade::Nu6_2),
             nu6_3: upto(RegtestUpgrade::Nu6_3),
-            nu7: None,
+            nu7: upto(RegtestUpgrade::Nu7),
         }
     }
 }
@@ -235,34 +245,50 @@ pub fn branch_id_for_height(network: WalletNetwork, height: u64) -> String {
 }
 
 /// The NU6.3 / Ironwood consensus branch id (little-endian u32, printed as
-/// 8-digit hex). Orchard actions mined under this upgrade prove against the
-/// `PostNu6_3` circuit (the fixed circuit plus the `disableCrossAddress`
-/// constraint). Activated on testnet at 4,134,000 and on mainnet at 3,428,143
-/// (see `zcash_protocol` activation tables), so both live networks are past it.
+/// 8-digit hex).
+#[cfg(test)]
 const NU6_3_BRANCH_ID: &str = "37a5165b";
 
 /// The Orchard proving/verifying circuit version to use for a transaction mined
-/// at `height` on `network`. This MUST match the consensus branch active at that
-/// height, or the proof is rejected by the network:
+/// at `height` on `network`. This MUST match the circuit consensus requires at
+/// that height, or the proof is rejected by the network:
 ///
-/// - Post-NU6.3 (Ironwood; both testnet and mainnet are past it) → `PostNu6_3`.
-/// - Post-NU6.2 but pre-NU6.3 → `FixedPostNu6_2`.
+/// - From NU6.3 (Ironwood) on, NU7 included → `PostNu6_3`. Both live networks
+///   are past NU6.3 (testnet 4,134,000; mainnet 3,428,143).
+/// - Before NU6.3 → `FixedPostNu6_2`, which can verify but no longer prove.
 ///
-/// Deriving it from the live branch id — rather than hardcoding one network's
-/// value — is what lets the same build produce valid transactions on both
-/// networks, each picking the circuit for the upgrade active at that height.
-/// `FixedPostNu6_2` is the pre-Ironwood floor; the historical `InsecurePreNu6_2`
-/// circuit is never used for new sends.
+/// Decided by whether NU6.3 is active, not by matching its branch id: from
+/// NU7 the branch changes but the circuit doesn't.
 #[cfg(feature = "wallet")]
 fn orchard_circuit_version_for_height(
     network: WalletNetwork,
     height: u64,
 ) -> orchard::circuit::OrchardCircuitVersion {
     use orchard::circuit::OrchardCircuitVersion;
-    if branch_id_for_height(network, height) == NU6_3_BRANCH_ID {
+    use zcash_protocol::consensus::{BlockHeight, NetworkUpgrade, Parameters};
+    if network.params().is_nu_active(NetworkUpgrade::Nu6_3, BlockHeight::from_u32(height as u32)) {
         OrchardCircuitVersion::PostNu6_3
     } else {
         OrchardCircuitVersion::FixedPostNu6_2
+    }
+}
+
+/// The height `secs` seconds of block production before `tip`: 75-second
+/// blocks before NU7 activates and 25-second blocks from it (ZIP 218).
+pub fn height_before(network: WalletNetwork, tip: u64, secs: u64) -> u64 {
+    use zcash_protocol::consensus::{NetworkUpgrade, Parameters, NU7_POW_TARGET_SPACING_RATIO, SECONDS_PER_BLOCK};
+    let before_nu7 = u64::from(SECONDS_PER_BLOCK);
+    let from_nu7 = before_nu7 / u64::from(NU7_POW_TARGET_SPACING_RATIO);
+    match network.params().activation_height(NetworkUpgrade::Nu7).map(u64::from) {
+        Some(nu7) if tip > nu7 => {
+            let covered = (tip - nu7) * from_nu7;
+            if secs <= covered {
+                tip - secs / from_nu7
+            } else {
+                nu7.saturating_sub((secs - covered) / before_nu7)
+            }
+        }
+        _ => tip.saturating_sub(secs / before_nu7),
     }
 }
 
@@ -1547,9 +1573,10 @@ fn scan_batch(
 /// Rewind the wallet after a reorg detected at `at_height` (the first block
 /// that didn't connect), preferably to `target` (a few blocks of slack below).
 ///
-/// A wallet keeps checkpoints only from its start height on, and new wallets
-/// start at the chain tip, so near the start the backend refuses rewinds that
-/// would discard tree state no rescan could recreate. Then try the smallest
+/// A rewind can only land on a tree checkpoint. A wallet keeps checkpoints
+/// only from its start height on, and when a new wallet catches up it scans
+/// the tip first and the blocks behind it afterwards, without checkpoints. So
+/// near a wallet's start the backend refuses rewinds. Then try the smallest
 /// rewind that still drops the block that didn't connect (`at_height - 2`): if
 /// the fork goes deeper, the next scan finds the next mismatch lower down and
 /// this steps back again. When even that is refused, the fork is below what
@@ -1563,9 +1590,14 @@ fn rewind_on_reorg(db: &mut GroupDb, at_height: BlockHeight, target: BlockHeight
         Err(e) => return Err(CoreError::Reorg(e.to_string())),
     };
     let minimal = at_height.saturating_sub(2);
-    if minimal > target && db.truncate_to_height(minimal).is_ok() {
-        tracing::info!("reorg: rewound only to {minimal}; the wallet can't go back to {target}");
-        return Ok(());
+    if minimal > target {
+        match db.truncate_to_height(minimal) {
+            Ok(actual) => {
+                tracing::info!("reorg: rewound only to {actual}; the wallet can't go back to {target}");
+                return Ok(());
+            }
+            Err(e) => tracing::info!("reorg: can't rewind to {minimal} either: {e}"),
+        }
     }
     Err(CoreError::Reorg(refused.to_string()))
 }
@@ -2068,7 +2100,6 @@ fn ensure_caught_up(scanned: u64, tip: u64) -> Result<(), CoreError> {
 /// spend** the turnstile-out construction adds to the Orchard bundle — leaving it
 /// unauthorized and failing extraction with `MissingSpendAuthSig`.
 fn spends_to_sign(pczt: pczt::Pczt) -> Result<Vec<SpendToSign>, CoreError> {
-    use ff::PrimeField;
     use pczt::roles::low_level_signer::{OrchardParseError, Signer};
 
     // Append every not-yet-signed spend of one already-parsed bundle, tagging
@@ -2083,7 +2114,7 @@ fn spends_to_sign(pczt: pczt::Pczt) -> Result<Vec<SpendToSign>, CoreError> {
                     out.push(SpendToSign {
                         pool,
                         index,
-                        alpha_hex: hex::encode(alpha.to_repr()),
+                        alpha_hex: hex::encode(alpha.to_bytes()),
                     });
                 }
             }
@@ -2845,6 +2876,7 @@ mod tests {
         assert_eq!(RegtestUpgrade::from_branch_id("4dec4df0"), Some(RegtestUpgrade::Nu6_1));
         assert_eq!(RegtestUpgrade::from_branch_id("5437F330"), Some(RegtestUpgrade::Nu6_2));
         assert_eq!(RegtestUpgrade::from_branch_id(NU6_3_BRANCH_ID), Some(RegtestUpgrade::Nu6_3));
+        assert_eq!(RegtestUpgrade::from_branch_id("77190ad9"), Some(RegtestUpgrade::Nu7));
         // NU5 (and anything unknown) is not a level we model.
         assert_eq!(RegtestUpgrade::from_branch_id("c2d6d0b4"), None);
         assert_eq!(RegtestUpgrade::from_branch_id(""), None);
@@ -2862,6 +2894,7 @@ mod tests {
             (RegtestUpgrade::Nu6_1, "4dec4df0"),
             (RegtestUpgrade::Nu6_2, "5437f330"),
             (RegtestUpgrade::Nu6_3, NU6_3_BRANCH_ID),
+            (RegtestUpgrade::Nu7, "77190ad9"),
         ] {
             let net = WalletNetwork::Regtest(level);
             assert_eq!(branch_id_for_height(net, 500), branch, "{level:?}");
@@ -2871,6 +2904,33 @@ mod tests {
         assert_eq!(nu6.activation_height(NetworkUpgrade::Nu5), Some(BlockHeight::from_u32(1)));
         assert_eq!(nu6.activation_height(NetworkUpgrade::Nu6_1), None);
         assert_eq!(nu6.activation_height(NetworkUpgrade::Nu6_3), None);
+        assert_eq!(RegtestUpgrade::Nu6_3.local_network().activation_height(NetworkUpgrade::Nu7), None);
+    }
+
+    /// NU7 changes the branch id but not the Orchard circuit; picking the
+    /// circuit by branch would have made every proof after mainnet's NU7
+    /// activation (3,543,405) invalid.
+    #[test]
+    fn the_post_ironwood_circuit_is_used_across_nu7() {
+        use orchard::circuit::OrchardCircuitVersion::{FixedPostNu6_2, PostNu6_3};
+        assert_eq!(orchard_circuit_version_for_height(WalletNetwork::Main, 3_428_142), FixedPostNu6_2);
+        assert_eq!(orchard_circuit_version_for_height(WalletNetwork::Main, 3_428_143), PostNu6_3);
+        assert_eq!(orchard_circuit_version_for_height(WalletNetwork::Main, 3_543_405), PostNu6_3);
+        assert_ne!(branch_id_for_height(WalletNetwork::Main, 3_543_405), NU6_3_BRANCH_ID);
+        for level in [RegtestUpgrade::Nu6_3, RegtestUpgrade::Nu7] {
+            assert_eq!(orchard_circuit_version_for_height(WalletNetwork::Regtest(level), 10), PostNu6_3);
+        }
+    }
+
+    #[test]
+    fn heights_from_ages_use_the_block_time_of_each_era() {
+        let nu7 = 3_543_405;
+        // Before NU7: 75-second blocks.
+        assert_eq!(height_before(WalletNetwork::Main, 3_528_000, 75 * 100), 3_527_900);
+        // After it: 25-second blocks, then 75-second ones before activation.
+        assert_eq!(height_before(WalletNetwork::Main, nu7 + 300, 25 * 100), nu7 + 200);
+        assert_eq!(height_before(WalletNetwork::Main, nu7 + 300, 25 * 300 + 75 * 10), nu7 - 10);
+        assert_eq!(height_before(WalletNetwork::Main, 100, u64::MAX / 2), 0);
     }
 
     #[test]

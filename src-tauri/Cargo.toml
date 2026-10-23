@@ -41,7 +41,7 @@ tracing-subscriber = { workspace = true }
 tauri = { version = "2", features = ["test"] }
 tempfile = "3"
 # tests/devnet_send.rs: a throwaway recipient key (same crate the core uses).
-orchard = { package = "zakura-orchard", version = "=3.0.0" }
+orchard = { package = "zakura-orchard", version = "=4.0.0" }
 
 [lib]
 name = "frost_app_lib"

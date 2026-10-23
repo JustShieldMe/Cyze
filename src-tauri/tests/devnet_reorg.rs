@@ -30,6 +30,12 @@ fn devnet() -> String {
     std::env::var("CYZE_DEVNET").unwrap_or_else(|_| "cyze-e2e".into())
 }
 
+/// The upgrade the devnet runs: `nu6_3` for thus-spoke-zakura 0.3, `nu7` for
+/// 0.4 (`CYZE_DEVNET_UPGRADE`).
+fn devnet_upgrade() -> String {
+    std::env::var("CYZE_DEVNET_UPGRADE").unwrap_or_else(|_| "nu6_3".into())
+}
+
 fn ths(args: &[&str]) -> String {
     let out = std::process::Command::new("ths").args(args).args(["--name", &devnet()]).output().expect("ths on PATH");
     assert!(out.status.success(), "ths {args:?}: {}", String::from_utf8_lossy(&out.stderr));
@@ -79,7 +85,7 @@ fn reorg_from(height: u64, blocks: u32) {
 async fn wallet_starting_at(server: &common::TestServer, start: u64) -> (Pair, String) {
     let p = pair(server).await;
     let alice = p.alice.app.state::<AppState>();
-    commands::wallet::set_wallet_config(alice.clone(), "regtest".into(), endpoint("lightwalletd"), Some("nu6_3".into()))
+    commands::wallet::set_wallet_config(alice.clone(), "regtest".into(), endpoint("lightwalletd"), Some(devnet_upgrade()))
         .await
         .unwrap();
     let group_id = dkg(&p, Suite::RedPallas).await;
@@ -94,7 +100,7 @@ async fn start_height(p: &Pair, group_id: &str) -> Option<u64> {
     let alice = p.alice.app.state::<AppState>();
     let key = alice.wallet_db_key(group_id).await.unwrap();
     let wid = alice.wallet_dir_id(group_id).await.unwrap();
-    let network = frost_app_core::wallet::WalletNetwork::Regtest(frost_app_core::wallet::RegtestUpgrade::Nu6_3);
+    let network = frost_app_core::wallet::WalletNetwork::Regtest(frost_app_core::wallet::RegtestUpgrade::parse(&devnet_upgrade()).unwrap());
     frost_app_core::wallet::wallet_start_height(&alice.data_dir, &wid, network, key.as_ref()).unwrap()
 }
 
@@ -129,10 +135,15 @@ async fn wallets_recover_from_reorgs_near_their_start() {
         ths(&["mine", "30"]);
     }
 
-    // A: start 8 blocks back; orphan the last 2 blocks and mine 4.
+    // A: start 8 blocks back and catch up; then follow 3 new blocks at the tip
+    // (only those get rewind checkpoints: a catch-up scans the tip first and
+    // the blocks behind it without them). Orphan the last 2 and mine 4.
     let t = tip();
     let (a, group_a) = wallet_starting_at(&server, t - 8).await;
     wait_synced_to(&a, &group_a, t, "A before the reorg").await;
+    ths(&["mine", "3"]);
+    let t = tip();
+    wait_synced_to(&a, &group_a, t, "A at the new tip").await;
     let start_a = start_height(&a, &group_a).await;
     assert!(start_a.is_some(), "A's wallet exists");
     reorg_from(t - 1, 4);

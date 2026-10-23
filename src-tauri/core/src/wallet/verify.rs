@@ -24,7 +24,6 @@
 //! with the result, and the app refuses to sign if they disagree.
 
 use base64::Engine as _;
-use ff::PrimeField;
 use orchard::keys::{FullViewingKey, Scope};
 use orchard::note_encryption::{IronwoodDomain, OrchardDomain};
 use pczt::roles::redactor::Redactor;
@@ -209,7 +208,7 @@ fn check_bundle(
             totals.spent += spent;
             if spend.spend_auth_sig().is_none() {
                 if let Some(alpha) = spend.alpha() {
-                    totals.unsigned_alphas.push(alpha.to_repr());
+                    totals.unsigned_alphas.push(alpha.to_bytes());
                 }
             }
         } else if spent > 0 {
@@ -643,7 +642,7 @@ mod tests {
         let (ak, fvk) = group(1);
         let d = draft(Pool::Orchard, &fvk, 100_000, "");
         let b64 = pczt_for_signers(&d.pczt_hex).unwrap();
-        let wrong = hex::encode(pasta_curves::pallas::Scalar::from(42u64).to_repr());
+        let wrong = hex::encode(ff::PrimeField::to_repr(&pasta_curves::pallas::Scalar::from(42u64)));
         assert_refused(
             verify_signing_request(DEVNET, &ak, None, &b64, &d.sighash_hex, Some(&wrong)),
             "doesn't belong to any of the group's spends",
