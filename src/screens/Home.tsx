@@ -8,7 +8,7 @@ import {
 } from "../ipc/commands";
 import { asNetwork, unit } from "../network";
 import { useSwitchWallet, useWallets } from "../components/WalletSwitcher";
-import { WalletView } from "./Groups";
+import { WalletView } from "../wallet/Wallet";
 
 /** Home: the wallet the app is working on, or what to do first. */
 export default function Home() {
