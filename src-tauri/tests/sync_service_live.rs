@@ -16,7 +16,7 @@ mod common;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use common::{make_user, start_server, wait_for_group};
+use common::{dkg, pair, start_server};
 use frost_app_lib::commands;
 use frost_app_lib::state::{wallet_session_key, AppState};
 use frost_app_lib::sync_service;
@@ -42,12 +42,8 @@ async fn service_sets_up_and_syncs_a_new_group() {
         eprintln!("skipping: sidecar frostd binary not built (run scripts/build-sidecar.sh)");
         return;
     };
-    let server_url = format!("127.0.0.1:{}", server.port);
-    let alice = make_user();
-    let bob = make_user();
-    let alice_state = alice.app.state::<AppState>();
-    let bob_state = bob.app.state::<AppState>();
-
+    let p = pair(&server).await;
+    let (alice, alice_state) = (&p.alice, p.alice.app.state::<AppState>());
     let sync_events: Arc<Mutex<Vec<Value>>> = Arc::default();
     let updated_events: Arc<Mutex<Vec<Value>>> = Arc::default();
     for (name, sink) in [("wallet:sync", sync_events.clone()), ("wallet:updated", updated_events.clone())] {
@@ -57,36 +53,10 @@ async fn service_sets_up_and_syncs_a_new_group() {
             sink.lock().unwrap().push(v);
         });
     }
-    // The service starts before anything is unlocked, as it does at app launch.
+    // Running before any group exists, the service has nothing to sync yet.
     sync_service::spawn(alice.app.handle().clone());
 
-    commands::keystore::create_keystore(alice_state.clone(), "alice-passphrase".into()).await.unwrap();
-    commands::keystore::create_keystore(bob_state.clone(), "bob-passphrase".into()).await.unwrap();
-    let alice_contact = commands::contacts::export_my_contact(alice_state.clone(), "alice".into()).await.unwrap();
-    let bob_contact = commands::contacts::export_my_contact(bob_state.clone(), "bob".into()).await.unwrap();
-    commands::contacts::add_contact(alice_state.clone(), bob_contact.text.clone(), None).await.unwrap();
-    commands::contacts::add_contact(bob_state.clone(), alice_contact.text.clone(), None).await.unwrap();
-    for state in [&alice_state, &bob_state] {
-        commands::server::set_server_url((*state).clone(), server_url.clone()).await.unwrap();
-        commands::server::trust_server_cert((*state).clone(), server_url.clone(), server.cert_pem.clone())
-            .await
-            .unwrap();
-    }
-
-    let dkg = |pubkeys: Vec<String>| commands::dkg::StartDkgArgs {
-        suite: frost_app_core::ciphersuite::Suite::RedPallas,
-        description: "sync service test".into(),
-        threshold: 2,
-        participants: pubkeys,
-        server_url: Some(server_url.clone()),
-        session_id: None,
-    };
-    commands::dkg::start_dkg(alice.app.handle().clone(), dkg(vec![bob_contact.pubkey.clone()]))
-        .await
-        .unwrap();
-    tokio::time::sleep(Duration::from_millis(1500)).await;
-    commands::dkg::start_dkg(bob.app.handle().clone(), dkg(vec![])).await.unwrap();
-    let group_id = wait_for_group(&alice_state).await;
+    let group_id = dkg(&p, frost_app_core::ciphersuite::Suite::RedPallas).await;
 
     // Key generation recorded where the wallet starts, on the default network.
     let key = wallet_session_key(&group_id, "mainnet");
