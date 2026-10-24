@@ -59,6 +59,10 @@ pub struct Settings {
     /// lightwalletd endpoint for the selected network.
     #[serde(default)]
     pub lightwalletd_url: Option<String>,
+    /// Route wallet traffic (syncing, sending) through Tor
+    /// (`frost_app_core::wallet::tor`).
+    #[serde(default)]
+    pub use_tor: Option<bool>,
     /// Idle minutes before the keystore auto-locks. `None` uses the default
     /// (10 min); `Some(0)` disables auto-lock entirely.
     #[serde(default)]
@@ -230,6 +234,10 @@ pub struct AppState {
     /// Viewing-key sessions this app took part in. The member who started one
     /// keeps it open briefly after it ends; it mustn't be joined again.
     pub viewing_key_sessions: std::sync::Mutex<std::collections::HashSet<Uuid>>,
+    /// The sync server picked by itself for each network (keyed by its
+    /// `as_str`), when the user hasn't chosen one. See
+    /// `commands::wallet::pick_server`.
+    pub auto_lightwalletd: std::sync::Mutex<HashMap<&'static str, frost_app_core::wallet::ServerProbe>>,
     /// Serializes read-modify-write cycles of the private settings.
     pub(crate) private_lock: Mutex<()>,
 }
@@ -293,6 +301,7 @@ impl AppState {
             dkg_sessions: Default::default(),
             viewing_key_runs: Default::default(),
             viewing_key_sessions: Default::default(),
+            auto_lightwalletd: Default::default(),
             private_lock: Mutex::new(()),
         }
     }

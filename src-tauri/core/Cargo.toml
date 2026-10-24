@@ -2,7 +2,7 @@
 name = "frost-app-core"
 version = "0.1.0"
 edition = "2021"
-license = "MIT OR Apache-2.0"
+license = "MIT"
 
 [dependencies]
 frost-client = { workspace = true }
@@ -69,6 +69,8 @@ zcash_client_backend = { package = "zakura-client-backend", version = "=0.1.0-rc
     "lightwalletd-tonic-transport",
     "lightwalletd-tonic-tls-webpki-roots",
     "pczt",
+    # Optional Tor for wallet traffic (arti); see wallet::set_tor.
+    "tor",
 ] }
 zcash_client_sqlite = { package = "zakura-client-sqlite", version = "=0.1.0-rc9.3", optional = true, features = ["orchard", "transparent-inputs", "unstable", "serde"] }
 pczt = { package = "zakura-pczt", version = "=0.1.0-rc9", optional = true, features = ["signer"] }

@@ -291,8 +291,12 @@ What it changed for Cyze:
   back-filled range. A reorg reaching into it now rebuilds the wallet (a
   rescan of seconds) instead of rewinding in place.
 - The wallet crates gained a pipelined decrypt/scan API
-  (`decrypt_cached_blocks`, `scan_decrypted_blocks`) that Cyze doesn't use
-  yet: decrypting the next range while storing the previous one.
+  (`decrypt_cached_blocks`, `scan_decrypted_blocks`): decrypting the next
+  range while storing the previous one. Tried on 2026-10-24 and not kept: with
+  the next batch's decryption started on the rayon pool just before each
+  scan, 40,000 mainnet blocks scanned in 23.3 s either way (three alternating
+  runs each). Decryption already runs on every core, so it's a small share of
+  wall time; what's left is the single-threaded commitment-tree work.
 
 ## Background sync service
 

@@ -99,7 +99,12 @@ function ContactRow({
           </button>
         </td>
         <td style={{ textAlign: "right" }}>
-          <button className="danger" onClick={onRemove}>
+          <button
+            className="link-button danger-link"
+            onClick={() => {
+              if (confirm(`Remove ${c.alias || c.name} from your contacts?`)) onRemove();
+            }}
+          >
             Remove
           </button>
         </td>

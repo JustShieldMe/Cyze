@@ -126,12 +126,11 @@ export function WalletTxHistory({ group, network }: { group: GroupSummary; netwo
       {hasAny && (
         <table className="participants" style={{ tableLayout: "fixed", width: "100%" }}>
           <colgroup>
-            <col style={{ width: "21%" }} />
-            <col style={{ width: "16%" }} />
-            <col style={{ width: "16%" }} />
-            <col style={{ width: "16%" }} />
+            <col style={{ width: "24%" }} />
             <col style={{ width: "22%" }} />
-            <col style={{ width: "9%" }} />
+            <col style={{ width: "20%" }} />
+            <col style={{ width: "26%" }} />
+            <col style={{ width: "8%" }} />
           </colgroup>
           <thead>
             <tr>
@@ -139,7 +138,6 @@ export function WalletTxHistory({ group, network }: { group: GroupSummary; netwo
               <th style={{ textAlign: "left", paddingBottom: 6, fontWeight: 500 }}>Type</th>
               <th style={{ textAlign: "right", paddingBottom: 6, paddingRight: 12, fontWeight: 500 }}>Amount</th>
               <th style={{ textAlign: "left", paddingBottom: 6, fontWeight: 500 }}>With</th>
-              <th style={{ textAlign: "left", paddingBottom: 6, fontWeight: 500 }}>Transaction</th>
               <th />
             </tr>
           </thead>
@@ -317,7 +315,7 @@ export type PendingRow = CeremonyState & { id: string };
 export function MemoRow({ memo }: { memo: string }) {
   return (
     <tr>
-      <td colSpan={6} style={{ padding: "0 8px 6px 8px", borderTop: "none" }}>
+      <td colSpan={5} style={{ padding: "0 8px 6px 8px", borderTop: "none" }}>
         <div
           style={{
             display: "flex",
@@ -327,7 +325,7 @@ export function MemoRow({ memo }: { memo: string }) {
             color: "var(--fg-muted)",
           }}
         >
-          <span title="Memo" aria-hidden>💬</span>
+          <span className="dim">Memo</span>
           <span
             style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
             title={memo}
@@ -361,17 +359,18 @@ export function PendingTxRow({
   const isUnshield = meta?.isUnshield;
   const dateStr = row.startedAt ? fmtDate(new Date(row.startedAt)) : "—";
   const addrDisplay = meta?.recipient ? meta.recipient.slice(0, 10) + "…" : "—";
-  const txHashDisplay = row.txid ? row.txid.slice(0, 10) + "…" : "—";
   // Yellow text for in-flight / broadcast-but-unconfirmed rows.
   const pendingColor = !row.failed ? "#facc15" : undefined;
 
   return (
     <>
-      <tr>
+      <tr className="tx-row" onClick={onToggle}>
         <td style={{ maxWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12, color: pendingColor ?? "var(--fg-muted)" }}>{dateStr}</td>
         <td style={{ maxWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {row.failed ? (
             <span style={{ color: "var(--danger)", fontSize: 12 }}>✕ Failed</span>
+          ) : !row.txid ? (
+            <span style={{ color: pendingColor, fontSize: 12 }}>↑ Sending…</span>
           ) : isUnshield ? (
             <span style={{ color: pendingColor, fontSize: 12 }}>⇲ Unshield</span>
           ) : (
@@ -384,17 +383,10 @@ export function PendingTxRow({
         <td className="mono-cell" style={{ maxWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 11, color: pendingColor ?? "var(--fg-muted)" }}>
           {addrDisplay}
         </td>
-        <td className="mono-cell" style={{ maxWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 11, color: pendingColor ?? "var(--fg-muted)" }}>
-          {txHashDisplay}
-          {!row.txid && !row.failed && (
-            <span style={{ marginLeft: 4 }} title="Awaiting confirmation">⏳</span>
-          )}
-        </td>
         <td style={{ textAlign: "center" }}>
           <button
             className="secondary"
             style={{ padding: "2px 6px", fontSize: 11, lineHeight: 1 }}
-            onClick={onToggle}
             title={isExpanded ? "Collapse" : "Expand"}
           >
             {isExpanded ? "−" : "+"}
@@ -404,7 +396,7 @@ export function PendingTxRow({
       {meta?.memo && !isExpanded && <MemoRow memo={meta.memo} />}
       {isExpanded && (
         <TxDetail
-          colSpan={6}
+          colSpan={5}
           network={network}
           txid={row.txid}
           blockHeight={undefined}
@@ -450,7 +442,6 @@ export function OnchainTxRow({
     : tx.recipient
       ? tx.recipient.slice(0, 10) + "…"
       : "—";
-  const txHashDisplay = tx.txid.slice(0, 10) + "…";
   const dateDisplay = tx.timestamp != null
     ? fmtDate(new Date(tx.timestamp * 1000))
     : tx.block_height != null
@@ -459,7 +450,7 @@ export function OnchainTxRow({
 
   return (
     <>
-      <tr>
+      <tr className="tx-row" onClick={onToggle}>
         <td className="dim" style={{ maxWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12 }}>{dateDisplay}</td>
         <td style={{ maxWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {isReceive ? (
@@ -481,12 +472,10 @@ export function OnchainTxRow({
         <td className="dim mono-cell" style={{ maxWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 11 }}>
           {addrDisplay}
         </td>
-        <td className="dim mono-cell" style={{ maxWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 11 }}>{txHashDisplay}</td>
         <td style={{ textAlign: "center" }}>
           <button
             className="secondary"
             style={{ padding: "2px 6px", fontSize: 11, lineHeight: 1 }}
-            onClick={onToggle}
             title={isExpanded ? "Collapse" : "Expand"}
           >
             {isExpanded ? "−" : "+"}
@@ -498,7 +487,7 @@ export function OnchainTxRow({
       {tx.memo && !isExpanded && <MemoRow memo={tx.memo} />}
       {isExpanded && (
         <TxDetail
-          colSpan={6}
+          colSpan={5}
           network={network}
           txid={tx.txid}
           timestamp={tx.timestamp}

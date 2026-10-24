@@ -30,7 +30,7 @@ test("a signing request is joined by itself, verified, and approved", async () =
   const ui = await renderApp("/inbox");
 
   // The app joins it in the background, and says so while it's elsewhere.
-  await ui.findByText("Request from Alice");
+  await ui.findByText("Alice asks to approve a payment from Treasury");
   await waitFor(() =>
     expect(backend.calls("join_signing_session")).toEqual([
       { args: { group_id: GROUP_ID, session_id: "s1", server_url: null } },
@@ -66,7 +66,7 @@ test("a signing request is joined by itself, verified, and approved", async () =
 test("a request the backend refused says why and can't be approved", async () => {
   fakeBackend({ list_pending_sessions: () => [request], join_signing_session: () => "c2" });
   const ui = await renderApp("/inbox");
-  await ui.findByText("Request from Alice");
+  await ui.findByText("Alice asks to approve a payment from Treasury");
   await waitFor(() => expect(joinedAs("s1")).toBe("c2"));
   await emit("signing:progress", {
     ceremony_id: "c2",

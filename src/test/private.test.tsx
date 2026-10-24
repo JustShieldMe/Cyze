@@ -62,6 +62,7 @@ test("funds left at the old address are moved with the group's approval", async 
           signers: [ME, ALICE],
           memo: null,
           from_old_address: true,
+          send_max: false,
         },
       },
     ]),

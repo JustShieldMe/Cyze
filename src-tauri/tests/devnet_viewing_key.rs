@@ -126,6 +126,7 @@ async fn an_older_group_goes_private_and_moves_its_funds() {
             signers: vec![p.alice_pubkey.clone(), p.bob_pubkey.clone()],
             memo: None,
             from_old_address: true,
+            send_max: false,
         },
     )
     .await

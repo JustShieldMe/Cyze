@@ -321,11 +321,21 @@ faucet funds, and back to Mainnet when ready. **Local devnet** is for developmen
 (see below). Balances, addresses, and history are kept entirely separate per
 network.
 
-**lightwalletd endpoint.** Each network offers a **preset** public endpoint
-(`zec.rocks` on mainnet, `testnet.zec.rocks` on testnet). To use your own node,
-enter a **custom** `https://host:port` URL instead. Plaintext `http://` endpoints
-are refused. Use **Test** to confirm reachability, then **Save** — the save
-confirms whether the server actually responded.
+**Sync server.** By default it's **Automatic**: the app measures the known
+servers (zec.rocks and its regional servers on mainnet) and uses the quickest
+one that's up to date, and switches to another if that one stops answering.
+Settings shows which it's using. You can pick one of them instead, or enter a
+**custom** `https://host:port` URL to use your own node. Plaintext `http://`
+endpoints are refused. Use **Test connection** to confirm reachability, then
+**Save**.
+
+**Tor.** Under **Privacy**, **Connect through Tor** sends the wallet's traffic
+(syncing and the payments it sends) through Tor, so the sync server, and anyone
+watching your network, can't tie them to your IP address. Tor takes a few
+seconds to start, and syncing is slower through it. While it's on, the wallet
+never connects directly: if Tor can't start, the wallet waits and says so until
+it does or you turn it off. Connecting to your group's coordination server
+isn't affected, and name lookups (testnet) are off while Tor is on.
 
 **Sync.** The active wallet syncs in the background from unlock to lock, and Home shows the current block height. If it
 looks stalled, press **Sync Now** — it restarts the sync from scratch and
