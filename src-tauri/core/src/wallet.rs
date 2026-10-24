@@ -18,6 +18,8 @@ use zcash_protocol::local_consensus::LocalNetwork;
 
 use crate::error::CoreError;
 
+pub mod verify;
+
 /// Which Zcash network the wallet operates on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

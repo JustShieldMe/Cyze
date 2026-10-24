@@ -32,6 +32,8 @@ pub enum CoreError {
          already have spent"
     )]
     NotSynced { behind: u64 },
+    #[error("refused to sign: {0}")]
+    Verification(String),
     #[error("crypto error: {0}")]
     Crypto(String),
     #[error("TLS error: {0}")]

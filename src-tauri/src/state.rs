@@ -145,6 +145,24 @@ pub struct CeremonyHandle {
     /// Present for participant signing ceremonies that are paused at the
     /// approval gate; resolving it releases the round-2 signature share.
     pub approval: Option<oneshot::Sender<bool>>,
+    /// Whether an approval may be given (see `commands::signing`).
+    pub gate: ApprovalGate,
+}
+
+/// Whether a participant's "approve" is accepted for a signing ceremony.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum ApprovalGate {
+    /// Nothing to verify: DKG and coordinator ceremonies, non-wallet groups,
+    /// and raw-message signing when advanced options are on.
+    #[default]
+    Open,
+    /// A wallet signing request whose transaction hasn't been verified yet.
+    Pending,
+    /// The transaction was verified. Approving it records the sighash so the
+    /// same transaction's other per-note rounds are approved automatically.
+    Verified { sighash_hex: String },
+    /// Verification failed and the request was refused, for this reason.
+    Refused(String),
 }
 
 pub struct AppState {
@@ -187,6 +205,10 @@ pub struct AppState {
     unlocked_tx: tokio::sync::watch::Sender<bool>,
     /// Background wallet sync: wake-ups and the latest status per group.
     pub sync_service: crate::sync_service::SyncService,
+    /// Sighashes of transactions this user approved, and when. A multi-note
+    /// send signs each note in its own round; once one round of a verified
+    /// transaction is approved, its other rounds are approved automatically.
+    pub approved_sighashes: Mutex<HashMap<String, std::time::Instant>>,
 }
 
 /// How long a sync may go without re-fetching subtree roots. A pool gains one
@@ -232,6 +254,7 @@ impl AppState {
             last_activity: AtomicI64::new(now_millis()),
             unlocked_tx: tokio::sync::watch::channel(false).0,
             sync_service: crate::sync_service::SyncService::default(),
+            approved_sighashes: Mutex::new(HashMap::new()),
         }
     }
 

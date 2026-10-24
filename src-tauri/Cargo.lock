@@ -1641,6 +1641,7 @@ dependencies = [
  "frost-ed25519",
  "frost-rerandomized 2.2.0",
  "hex",
+ "incrementalmerkletree",
  "orchard",
  "pasta_curves",
  "pczt",
@@ -1654,6 +1655,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "shardtree",
  "tempfile",
  "thiserror 2.0.19",
  "tokio",
@@ -1668,8 +1670,10 @@ dependencies = [
  "zcash_client_backend",
  "zcash_client_sqlite",
  "zcash_keys",
+ "zcash_note_encryption",
  "zcash_primitives",
  "zcash_protocol",
+ "zcash_transparent",
  "zeroize",
 ]
 

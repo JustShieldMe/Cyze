@@ -230,11 +230,18 @@ members to approve it.
 
 ### Participant — review and approve
 
-1. A red **!** badge appears next to **Inbox** in the sidebar. Open it.
-2. Open the pending session. You see the **exact message** being signed (hex and
-   decoded UTF-8) and the **decoded transaction** (amount, recipient, fee).
-3. If it matches what the coordinator described, click **Approve** to release your
-   signature share. Nothing is signed until you approve.
+1. A red **!** badge appears next to **Approvals** in the sidebar. Open it. The
+   app joins the request in the background, which only shares
+   message-independent commitments.
+2. The request shows what your app **verified from the transaction itself**: who
+   gets paid and how much, any memo, what goes back to the group, and the fee.
+   If the transaction doesn't match what the coordinator described, or its
+   contents don't match its commitments, your app **refuses automatically** and
+   says why.
+3. Click **Approve and sign** to release your signature share. Nothing is signed
+   until you approve. A send that spends several notes needs this one approval;
+   its other notes are approved automatically once they verify as the same
+   transaction.
 
 Once a threshold of members approves, the coordinator's app aggregates the
 signatures, builds the proof, broadcasts the transaction, and shows the **txid**.

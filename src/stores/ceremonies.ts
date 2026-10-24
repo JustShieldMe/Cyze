@@ -88,6 +88,10 @@ interface CeremoniesStore {
   startSend: (ceremonyId: string, meta: SendMeta) => void;
   /** Drop the active send for a group (e.g. to start a new transaction). */
   clearSend: (groupId: string) => void;
+  /** Signing sessions joined this run (session id → ceremony id), so a
+   *  request is joined once, by hand or automatically. Kept in memory only. */
+  joinedSessions: Record<string, string>;
+  recordJoin: (sessionId: string, ceremonyId: string) => void;
   onProgress: (kind: CeremonyKind, payload: CeremonyEventPayload) => void;
   onComplete: (kind: CeremonyKind, payload: CeremonyEventPayload) => void;
   onFailed: (kind: CeremonyKind, payload: CeremonyEventPayload) => void;
@@ -102,6 +106,9 @@ export const useCeremonies = create<CeremoniesStore>()(
       activeSigningId: null,
       activeSendByGroup: {},
       txSigners: {},
+      joinedSessions: {},
+      recordJoin: (sessionId, ceremonyId) =>
+        set((s) => ({ joinedSessions: { ...s.joinedSessions, [sessionId]: ceremonyId } })),
       setActiveDkg: (id, label) =>
         set((s) => {
           if (!id) return { activeDkgId: null };
