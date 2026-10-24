@@ -129,6 +129,37 @@ mod tests {
         FullViewingKey::from(&sk).to_bytes()[..32].try_into().unwrap()
     }
 
+    /// Every group's addresses and viewing key are a function of its `ak`;
+    /// if this derivation ever changed, existing groups would get new addresses
+    /// and lose sight of their funds. Pinned to values computed before the move
+    /// to the Zakura crates.
+    #[test]
+    fn derivation_matches_pinned_vectors() {
+        let ak_hex = "6ebb833c1d2f8433080abceabe47906097f90678d603f577d0486c9111737b07";
+        let ak: [u8; 32] = hex::decode(ak_hex).unwrap().try_into().unwrap();
+        assert_eq!(
+            hex::encode(orchard_fvk_bytes(&ak)),
+            "6ebb833c1d2f8433080abceabe47906097f90678d603f577d0486c9111737b07\
+             2b9bd789f5007ec766361f8bf5e3474b8ceb89a4fbc6aaa803a029cdb4fa8d1b\
+             bb9846b22870731b335ed92afec757ab7e162c68910ea1e26886b5c4a2d7b610"
+        );
+        let keys = derive_orchard_keys(&ak, NetworkType::Main).unwrap();
+        assert_eq!(
+            keys.ufvk,
+            "uview1jzhdahdgpj8cm5wswuwvecs9ptezl7kg8vepqpftpjhr8ezd833rmgsxas2dv8un02xz296ektsn8j7\
+             ptkdvjg2yslz60nka99dm8nqjhk0u4kfpuu408mn6h7svhgg27q0lucf2p7ly36qdm6u2mq6wc89dafyr7yfj\
+             ekwtwc2wxr2lu0v3fag8t86gh"
+        );
+        assert_eq!(
+            keys.address,
+            "u1khfqtdrsta94r50r4k7g0spey5660e63z3g9eg6hzg7psupanek7gxmje4ql6tv8g4vy60wht0pp74qysyfvqgdypk3y5dc8hum6n2fs"
+        );
+        assert_eq!(
+            derive_orchard_address_at(ak_hex, NetworkType::Main, 5).unwrap(),
+            "u1284pcgye3x0utzpmy4yz0a86gp3hxxuhkk8my7z8cp0dwkxgc5wyrmt96hrtwfgwyal54pzw9kld9lyy9rfjs5y8hu3zuue2mc6myvdw"
+        );
+    }
+
     #[test]
     fn derives_stable_address_and_ufvk() {
         let ak = sample_ak();

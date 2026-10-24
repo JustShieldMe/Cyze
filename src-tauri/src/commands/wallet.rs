@@ -389,6 +389,33 @@ pub(crate) async fn init_account(
     Ok(scan_from)
 }
 
+/// How far before its old start a wallet rebuilt after a deep reorg rescans.
+/// Reorgs are a few blocks deep in practice; a thousand scan in about a second.
+const REORG_REBUILD_MARGIN: u64 = 1_000;
+
+/// Recover from a reorg below a wallet's start (`CoreError::Reorg`): delete
+/// its database and move its recorded start height back, so the next setup
+/// rescans from before the fork. Nothing is lost: the funds are on-chain.
+pub(crate) async fn rebuild_after_reorg(state: &AppState, group_id: &str) -> AppResult<()> {
+    let (network, _url, _ufvk) = group_wallet_ctx(state, group_id).await?;
+    let key = crate::state::wallet_session_key(group_id, network.dir_name());
+    // A devnet always rescans its whole chain, so it only needs the delete.
+    if !matches!(network, WalletNetwork::Regtest(_)) {
+        let db_key = state.wallet_db_key(group_id).await?;
+        let from_db = wallet::wallet_start_height(&state.data_dir, group_id, network, db_key.as_ref())?;
+        let mut settings = state.load_settings();
+        let recorded = settings.network_birthdays.get(&key).or(settings.wallet_birthdays.get(group_id)).copied();
+        let start = [from_db, recorded].into_iter().flatten().min();
+        if let Some(start) = start {
+            settings.network_birthdays.insert(key.clone(), start.saturating_sub(REORG_REBUILD_MARGIN));
+            state.save_settings(&settings)?;
+        }
+    }
+    wallet::delete_wallet_db(&state.data_dir, group_id, network)?;
+    state.subtree_roots_fetched.lock().await.remove(&key);
+    Ok(())
+}
+
 pub(crate) fn unix_now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

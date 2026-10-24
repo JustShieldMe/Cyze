@@ -11,7 +11,7 @@ mod common;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use common::{make_user, start_server, wait_for_group, UserApp};
+use common::{dkg, pair, start_server, UserApp};
 use frost_app_lib::commands;
 use frost_app_lib::state::AppState;
 use serde_json::Value;
@@ -76,40 +76,15 @@ async fn wallet_keys_never_sign_unverifiable_requests_by_default() {
         eprintln!("skipping: sidecar frostd binary not built (run scripts/build-sidecar.sh)");
         return;
     };
-    let server_url = format!("127.0.0.1:{}", server.port);
-    let (alice, bob) = (make_user(), make_user());
-    let (alice_state, bob_state) = (alice.app.state::<AppState>(), bob.app.state::<AppState>());
-
-    commands::keystore::create_keystore(alice_state.clone(), "alice-passphrase".into()).await.unwrap();
-    commands::keystore::create_keystore(bob_state.clone(), "bob-passphrase".into()).await.unwrap();
-    let alice_contact = commands::contacts::export_my_contact(alice_state.clone(), "alice".into()).await.unwrap();
-    let bob_contact = commands::contacts::export_my_contact(bob_state.clone(), "bob".into()).await.unwrap();
-    commands::contacts::add_contact(alice_state.clone(), bob_contact.text.clone(), None).await.unwrap();
-    commands::contacts::add_contact(bob_state.clone(), alice_contact.text.clone(), None).await.unwrap();
-    for state in [&alice_state, &bob_state] {
-        commands::server::set_server_url((*state).clone(), server_url.clone()).await.unwrap();
-        commands::server::trust_server_cert((*state).clone(), server_url.clone(), server.cert_pem.clone())
-            .await
-            .unwrap();
-    }
-    let dkg = |pubkeys: Vec<String>| commands::dkg::StartDkgArgs {
-        suite: frost_app_core::ciphersuite::Suite::RedPallas,
-        description: "gate test".into(),
-        threshold: 2,
-        participants: pubkeys,
-        server_url: Some(server_url.clone()),
-        session_id: None,
-    };
-    commands::dkg::start_dkg(alice.app.handle().clone(), dkg(vec![bob_contact.pubkey.clone()])).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(1500)).await;
-    commands::dkg::start_dkg(bob.app.handle().clone(), dkg(vec![])).await.unwrap();
-    let group_id = wait_for_group(&alice_state).await;
-    wait_for_group(&bob_state).await;
-    let signers = vec![alice_contact.pubkey.clone(), bob_contact.pubkey.clone()];
-    let bob_events = record(&bob, &["signing:progress", "signing:failed", "signing:complete"]);
+    let p = pair(&server).await;
+    let group_id = dkg(&p, frost_app_core::ciphersuite::Suite::RedPallas).await;
+    let (alice, bob, server_url) = (&p.alice, &p.bob, p.server_url.clone());
+    let bob_state = bob.app.state::<AppState>();
+    let signers = vec![p.alice_pubkey.clone(), p.bob_pubkey.clone()];
+    let bob_events = record(bob, &["signing:progress", "signing:failed", "signing:complete"]);
 
     // 1. Default settings: refused automatically, and nothing to approve.
-    let ceremony = raw_request(&alice, &bob, &group_id, &server_url, signers.clone()).await;
+    let ceremony = raw_request(alice, bob, &group_id, &server_url, signers.clone()).await;
     let id = ceremony.to_string();
     let gated = wait_for(&bob_events, "the gate's decision", |n, v| {
         n == "signing:progress" && v["ceremony_id"] == id.as_str() && v["event"]["phase"] == "awaiting_approval"
@@ -130,8 +105,8 @@ async fn wallet_keys_never_sign_unverifiable_requests_by_default() {
     // 2. With advanced options on, the raw request reaches the signer, marked
     //    unverified, and their approval produces the signature.
     commands::server::set_advanced_mode(bob_state.clone(), true).await.unwrap();
-    let alice_events = record(&alice, &["signing:complete"]);
-    let ceremony = raw_request(&alice, &bob, &group_id, &server_url, signers).await;
+    let alice_events = record(alice, &["signing:complete"]);
+    let ceremony = raw_request(alice, bob, &group_id, &server_url, signers).await;
     let id = ceremony.to_string();
     let gated = wait_for(&bob_events, "the raw request", |n, v| {
         n == "signing:progress" && v["ceremony_id"] == id.as_str() && v["event"]["phase"] == "awaiting_approval"

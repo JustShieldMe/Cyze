@@ -425,10 +425,9 @@ function DevnetPanel({
       {!devnetCanSend(effectiveUpgrade) && (
         <div className="callout warn" style={{ marginTop: 4 }}>
           <span>
-            <strong>Sends probably won't work on {upgradeLabel(effectiveUpgrade)}.</strong> Cyze
-            can only build Orchard proofs with the NU6.2+ circuit, and a node on an earlier upgrade
-            will likely reject them. Syncing, receiving, and balances work normally. To test
-            sends, run a devnet that activates NU6.2 or NU6.3.
+            <strong>Sending needs NU6.3; this devnet runs {upgradeLabel(effectiveUpgrade)}.</strong>{" "}
+            Cyze builds only NU6.3 (Ironwood) transactions. Syncing, receiving, and balances
+            work normally. To test sends, run a devnet that activates NU6.3.
           </span>
         </div>
       )}

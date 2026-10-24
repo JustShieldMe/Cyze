@@ -12,8 +12,8 @@ authorize any spend.
 > ### ⚠️ Beta software — unaudited — use at your own risk
 >
 > Cyze is in **beta** and has **not been security-audited**. It targets the
-> **Ironwood (NU6.3)** network upgrade and depends on some release-candidate
-> Zcash libraries (`zcash_client_backend`/`zcash_client_sqlite`). Do not use it
+> **Ironwood (NU6.3)** network upgrade and runs on the **Zakura** Zcash crates,
+> whose wallet libraries are still release candidates. Do not use it
 > to hold funds you cannot afford to lose. You are solely responsible for backing
 > up your key shares and recovery code, and for any transaction you broadcast.
 > **No warranty is provided.** Start on testnet, and if you use mainnet, use
