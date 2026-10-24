@@ -18,6 +18,8 @@ use zcash_protocol::local_consensus::LocalNetwork;
 
 use crate::error::CoreError;
 
+pub mod verify;
+
 /// Which Zcash network the wallet operates on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -47,14 +49,17 @@ pub enum RegtestUpgrade {
     Nu6_2,
     /// NU6.3 — Ironwood.
     Nu6_3,
+    /// NU7 — what thus-spoke-zakura 0.4 starts new chains at.
+    Nu7,
 }
 
 impl RegtestUpgrade {
-    pub const ALL: [RegtestUpgrade; 4] = [
+    pub const ALL: [RegtestUpgrade; 5] = [
         RegtestUpgrade::Nu6,
         RegtestUpgrade::Nu6_1,
         RegtestUpgrade::Nu6_2,
         RegtestUpgrade::Nu6_3,
+        RegtestUpgrade::Nu7,
     ];
 
     /// The settings/IPC spelling (`nu6`, `nu6_1`, …).
@@ -64,6 +69,18 @@ impl RegtestUpgrade {
             RegtestUpgrade::Nu6_1 => "nu6_1",
             RegtestUpgrade::Nu6_2 => "nu6_2",
             RegtestUpgrade::Nu6_3 => "nu6_3",
+            RegtestUpgrade::Nu7 => "nu7",
+        }
+    }
+
+    fn branch_id(self) -> zcash_protocol::consensus::BranchId {
+        use zcash_protocol::consensus::BranchId;
+        match self {
+            RegtestUpgrade::Nu6 => BranchId::Nu6,
+            RegtestUpgrade::Nu6_1 => BranchId::Nu6_1,
+            RegtestUpgrade::Nu6_2 => BranchId::Nu6_2,
+            RegtestUpgrade::Nu6_3 => BranchId::Nu6_3,
+            RegtestUpgrade::Nu7 => BranchId::Nu7,
         }
     }
 
@@ -75,13 +92,8 @@ impl RegtestUpgrade {
     /// in [`LightwalletdInfo::consensus_branch_id`]). `None` for a branch older
     /// than NU6 or one this build doesn't know.
     pub fn from_branch_id(branch_hex: &str) -> Option<Self> {
-        match branch_hex.trim().to_ascii_lowercase().as_str() {
-            "c8e71055" => Some(RegtestUpgrade::Nu6),
-            "4dec4df0" => Some(RegtestUpgrade::Nu6_1),
-            "5437f330" => Some(RegtestUpgrade::Nu6_2),
-            NU6_3_BRANCH_ID => Some(RegtestUpgrade::Nu6_3),
-            _ => None,
-        }
+        let wanted = branch_hex.trim().to_ascii_lowercase();
+        Self::ALL.into_iter().find(|u| format!("{:08x}", u32::from(u.branch_id())) == wanted)
     }
 
     /// Regtest consensus parameters: every upgrade up to and including this one
@@ -100,8 +112,7 @@ impl RegtestUpgrade {
             nu6_1: upto(RegtestUpgrade::Nu6_1),
             nu6_2: upto(RegtestUpgrade::Nu6_2),
             nu6_3: upto(RegtestUpgrade::Nu6_3),
-            #[cfg(zcash_unstable = "nu7")]
-            nu7: None,
+            nu7: upto(RegtestUpgrade::Nu7),
         }
     }
 }
@@ -234,34 +245,50 @@ pub fn branch_id_for_height(network: WalletNetwork, height: u64) -> String {
 }
 
 /// The NU6.3 / Ironwood consensus branch id (little-endian u32, printed as
-/// 8-digit hex). Orchard actions mined under this upgrade prove against the
-/// `PostNu6_3` circuit (the fixed circuit plus the `disableCrossAddress`
-/// constraint). Activated on testnet at 4,134,000 and on mainnet at 3,428,143
-/// (see `zcash_protocol` activation tables), so both live networks are past it.
+/// 8-digit hex).
+#[cfg(test)]
 const NU6_3_BRANCH_ID: &str = "37a5165b";
 
 /// The Orchard proving/verifying circuit version to use for a transaction mined
-/// at `height` on `network`. This MUST match the consensus branch active at that
-/// height, or the proof is rejected by the network:
+/// at `height` on `network`. This MUST match the circuit consensus requires at
+/// that height, or the proof is rejected by the network:
 ///
-/// - Post-NU6.3 (Ironwood; both testnet and mainnet are past it) → `PostNu6_3`.
-/// - Post-NU6.2 but pre-NU6.3 → `FixedPostNu6_2`.
+/// - From NU6.3 (Ironwood) on, NU7 included → `PostNu6_3`. Both live networks
+///   are past NU6.3 (testnet 4,134,000; mainnet 3,428,143).
+/// - Before NU6.3 → `FixedPostNu6_2`, which can verify but no longer prove.
 ///
-/// Deriving it from the live branch id — rather than hardcoding one network's
-/// value — is what lets the same build produce valid transactions on both
-/// networks, each picking the circuit for the upgrade active at that height.
-/// `FixedPostNu6_2` is the pre-Ironwood floor; the historical `InsecurePreNu6_2`
-/// circuit is never used for new sends.
+/// Decided by whether NU6.3 is active, not by matching its branch id: from
+/// NU7 the branch changes but the circuit doesn't.
 #[cfg(feature = "wallet")]
 fn orchard_circuit_version_for_height(
     network: WalletNetwork,
     height: u64,
 ) -> orchard::circuit::OrchardCircuitVersion {
     use orchard::circuit::OrchardCircuitVersion;
-    if branch_id_for_height(network, height) == NU6_3_BRANCH_ID {
+    use zcash_protocol::consensus::{BlockHeight, NetworkUpgrade, Parameters};
+    if network.params().is_nu_active(NetworkUpgrade::Nu6_3, BlockHeight::from_u32(height as u32)) {
         OrchardCircuitVersion::PostNu6_3
     } else {
         OrchardCircuitVersion::FixedPostNu6_2
+    }
+}
+
+/// The height `secs` seconds of block production before `tip`: 75-second
+/// blocks before NU7 activates and 25-second blocks from it (ZIP 218).
+pub fn height_before(network: WalletNetwork, tip: u64, secs: u64) -> u64 {
+    use zcash_protocol::consensus::{NetworkUpgrade, Parameters, NU7_POW_TARGET_SPACING_RATIO, SECONDS_PER_BLOCK};
+    let before_nu7 = u64::from(SECONDS_PER_BLOCK);
+    let from_nu7 = before_nu7 / u64::from(NU7_POW_TARGET_SPACING_RATIO);
+    match network.params().activation_height(NetworkUpgrade::Nu7).map(u64::from) {
+        Some(nu7) if tip > nu7 => {
+            let covered = (tip - nu7) * from_nu7;
+            if secs <= covered {
+                tip - secs / from_nu7
+            } else {
+                nu7.saturating_sub((secs - covered) / before_nu7)
+            }
+        }
+        _ => tip.saturating_sub(secs / before_nu7),
     }
 }
 
@@ -369,6 +396,20 @@ impl Lightwalletd {
     pub fn url(&self) -> &str {
         &self.url
     }
+
+    /// The server's current chain tip height. One small RPC, so a caught-up
+    /// wallet can check for new blocks without running a sync.
+    pub async fn latest_height(&self) -> Result<u64, CoreError> {
+        let mut client = self.client.clone();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            client.get_latest_block(ChainSpec::default()),
+        )
+        .await
+        .map_err(|_| CoreError::Connection("get_latest_block timed out".into()))?
+        .map(|r| r.into_inner().height)
+        .map_err(|e| CoreError::Connection(format!("get_latest_block: {e}")))
+    }
 }
 
 /// Fetch chain info from a lightwalletd endpoint — used to verify reachability
@@ -396,14 +437,24 @@ pub async fn lightwalletd_info(url: &str) -> Result<LightwalletdInfo, CoreError>
 // Per-group wallet: sqlite-backed account, sync, and balance.
 //
 // Each FROST group is one view-only Orchard account, stored in its own sqlite
-// wallet under `<data_dir>/wallets/<group_id>/`. The group's UFVK (derived from
-// its `ak`) is imported as a watch-only account; sync trial-decrypts compact
-// blocks locally; balance is read from the wallet db.
+// wallet under `<data_dir>/wallets/<wallet_id>/`. The caller picks `wallet_id`;
+// the app uses an opaque id rather than the group id, which is enough to view
+// the wallet. The group's UFVK (derived from its `ak`) is imported as a
+// watch-only account; sync trial-decrypts compact blocks locally; balance is
+// read from the wallet db.
 // ---------------------------------------------------------------------------
 
 use std::path::{Path, PathBuf};
 
-use rand::rngs::OsRng;
+/// The randomness source wallet databases use: the OS generator, in the
+/// `rand` 0.10 traits the Zakura wallet crates expect. An OS RNG failure is
+/// practically impossible and unrecoverable, so it panics rather than adding
+/// an error path to every database call.
+type WalletRng = rand10::rand_core::UnwrapErr<rand10::rngs::SysRng>;
+
+fn wallet_rng() -> WalletRng {
+    rand10::rand_core::UnwrapErr(rand10::rngs::SysRng)
+}
 use zcash_client_backend::data_api::chain::error::Error as ChainError;
 use zcash_client_backend::data_api::chain::{
     BlockSource, ChainState, CommitmentTreeRoot,
@@ -425,31 +476,49 @@ use zcash_client_sqlite::WalletDb;
 use zcash_keys::keys::UnifiedFullViewingKey;
 use zcash_protocol::memo::{Memo, MemoBytes};
 
-type GroupDb = WalletDb<rusqlite::Connection, WalletParams, SystemClock, OsRng>;
+type GroupDb = WalletDb<rusqlite::Connection, WalletParams, SystemClock, WalletRng>;
 
-/// `(wallet.sqlite path, fsblockdb dir)` for a group on a given network.
-/// Scoped by network (`.../<group_id>/<network>/...`) so testnet and mainnet
-/// each keep their own db, blocks cache, and balance — they never share state.
-fn wallet_paths(data_dir: &Path, group_id: &str, network: WalletNetwork) -> (PathBuf, PathBuf) {
-    let base = data_dir
+/// The wallet database file. `-v2` is the Zakura-stack database. Earlier
+/// versions kept `wallet.sqlite`, built by upstream `zcash_client_sqlite`,
+/// whose schema the Zakura fork doesn't promise to migrate, plus a `blocks`
+/// cache the in-memory sync no longer uses. A wallet database is a rebuildable
+/// cache of the chain, so those are deleted ([`remove_legacy_wallet`]) and the
+/// wallet resyncs from its recorded start height.
+const WALLET_DB: &str = "wallet-v2.sqlite";
+
+/// The wallet database for a group on a given network. Scoped by network
+/// (`.../<wallet_id>/<network>/...`) so testnet and mainnet each keep their own
+/// db and balance and never share state.
+fn wallet_db_path(data_dir: &Path, wallet_id: &str, network: WalletNetwork) -> PathBuf {
+    data_dir
         .join("wallets")
-        .join(group_id)
-        .join(network.dir_name());
-    (base.join("wallet.sqlite"), base.join("blocks"))
+        .join(wallet_id)
+        .join(network.dir_name())
+        .join(WALLET_DB)
 }
+
+/// Delete what earlier versions kept in a wallet directory (see [`WALLET_DB`]).
+fn remove_legacy_wallet(dir: &Path) {
+    for name in ["wallet.sqlite", "wallet.sqlite-wal", "wallet.sqlite-shm", "wallet.sqlite.enc-tmp"] {
+        let _ = std::fs::remove_file(dir.join(name));
+    }
+    let _ = std::fs::remove_dir_all(dir.join("blocks"));
+}
+
+const PENDING_TX_LABEL: &[u8] = b"cyze-pending-tx-v1";
 
 /// Path of the on-disk record for a fully-signed transaction awaiting broadcast.
 /// Keeping the signed PCZT lets a failed broadcast be retried without repeating
-/// the whole FROST signing ceremony. Network-scoped like [`wallet_paths`].
+/// the whole FROST signing ceremony. Network-scoped like [`wallet_db_path`].
 fn pending_tx_path(
     data_dir: &Path,
-    group_id: &str,
+    wallet_id: &str,
     network: WalletNetwork,
     ceremony_id: &str,
 ) -> PathBuf {
     data_dir
         .join("wallets")
-        .join(group_id)
+        .join(wallet_id)
         .join(network.dir_name())
         .join("pending")
         .join(format!("{ceremony_id}.pczt.hex"))
@@ -458,17 +527,20 @@ fn pending_tx_path(
 /// Persist a signed-but-not-broadcast PCZT so it can be re-broadcast later.
 pub fn save_pending_tx(
     data_dir: &Path,
-    group_id: &str,
+    wallet_id: &str,
     network: WalletNetwork,
     ceremony_id: &str,
     signed_pczt_hex: &str,
+    key: &[u8; 32],
 ) -> Result<PathBuf, CoreError> {
-    let path = pending_tx_path(data_dir, group_id, network, ceremony_id);
+    let path = pending_tx_path(data_dir, wallet_id, network, ceremony_id);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
         let _ = crate::keystore::restrict_dir_to_owner(parent);
     }
-    std::fs::write(&path, signed_pczt_hex.as_bytes())?;
+    // Encrypted: the PCZT names the recipient and amount for signers to verify.
+    let sealed = crate::sealed::seal(key, PENDING_TX_LABEL, signed_pczt_hex.as_bytes())?;
+    crate::keystore::write_atomic(&path, &sealed)?;
     let _ = crate::keystore::restrict_to_owner(&path);
     Ok(path)
 }
@@ -476,20 +548,28 @@ pub fn save_pending_tx(
 /// Load a previously-saved signed PCZT for re-broadcast.
 pub fn load_pending_tx(
     data_dir: &Path,
-    group_id: &str,
+    wallet_id: &str,
     network: WalletNetwork,
     ceremony_id: &str,
+    key: &[u8; 32],
 ) -> Result<String, CoreError> {
-    let path = pending_tx_path(data_dir, group_id, network, ceremony_id);
-    let hex = std::fs::read_to_string(&path).map_err(|e| {
+    let path = pending_tx_path(data_dir, wallet_id, network, ceremony_id);
+    let bytes = std::fs::read(&path).map_err(|e| {
         CoreError::Config(format!("no pending transaction for {ceremony_id}: {e}"))
     })?;
+    let plain = match crate::sealed::open(key, PENDING_TX_LABEL, &bytes) {
+        Ok(plain) => plain.to_vec(),
+        // Saved by an earlier version, unencrypted.
+        Err(_) if bytes.iter().all(|b| b.is_ascii_hexdigit() || b.is_ascii_whitespace()) => bytes,
+        Err(e) => return Err(e),
+    };
+    let hex = String::from_utf8(plain).map_err(|e| CoreError::Config(format!("pending transaction: {e}")))?;
     Ok(hex.trim().to_string())
 }
 
 /// Remove a pending transaction record once it has been broadcast.
-pub fn clear_pending_tx(data_dir: &Path, group_id: &str, network: WalletNetwork, ceremony_id: &str) {
-    let path = pending_tx_path(data_dir, group_id, network, ceremony_id);
+pub fn clear_pending_tx(data_dir: &Path, wallet_id: &str, network: WalletNetwork, ceremony_id: &str) {
+    let path = pending_tx_path(data_dir, wallet_id, network, ceremony_id);
     let _ = std::fs::remove_file(path);
 }
 
@@ -536,8 +616,7 @@ fn set_wal_mode(conn: &rusqlite::Connection) -> Result<(), CoreError> {
 }
 
 /// Open a connection used only for reads (balances, notes, history, scan
-/// progress), unlocking it with the SQLCipher key when the file is encrypted. A
-/// pre-encryption plaintext db (not yet migrated by [`open_db`]) is read as-is.
+/// progress), unlocked with the SQLCipher key.
 ///
 /// Read-only by *convention*, not by open flag: this deliberately does NOT pass
 /// `SQLITE_OPEN_READ_ONLY`. Under WAL (see [`set_wal_mode`]) a reader needs the
@@ -550,7 +629,6 @@ fn open_readonly_connection(
     db_path: &Path,
     db_key: &[u8],
 ) -> Result<rusqlite::Connection, CoreError> {
-    let plaintext = is_plaintext_sqlite(db_path)?;
     let conn = rusqlite::Connection::open_with_flags(
         db_path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -558,10 +636,8 @@ fn open_readonly_connection(
     .map_err(|e| CoreError::Crypto(format!("open wallet db: {e}")))?;
     conn.busy_timeout(DB_BUSY_TIMEOUT)
         .map_err(|e| CoreError::Crypto(format!("set busy timeout: {e}")))?;
-    if !plaintext {
-        conn.execute_batch(&key_pragma(db_key))
-            .map_err(|e| CoreError::Crypto(format!("unlock wallet db: {e}")))?;
-    }
+    conn.execute_batch(&key_pragma(db_key))
+        .map_err(|e| CoreError::Crypto(format!("unlock wallet db: {e}")))?;
     // Same `WHERE x IN rarray(?)` support the writable connection registers;
     // zcash_client_sqlite's read queries rely on it too.
     rusqlite::vtab::array::load_module(&conn)
@@ -578,16 +654,16 @@ fn open_readonly_connection(
 /// here advances during a sync that would otherwise look frozen.
 pub fn sync_progress(
     data_dir: &Path,
-    group_id: &str,
+    wallet_id: &str,
     network: WalletNetwork,
     db_key: &[u8],
 ) -> Result<(u64, u64), CoreError> {
-    let (db_path, _) = wallet_paths(data_dir, group_id, network);
+    let db_path = wallet_db_path(data_dir, wallet_id, network);
     if !db_path.exists() {
         return Ok((0, 0));
     }
     let conn = open_readonly_connection(&db_path, db_key)?;
-    let db = WalletDb::from_connection(&conn, network.params(), SystemClock, OsRng);
+    let db = WalletDb::from_connection(&conn, network.params(), SystemClock, wallet_rng());
     let summary = db
         .get_wallet_summary(ConfirmationsPolicy::default())
         .map_err(|e| CoreError::Crypto(format!("wallet summary: {e}")))?;
@@ -626,55 +702,16 @@ fn open_keyed_connection(
     Ok(conn)
 }
 
-/// True when the file begins with the standard plaintext SQLite header, i.e. it
-/// is an unencrypted database (an encrypted SQLCipher file has no such header).
-fn is_plaintext_sqlite(db_path: &Path) -> Result<bool, CoreError> {
-    use std::io::Read;
-    let mut f = std::fs::File::open(db_path)?;
-    let mut magic = [0u8; 16];
-    match f.read(&mut magic) {
-        Ok(16) => Ok(&magic == b"SQLite format 3\0"),
-        _ => Ok(false),
-    }
-}
-
-/// One-time migration of a legacy plaintext wallet database to an encrypted
-/// SQLCipher database keyed by `db_key`, preserving all data. Exports the
-/// plaintext db into an attached encrypted copy, then atomically replaces the
-/// original. See <https://www.zetetic.net/sqlcipher/sqlcipher-api/#sqlcipher_export>.
-fn migrate_plaintext_to_encrypted(db_path: &Path, db_key: &[u8]) -> Result<(), CoreError> {
-    let tmp = db_path.with_extension("sqlite.enc-tmp");
-    let _ = std::fs::remove_file(&tmp);
-    let conn = rusqlite::Connection::open(db_path)
-        .map_err(|e| CoreError::Crypto(format!("open plaintext wallet db: {e}")))?;
-    conn.execute_batch(&format!(
-        "ATTACH DATABASE '{}' AS encrypted KEY \"x'{}'\";\
-         SELECT sqlcipher_export('encrypted');\
-         DETACH DATABASE encrypted;",
-        tmp.to_string_lossy().replace('\'', "''"),
-        hex::encode(db_key),
-    ))
-    .map_err(|e| CoreError::Crypto(format!("encrypt wallet db: {e}")))?;
-    drop(conn);
-    std::fs::rename(&tmp, db_path)?;
-    let _ = crate::keystore::restrict_to_owner(db_path);
-    Ok(())
-}
-
 fn open_db(db_path: &Path, network: WalletNetwork, db_key: &[u8]) -> Result<GroupDb, CoreError> {
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent)?;
         // The wallet db holds the group's UFVK and transaction history, so lock
         // the directory to the owner as defence in depth alongside encryption.
         let _ = crate::keystore::restrict_dir_to_owner(parent);
-    }
-    // Transparently upgrade a pre-encryption plaintext db to SQLCipher so no
-    // history is lost when this version is first run.
-    if db_path.exists() && is_plaintext_sqlite(db_path)? {
-        migrate_plaintext_to_encrypted(db_path, db_key)?;
+        remove_legacy_wallet(parent);
     }
     let conn = open_keyed_connection(db_path, db_key)?;
-    let mut db = WalletDb::from_connection(conn, network.params(), SystemClock, OsRng);
+    let mut db = WalletDb::from_connection(conn, network.params(), SystemClock, wallet_rng());
     init_wallet_db(&mut db, None)
         .map_err(|e| CoreError::Crypto(format!("init wallet db: {e}")))?;
     // Restrict the sqlite file itself to owner-only.
@@ -696,7 +733,7 @@ fn open_db(db_path: &Path, network: WalletNetwork, db_key: &[u8]) -> Result<Grou
 /// SELECT under WAL takes only a shared lock and cannot block the writer.
 fn open_db_read(db_path: &Path, network: WalletNetwork, db_key: &[u8]) -> Result<GroupDb, CoreError> {
     let conn = open_keyed_connection(db_path, db_key)?;
-    Ok(WalletDb::from_connection(conn, network.params(), SystemClock, OsRng))
+    Ok(WalletDb::from_connection(conn, network.params(), SystemClock, wallet_rng()))
 }
 
 /// A single shielded/transparent pool's balance, broken into spendable now,
@@ -740,12 +777,12 @@ pub struct WalletStatus {
 /// Read a group's wallet status from its local db (no network).
 pub fn group_status(
     data_dir: &Path,
-    group_id: &str,
+    wallet_id: &str,
     network: WalletNetwork,
     ufvk: &str,
     db_key: &[u8],
 ) -> Result<WalletStatus, CoreError> {
-    let (db_path, _) = wallet_paths(data_dir, group_id, network);
+    let db_path = wallet_db_path(data_dir, wallet_id, network);
     let address = ufvk_default_address(network, ufvk).ok();
     if !db_path.exists() {
         return Ok(WalletStatus {
@@ -926,7 +963,7 @@ fn resolve_scan_from(requested: Option<u64>, nu5: u64, tip: u64) -> u64 {
 /// birthday above the tip has no treestate to anchor to.
 pub async fn init_group_account(
     data_dir: &Path,
-    group_id: &str,
+    wallet_id: &str,
     network: WalletNetwork,
     ufvk_str: &str,
     lightwalletd_url: &str,
@@ -935,8 +972,8 @@ pub async fn init_group_account(
 ) -> Result<u64, CoreError> {
     use zcash_protocol::consensus::{NetworkUpgrade, Parameters};
 
-    let tag = crate::redact::log_tag(group_id);
-    let (db_path, _) = wallet_paths(data_dir, group_id, network);
+    let tag = crate::redact::log_tag(wallet_id);
+    let db_path = wallet_db_path(data_dir, wallet_id, network);
     let mut db = open_db(&db_path, network, db_key)?;
     if !db
         .get_account_ids()
@@ -1005,7 +1042,7 @@ pub async fn init_group_account(
     let birthday = AccountBirthday::from_treestate(treestate, None)
         .map_err(|_| CoreError::Crypto("could not derive account birthday from treestate".into()))?;
 
-    db.import_account_ufvk(group_id, &ufvk, &birthday, AccountPurpose::ViewOnly, None)
+    db.import_account_ufvk(wallet_id, &ufvk, &birthday, AccountPurpose::ViewOnly, None)
         .map_err(|e| CoreError::Crypto(format!("import account: {e}")))?;
     tracing::info!(group = %tag, scan_from, "wallet setup: view-only account imported; will scan from this height");
     Ok(scan_from)
@@ -1084,7 +1121,7 @@ fn elapsed_ms(since: std::time::Instant) -> u64 {
 /// network to the scanner (no on-disk block cache).
 pub async fn sync_group(
     data_dir: &Path,
-    group_id: &str,
+    wallet_id: &str,
     network: WalletNetwork,
     lightwalletd: &Lightwalletd,
     db_key: &[u8],
@@ -1096,7 +1133,7 @@ pub async fn sync_group(
         .batch_size
         .unwrap_or(DEFAULT_SYNC_BATCH_SIZE)
         .clamp(MIN_SYNC_BATCH_SIZE, MAX_SYNC_BATCH_SIZE);
-    let (db_path, _) = wallet_paths(data_dir, group_id, network);
+    let db_path = wallet_db_path(data_dir, wallet_id, network);
     let mut db = open_db(&db_path, network, db_key)?;
 
     let mut client = lightwalletd.client.clone();
@@ -1515,8 +1552,7 @@ fn scan_batch(
                 err.at_height(),
                 rewind_height
             );
-            db.truncate_to_height(rewind_height)
-                .map_err(|e| CoreError::Crypto(format!("truncate on reorg: {e}")))?;
+            rewind_on_reorg(db, err.at_height(), rewind_height)?;
             Ok(true)
         }
         Ok(_) => {
@@ -1532,6 +1568,80 @@ fn scan_batch(
         }
         Err(e) => Err(CoreError::Crypto(format!("scan: {e}"))),
     }
+}
+
+/// Rewind the wallet after a reorg detected at `at_height` (the first block
+/// that didn't connect), preferably to `target` (a few blocks of slack below).
+///
+/// A rewind can only land on a tree checkpoint. A wallet keeps checkpoints
+/// only from its start height on, and when a new wallet catches up it scans
+/// the tip first and the blocks behind it afterwards, without checkpoints. So
+/// near a wallet's start the backend refuses rewinds. Then try the smallest
+/// rewind that still drops the block that didn't connect (`at_height - 2`): if
+/// the fork goes deeper, the next scan finds the next mismatch lower down and
+/// this steps back again. When even that is refused, the fork is below what
+/// the wallet can rewind: [`CoreError::Reorg`], and the sync service rebuilds
+/// the wallet from an earlier height. (Ported from the fix in 78e361b.)
+fn rewind_on_reorg(db: &mut GroupDb, at_height: BlockHeight, target: BlockHeight) -> Result<(), CoreError> {
+    use zcash_client_sqlite::error::SqliteClientError;
+    let refused = match db.truncate_to_height(target) {
+        Ok(_) => return Ok(()),
+        Err(e @ SqliteClientError::RequestedRewindInvalid { .. }) => e,
+        Err(e) => return Err(CoreError::Reorg(e.to_string())),
+    };
+    let minimal = at_height.saturating_sub(2);
+    if minimal > target {
+        match db.truncate_to_height(minimal) {
+            Ok(actual) => {
+                tracing::info!("reorg: rewound only to {actual}; the wallet can't go back to {target}");
+                return Ok(());
+            }
+            Err(e) => tracing::info!("reorg: can't rewind to {minimal} either: {e}"),
+        }
+    }
+    Err(CoreError::Reorg(refused.to_string()))
+}
+
+/// The height a group's wallet started scanning from (its account birthday),
+/// read from its database. `None` if there is no wallet yet.
+pub fn wallet_start_height(
+    data_dir: &Path,
+    wallet_id: &str,
+    network: WalletNetwork,
+    db_key: &[u8],
+) -> Result<Option<u64>, CoreError> {
+    let db_path = wallet_db_path(data_dir, wallet_id, network);
+    if !db_path.exists() {
+        return Ok(None);
+    }
+    let db = open_db_read(&db_path, network, db_key)?;
+    let Some(account) = db
+        .get_account_ids()
+        .map_err(|e| CoreError::Crypto(format!("wallet accounts: {e}")))?
+        .first()
+        .copied()
+    else {
+        return Ok(None);
+    };
+    let birthday = db
+        .get_account_birthday(account)
+        .map_err(|e| CoreError::Crypto(format!("wallet birthday: {e}")))?;
+    Ok(Some(u64::from(birthday)))
+}
+
+/// Delete a group's wallet database on a network (with its WAL/SHM files) so
+/// the next setup rebuilds it. Pending signed transactions are kept. The wallet
+/// is a cache of the chain: nothing is lost but scanning time.
+pub fn delete_wallet_db(data_dir: &Path, wallet_id: &str, network: WalletNetwork) -> Result<(), CoreError> {
+    let db = wallet_db_path(data_dir, wallet_id, network);
+    for path in [db.clone(), PathBuf::from(format!("{}-wal", db.display())), PathBuf::from(format!("{}-shm", db.display()))] {
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(CoreError::Io(e)),
+        }
+    }
+    Ok(())
 }
 
 /// Download the subtree roots for all three shielded pools and store them, so the
@@ -1758,7 +1868,7 @@ pub struct DraftTransaction {
 #[allow(clippy::too_many_arguments)]
 pub async fn prepare_send(
     data_dir: &Path,
-    group_id: &str,
+    wallet_id: &str,
     network: WalletNetwork,
     recipient: &str,
     amount_zatoshis: u64,
@@ -1770,8 +1880,17 @@ pub async fn prepare_send(
     use zcash_protocol::value::Zatoshis;
     use zcash_protocol::ShieldedPool;
 
+    if let WalletNetwork::Regtest(level) = network {
+        if level < RegtestUpgrade::Nu6_3 {
+            return Err(CoreError::Ceremony(format!(
+                "sending on a local devnet needs NU6.3 (Ironwood), and this devnet runs {}. \
+                 Cyze builds only NU6.3 transactions; syncing and receiving work at any level",
+                level.as_str()
+            )));
+        }
+    }
     let params = network.params();
-    let (db_path, _) = wallet_paths(data_dir, group_id, network);
+    let db_path = wallet_db_path(data_dir, wallet_id, network);
     let mut db = open_db(&db_path, network, db_key)?;
 
     // Anchor the expiry to the live chain tip, not whatever sync last recorded.
@@ -1919,7 +2038,7 @@ pub async fn prepare_send(
 #[allow(clippy::too_many_arguments)]
 pub async fn prepare_vote(
     data_dir: &Path,
-    group_id: &str,
+    wallet_id: &str,
     network: WalletNetwork,
     reception_address: &str,
     ballot_definition: &[u8],
@@ -1937,7 +2056,7 @@ pub async fn prepare_vote(
 
     prepare_send(
         data_dir,
-        group_id,
+        wallet_id,
         network,
         reception_address,
         amount_zatoshis,
@@ -1981,7 +2100,6 @@ fn ensure_caught_up(scanned: u64, tip: u64) -> Result<(), CoreError> {
 /// spend** the turnstile-out construction adds to the Orchard bundle — leaving it
 /// unauthorized and failing extraction with `MissingSpendAuthSig`.
 fn spends_to_sign(pczt: pczt::Pczt) -> Result<Vec<SpendToSign>, CoreError> {
-    use ff::PrimeField;
     use pczt::roles::low_level_signer::{OrchardParseError, Signer};
 
     // Append every not-yet-signed spend of one already-parsed bundle, tagging
@@ -1996,7 +2114,7 @@ fn spends_to_sign(pczt: pczt::Pczt) -> Result<Vec<SpendToSign>, CoreError> {
                     out.push(SpendToSign {
                         pool,
                         index,
-                        alpha_hex: hex::encode(alpha.to_repr()),
+                        alpha_hex: hex::encode(alpha.to_bytes()),
                     });
                 }
             }
@@ -2238,7 +2356,8 @@ pub async fn broadcast_signed(
         // `circuit_version` is chosen from the live chain tip above and captured
         // by this move closure; one proving/verifying key serves both the
         // Orchard and Ironwood bundles, which share that circuit.
-        let pk = ProvingKey::build(circuit_version);
+        let pk = ProvingKey::build(circuit_version)
+            .map_err(|e| CoreError::Ceremony(format!("orchard proving key: {e:?}")))?;
 
         // 1. Zero-knowledge proof for each present bundle.
         let mut prover = Prover::new(pczt);
@@ -2333,11 +2452,11 @@ pub struct TxRecord {
 /// one address across payments.
 pub fn count_received_notes(
     data_dir: &Path,
-    group_id: &str,
+    wallet_id: &str,
     network: WalletNetwork,
     db_key: &[u8],
 ) -> Result<u64, CoreError> {
-    let (db_path, _) = wallet_paths(data_dir, group_id, network);
+    let db_path = wallet_db_path(data_dir, wallet_id, network);
     if !db_path.exists() {
         return Ok(0);
     }
@@ -2379,11 +2498,11 @@ pub struct NoteRecord {
 /// count is also the number of FROST signing rounds a full-balance send needs.
 pub fn wallet_notes(
     data_dir: &Path,
-    group_id: &str,
+    wallet_id: &str,
     network: WalletNetwork,
     db_key: &[u8],
 ) -> Result<Vec<NoteRecord>, CoreError> {
-    let (db_path, _) = wallet_paths(data_dir, group_id, network);
+    let db_path = wallet_db_path(data_dir, wallet_id, network);
     if !db_path.exists() {
         return Ok(vec![]);
     }
@@ -2480,11 +2599,11 @@ pub fn wallet_notes(
 
 pub fn wallet_history(
     data_dir: &Path,
-    group_id: &str,
+    wallet_id: &str,
     network: WalletNetwork,
     db_key: &[u8],
 ) -> Result<Vec<TxRecord>, CoreError> {
-    let (db_path, _) = wallet_paths(data_dir, group_id, network);
+    let db_path = wallet_db_path(data_dir, wallet_id, network);
     if !db_path.exists() {
         return Ok(vec![]);
     }
@@ -2698,6 +2817,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn pending_transactions_are_encrypted_and_older_plaintext_ones_still_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let (key, other) = ([7u8; 32], [8u8; 32]);
+        let path = save_pending_tx(dir.path(), "w1", WalletNetwork::Main, "c1", "deadbeef", &key).unwrap();
+        assert!(!std::fs::read(&path).unwrap().windows(8).any(|w| w == b"deadbeef"));
+        assert_eq!(load_pending_tx(dir.path(), "w1", WalletNetwork::Main, "c1", &key).unwrap(), "deadbeef");
+        assert!(load_pending_tx(dir.path(), "w1", WalletNetwork::Main, "c1", &other).is_err());
+
+        std::fs::write(pending_tx_path(dir.path(), "w1", WalletNetwork::Main, "c2"), "cafe01\n").unwrap();
+        assert_eq!(load_pending_tx(dir.path(), "w1", WalletNetwork::Main, "c2", &key).unwrap(), "cafe01");
+    }
+
+    #[test]
     fn sends_need_a_wallet_scanned_near_the_tip() {
         assert!(ensure_caught_up(1_000, 1_000).is_ok());
         assert!(ensure_caught_up(1_000 - SEND_MAX_SCAN_LAG, 1_000).is_ok());
@@ -2744,6 +2876,7 @@ mod tests {
         assert_eq!(RegtestUpgrade::from_branch_id("4dec4df0"), Some(RegtestUpgrade::Nu6_1));
         assert_eq!(RegtestUpgrade::from_branch_id("5437F330"), Some(RegtestUpgrade::Nu6_2));
         assert_eq!(RegtestUpgrade::from_branch_id(NU6_3_BRANCH_ID), Some(RegtestUpgrade::Nu6_3));
+        assert_eq!(RegtestUpgrade::from_branch_id("77190ad9"), Some(RegtestUpgrade::Nu7));
         // NU5 (and anything unknown) is not a level we model.
         assert_eq!(RegtestUpgrade::from_branch_id("c2d6d0b4"), None);
         assert_eq!(RegtestUpgrade::from_branch_id(""), None);
@@ -2761,6 +2894,7 @@ mod tests {
             (RegtestUpgrade::Nu6_1, "4dec4df0"),
             (RegtestUpgrade::Nu6_2, "5437f330"),
             (RegtestUpgrade::Nu6_3, NU6_3_BRANCH_ID),
+            (RegtestUpgrade::Nu7, "77190ad9"),
         ] {
             let net = WalletNetwork::Regtest(level);
             assert_eq!(branch_id_for_height(net, 500), branch, "{level:?}");
@@ -2770,6 +2904,33 @@ mod tests {
         assert_eq!(nu6.activation_height(NetworkUpgrade::Nu5), Some(BlockHeight::from_u32(1)));
         assert_eq!(nu6.activation_height(NetworkUpgrade::Nu6_1), None);
         assert_eq!(nu6.activation_height(NetworkUpgrade::Nu6_3), None);
+        assert_eq!(RegtestUpgrade::Nu6_3.local_network().activation_height(NetworkUpgrade::Nu7), None);
+    }
+
+    /// NU7 changes the branch id but not the Orchard circuit; picking the
+    /// circuit by branch would have made every proof after mainnet's NU7
+    /// activation (3,543,405) invalid.
+    #[test]
+    fn the_post_ironwood_circuit_is_used_across_nu7() {
+        use orchard::circuit::OrchardCircuitVersion::{FixedPostNu6_2, PostNu6_3};
+        assert_eq!(orchard_circuit_version_for_height(WalletNetwork::Main, 3_428_142), FixedPostNu6_2);
+        assert_eq!(orchard_circuit_version_for_height(WalletNetwork::Main, 3_428_143), PostNu6_3);
+        assert_eq!(orchard_circuit_version_for_height(WalletNetwork::Main, 3_543_405), PostNu6_3);
+        assert_ne!(branch_id_for_height(WalletNetwork::Main, 3_543_405), NU6_3_BRANCH_ID);
+        for level in [RegtestUpgrade::Nu6_3, RegtestUpgrade::Nu7] {
+            assert_eq!(orchard_circuit_version_for_height(WalletNetwork::Regtest(level), 10), PostNu6_3);
+        }
+    }
+
+    #[test]
+    fn heights_from_ages_use_the_block_time_of_each_era() {
+        let nu7 = 3_543_405;
+        // Before NU7: 75-second blocks.
+        assert_eq!(height_before(WalletNetwork::Main, 3_528_000, 75 * 100), 3_527_900);
+        // After it: 25-second blocks, then 75-second ones before activation.
+        assert_eq!(height_before(WalletNetwork::Main, nu7 + 300, 25 * 100), nu7 + 200);
+        assert_eq!(height_before(WalletNetwork::Main, nu7 + 300, 25 * 300 + 75 * 10), nu7 - 10);
+        assert_eq!(height_before(WalletNetwork::Main, 100, u64::MAX / 2), 0);
     }
 
     #[test]
@@ -2878,7 +3039,7 @@ mod tests {
             WalletNetwork::Main,
             WalletNetwork::Regtest(RegtestUpgrade::Nu6),
         ] {
-            let keys = crate::zcash::derive_orchard_keys(&ak, net.network_type()).unwrap();
+            let keys = crate::zcash::derive_orchard_keys(&ak, None, net.network_type()).unwrap();
             let addr = ufvk_default_address(net, &keys.ufvk).unwrap();
             assert_eq!(addr, keys.address, "zcash_keys must agree on {net:?}");
         }

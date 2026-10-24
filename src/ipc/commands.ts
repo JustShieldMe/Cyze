@@ -16,6 +16,10 @@ export interface ContactDto {
   pubkey: string;
   alias: string | null;
   text: string;
+  /** 30 digits to compare with the person out loud. */
+  safety_code: string;
+  /** The user compared the safety code with them. */
+  verified: boolean;
 }
 
 export interface GroupSummary {
@@ -112,6 +116,8 @@ export const generateRecoveryCode = () =>
 export interface Identity {
   username: string | null;
   pubkey: string | null;
+  /** The user's own safety code, to read to the people they add. */
+  safety_code: string | null;
 }
 export const getIdentity = () => invoke<Identity>("get_identity");
 export const setUsername = (username: string) =>
@@ -121,7 +127,7 @@ export const setUsername = (username: string) =>
 /** The Zcash network the wallet runs on. "regtest" is a local devnet. */
 export type WalletNetwork = "main" | "test" | "regtest";
 /** A local devnet's newest active upgrade (all activated from genesis). */
-export type RegtestUpgrade = "nu6" | "nu6_1" | "nu6_2" | "nu6_3";
+export type RegtestUpgrade = "nu6" | "nu6_1" | "nu6_2" | "nu6_3" | "nu7";
 export interface WalletConfig {
   network: WalletNetwork;
   lightwalletd_url: string;
@@ -201,16 +207,25 @@ export const walletInitAccount = (groupId: string, birthdayHeight?: number) =>
     groupId,
     birthdayHeight: birthdayHeight ?? null,
   });
-export const walletSync = (groupId: string) =>
-  invoke<WalletStatus>("wallet_sync", { groupId });
-/** Cancel a group's in-flight sync (if any). The running `walletSync` returns
- *  promptly, freeing the wallet for a fresh sync. No-op if nothing is syncing. */
-export const walletCancelSync = (groupId: string) =>
-  invoke<void>("wallet_cancel_sync", { groupId });
-/** `[fullyScannedHeight, chainTipHeight]`, readable while a sync is running.
- *  `walletSync` blocks for the whole catch-up, so poll this to show progress. */
-export const walletSyncProgress = (groupId: string) =>
-  invoke<[number, number]>("wallet_sync_progress", { groupId });
+/** The background sync service's view of a wallet; also sent as the
+ *  `wallet:sync` event whenever it changes. */
+export interface SyncStatus {
+  group_id: string;
+  state: "setting_up" | "syncing" | "idle" | "error";
+  scanned_height: number;
+  tip_height: number;
+  /** When a sync last completed (epoch ms). */
+  last_synced_ms: number | null;
+  error: string | null;
+  error_code: string | null;
+}
+/** Ask the backend to sync the active wallet now; `restart` abandons a stalled
+ *  sync first. Returns immediately; progress arrives as `wallet:sync` events. */
+export const walletSyncNow = (restart = false) =>
+  invoke<void>("wallet_sync_now", { restart });
+/** The latest sync status for a group, or null before the first report. */
+export const walletSyncStatus = (groupId: string) =>
+  invoke<SyncStatus | null>("wallet_sync_status", { groupId });
 
 export interface TxRecord {
   txid: string;
@@ -355,6 +370,8 @@ export const setContactAlias = (pubkey: string, alias: string) =>
   invoke<void>("set_contact_alias", { pubkey, alias });
 export const exportMyContact = (name: string) =>
   invoke<ContactDto>("export_my_contact", { name });
+export const setContactVerified = (pubkey: string, verified: boolean) =>
+  invoke<void>("set_contact_verified", { pubkey, verified });
 
 // Groups
 export interface OrchardKeys {
@@ -371,6 +388,22 @@ export const renameGroup = (id: string, description: string) =>
 // Server / sidecar
 export const getSettings = () => invoke<Settings>("get_settings");
 export const setServerUrl = (url: string) => invoke<void>("set_server_url", { url });
+/** Whether the keystore has a current backup (see `commands::backup`). */
+export interface BackupStatus {
+  /** When it was last backed up (unix seconds), if ever. */
+  last_backup_at: number | null;
+  /** The last backup holds every group this keystore has. */
+  up_to_date: boolean;
+  /** There is something worth backing up (any group). */
+  has_groups: boolean;
+}
+export const backupStatus = () => invoke<BackupStatus>("backup_status");
+/** Ask where to save a backup (native dialog), then write it. Null if
+ *  cancelled. */
+export const exportBackup = () => invoke<BackupStatus | null>("export_backup");
+/** Ask for a backup file (native dialog) and install it on a device with no
+ *  keystore. False if cancelled. */
+export const restoreBackup = () => invoke<boolean>("restore_backup");
 /** Show or hide advanced options (test networks, diagnostics, Ed25519, raw
  *  signing, voting). */
 export const setAdvancedMode = (enabled: boolean) =>
@@ -426,6 +459,9 @@ export interface StartDkgArgs {
   participants: string[];
   server_url: string | null;
   session_id: string | null;
+  /** Agree on a random viewing key (default). Off only when a member uses the
+   *  upstream command-line tools, which don't take part in that step. */
+  agree_viewing_key?: boolean;
 }
 
 export interface PendingSession {
@@ -453,3 +489,50 @@ export const respondToSigning = (ceremonyId: string, approve: boolean) =>
   invoke<void>("respond_to_signing", { ceremonyId, approve });
 export const listPendingSessions = (serverUrl: string | null) =>
   invoke<PendingSession[]>("list_pending_sessions", { serverUrl });
+
+/** Encrypted UI state (ceremony history). Readable only while unlocked. */
+export const loadUiState = (key: string) => invoke<string | null>("load_ui_state", { key });
+/** Save encrypted UI state; `null` deletes it. */
+export const saveUiState = (key: string, value: string | null) =>
+  invoke<void>("save_ui_state", { key, value });
+
+// Invites (see src-tauri/core/src/invite.rs)
+/** Where a new group's key generation runs: this device's address and the one
+ *  members use. Starts the server and a public link (or Tailscale) as needed. */
+export interface GroupServer {
+  local: string;
+  public: string;
+  via: "tunnel" | "tailscale";
+}
+export const prepareGroupServer = () => invoke<GroupServer>("prepare_group_server");
+export interface CreateInviteArgs {
+  session_id: string;
+  suite: Ciphersuite;
+  threshold: number;
+  name: string;
+  participants: string[];
+  server: string;
+  agree_viewing_key: boolean;
+}
+export const createInvite = (args: CreateInviteArgs) => invoke<string>("create_invite", { args });
+export interface InviteMember {
+  name: string;
+  pubkey: string;
+  status: "you" | "contact" | "new";
+  contact_name: string | null;
+  verified: boolean;
+}
+export interface InviteSummary {
+  name: string;
+  threshold: number;
+  suite: Ciphersuite;
+  server: string;
+  organizer: InviteMember;
+  members: InviteMember[];
+  for_you: boolean;
+  cert_fingerprint: string | null;
+}
+export const readInvite = (code: string) => invoke<InviteSummary>("read_invite", { code });
+/** Join the session an invite describes; returns the ceremony id. */
+export const acceptInvite = (code: string, name: string | null) =>
+  invoke<string>("accept_invite", { code, name });

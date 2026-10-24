@@ -11,6 +11,9 @@ frost-ed25519 = { workspace = true }
 frost-rerandomized = { workspace = true }
 reddsa = { workspace = true }
 reqwest = { workspace = true }
+# Exact-certificate pinning for self-signed frostd servers (transport.rs);
+# the version and ring provider reqwest already uses.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
@@ -38,21 +41,28 @@ xeddsa = "=1.0.2"
 # Optional Zcash key/address derivation. Behind a feature so the heavy
 # orchard/halo2 dependency tree stays out of the default build.
 #
-# IRONWOOD/NU6.3: the zcash_* cohort tracks the PUBLISHED crates.io release wave
-# (no git fork, no [patch.crates-io]). These carry the real NU6.3 branch id
-# (0x37a5165b) and, crucially, Ironwood/V6 PCZT construction
-# (zcash_client_backend 0.24 builds a version-6 tx with an Ironwood bundle from
-# NU6.3 onward). orchard stays on the `unstable-frost` feature Cyze's threshold
-# signing needs. zcash_client_backend/sqlite are release candidates; the rest
-# are stable.
-orchard = { version = "0.15.4", optional = true, features = ["unstable-frost"] }
-zcash_address = { version = "0.13", optional = true }
-pasta_curves = { version = "0.5", optional = true }
-ff = { version = "0.13", optional = true }
+# The Zcash crates come from the Zakura stack (zakura-core/common and
+# zakura-core/wallet-libraries): published forks of the ECC crates, with the
+# upstream library names kept, so `use orchard::…` and friends are unchanged.
+# Its Orchard tree hashing is ~7x faster than upstream's, and tree hashing is
+# ~78% of a sync's scan time (docs/SYNC_OPTIMIZATION.md). Versions are pinned
+# exactly to one consistent family: the stable 4.0 crypto crates with wallet
+# libraries rc9.3 (the newest; they have no stable release yet). Ranges would
+# let cargo mix families, whose types don't interoperate.
+#
+# NU7: 4.0 carries mainnet's NU7 activation (height 3,543,405) and its block
+# spacing, so the wallet keeps building valid transactions across it. The 3.x
+# crates would commit to NU6.3's branch after NU7 and be rejected. orchard keeps the
+# `unstable-frost` feature Cyze's threshold signing needs; `weighted-merkle`
+# is Zakura's fast tree hashing.
+orchard = { package = "zakura-orchard", version = "=4.0.0", optional = true, features = ["unstable-frost", "weighted-merkle"] }
+zcash_address = { package = "zakura-address", version = "=4.0.0", optional = true }
+pasta_curves = { package = "zakura-pasta-curves", version = "=4.0.0", optional = true }
+ff = { version = "0.14", optional = true }
 
 # Wallet/light-client stack (feature `wallet`). Heavy: pulls the zcash
 # light-client backend, lightwalletd gRPC, PCZT builder, and sqlite.
-zcash_client_backend = { version = "=0.24.0-rc.7", optional = true, default-features = false, features = [
+zcash_client_backend = { package = "zakura-client-backend", version = "=0.1.0-rc9.3", optional = true, default-features = false, features = [
     "orchard",
     "sync",
     "lightwalletd-tonic",
@@ -60,12 +70,12 @@ zcash_client_backend = { version = "=0.24.0-rc.7", optional = true, default-feat
     "lightwalletd-tonic-tls-webpki-roots",
     "pczt",
 ] }
-zcash_client_sqlite = { version = "=0.22.0-rc.8", optional = true, features = ["orchard", "transparent-inputs", "unstable", "serde"] }
-pczt = { version = "0.9.1", optional = true, features = ["signer"] }
-zcash_keys = { version = "0.16.1", optional = true, features = ["orchard"] }
+zcash_client_sqlite = { package = "zakura-client-sqlite", version = "=0.1.0-rc9.3", optional = true, features = ["orchard", "transparent-inputs", "unstable", "serde"] }
+pczt = { package = "zakura-pczt", version = "=0.1.0-rc9", optional = true, features = ["signer"] }
+zcash_keys = { package = "zakura-keys", version = "=4.0.0", optional = true, features = ["orchard"] }
 # `local-consensus` exposes `LocalNetwork`, the regtest parameters used for a
 # local devnet (see `WalletNetwork::Regtest`).
-zcash_protocol = { version = "0.10.3", optional = true, features = ["local-consensus"] }
+zcash_protocol = { package = "zakura-protocol", version = "=4.0.0", optional = true, features = ["local-consensus"] }
 tonic = { version = "0.14", optional = true, default-features = false, features = ["transport", "tls-webpki-roots"] }
 # SQLCipher (bundled amalgamation) so the per-group wallet database is encrypted
 # at rest. Feature-unifies with zcash_client_sqlite's `bundled` rusqlite: the
@@ -75,7 +85,13 @@ tonic = { version = "0.14", optional = true, default-features = false, features 
 rusqlite = { version = "0.37", optional = true, features = ["bundled-sqlcipher-vendored-openssl"] }
 prost = { version = "0.14", optional = true }
 async-trait = { version = "0.1", optional = true }
-zcash_primitives = { version = "0.30.0", optional = true }
+zcash_primitives = { package = "zakura-primitives", version = "=4.0.0", optional = true }
+# The `rand` generation the Zakura wallet crates use (WalletDb's RNG).
+rand10 = { package = "rand", version = "0.10", optional = true, default-features = false, features = ["sys_rng"] }
+# Co-signer verification (wallet/verify.rs): memo recovery and transparent
+# recipients.
+zcash_note_encryption = { package = "zakura-note-encryption", version = "=4.0.0", optional = true }
+transparent = { package = "zakura-transparent", version = "=4.0.0", optional = true }
 
 [features]
 # Orchard FVK / unified-address derivation from group key material.
@@ -93,18 +109,19 @@ wallet = [
     "dep:async-trait",
     "dep:zcash_primitives",
     "dep:pczt",
+    "dep:zcash_note_encryption",
+    "dep:transparent",
+    "dep:rand10",
 ]
 
 [dev-dependencies]
 tempfile = "3"
 tracing-subscriber = { workspace = true }
+# Building test PCZTs (wallet/verify.rs); versions match the zcash stack's.
+shardtree = "0.7.1"
+incrementalmerkletree = "0.8.2"
 
 # Times a real wallet sync against lightwalletd; see the file header for usage.
 [[example]]
 name = "sync_bench"
 required-features = ["wallet"]
-
-[lints.rust]
-# `zcash_unstable = "nu7"` is the zcash crates' opt-in for the next upgrade; the
-# regtest `LocalNetwork` literal in wallet.rs must follow it to stay buildable.
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(zcash_unstable, values("nu7", "nutachyon"))'] }

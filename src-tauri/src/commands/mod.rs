@@ -1,7 +1,10 @@
+pub mod backup;
 pub mod contacts;
 pub mod dkg;
 pub mod groups;
+pub mod invite;
 pub mod keystore;
 pub mod server;
 pub mod signing;
+pub mod ui_state;
 pub mod wallet;

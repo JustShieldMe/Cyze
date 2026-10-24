@@ -40,8 +40,9 @@ pub struct Settings {
     /// PEM certs trusted for specific external servers, keyed by `host:port`.
     #[serde(default)]
     pub trusted_certs: HashMap<String, String>,
-    /// Local nicknames/aliases for contacts, keyed by hex comm pubkey.
-    #[serde(default)]
+    /// Legacy: moved to the encrypted private settings (`private.rs`). Read once
+    /// on unlock to migrate, and no longer written here.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub contact_aliases: HashMap<String, String>,
     /// Zcash network for wallet features: "main" (default), "test", or
     /// "regtest" (a local devnet).
@@ -62,18 +63,22 @@ pub struct Settings {
     /// (10 min); `Some(0)` disables auto-lock entirely.
     #[serde(default)]
     pub auto_lock_minutes: Option<u64>,
-    /// Rotating receive-address state per group (keyed by group id). Tracks the
-    /// diversifier index currently handed out and the received-note count when
-    /// it was issued, so the address rotates once it has plausibly been used.
-    #[serde(default)]
+    /// Legacy: moved to the encrypted private settings (`private.rs`). Read once
+    /// on unlock to migrate, and no longer written here.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub receive_state: HashMap<String, ReceiveState>,
-    /// First block scanned for each group's wallet (keyed by group id). Recorded
-    /// here rather than only inside the wallet database, which lives under
-    /// `wallets/` and is deleted whenever the wallet is rebuilt. Without it a
-    /// rebuilt wallet re-imports its account at the current chain tip and never
-    /// scans the blocks that funded the group, so the balance reads zero.
-    #[serde(default)]
+    /// Legacy: moved to the encrypted private settings (`private.rs`). Read once
+    /// on unlock to migrate, and no longer written here.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub wallet_birthdays: HashMap<String, u64>,
+    /// Legacy: moved to the encrypted private settings (`private.rs`). Read once
+    /// on unlock to migrate, and no longer written here.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub network_birthdays: HashMap<String, u64>,
+    /// Legacy: moved to the encrypted private settings (`private.rs`). Read once
+    /// on unlock to migrate, and no longer written here.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub group_created_at: HashMap<String, u64>,
     /// Blocks downloaded and scanned per sync batch. `None` uses the core
     /// default; larger values reduce per-batch overhead on slow links at the
     /// cost of memory. Clamped by the core to a sane range.
@@ -91,11 +96,9 @@ pub struct Settings {
     /// they aren't prompted again unless they revisit it.
     #[serde(default)]
     pub session_configured: Option<bool>,
-    /// The single **active wallet**: the group whose wallet the app currently
-    /// works on. Wallet actions (sync, balance, send) are scoped to this one, and
-    /// only this group syncs — switching cancels the previous group's sync. `None`
-    /// until the user first selects one. Persisted so the choice survives restart.
-    #[serde(default)]
+    /// Legacy: moved to the encrypted private settings (`private.rs`). Read once
+    /// on unlock to migrate, and no longer written here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_group_id: Option<String>,
     /// Show developer and expert options: test networks and the local devnet,
     /// the diagnostics log, the Ed25519 ciphersuite, raw-message signing, and
@@ -103,6 +106,13 @@ pub struct Settings {
     /// on the mainnet wallet.
     #[serde(default)]
     pub advanced_mode: Option<bool>,
+    /// When the keystore was last backed up (unix seconds).
+    #[serde(default)]
+    pub last_backup_at: Option<u64>,
+    /// Legacy: moved to the encrypted private settings (`private.rs`). Read once
+    /// on unlock to migrate, and no longer written here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backup_fingerprint: Option<String>,
 }
 
 /// Per-group rotating receive-address bookkeeping (#3). Non-secret; the actual
@@ -123,7 +133,22 @@ pub struct ReceiveState {
 /// the recovery slot.
 pub struct UnlockedState {
     pub config: Config,
+    /// App data kept in the keystore beside the config (viewing seeds).
+    pub extras: frost_app_core::config::KeystoreExtras,
     pub file: frost_app_core::keystore::KeystoreFile,
+}
+
+impl UnlockedState {
+    /// Read the keystore's plaintext.
+    pub fn from_plaintext(plaintext: &str, file: frost_app_core::keystore::KeystoreFile) -> AppResult<Self> {
+        let (config, extras) = frost_app_core::config::parse_keystore(plaintext)?;
+        Ok(Self { config, extras, file })
+    }
+
+    /// The keystore's plaintext, for saving.
+    pub fn plaintext(&self) -> AppResult<zeroize::Zeroizing<String>> {
+        Ok(frost_app_core::config::serialize_keystore(&self.config, &self.extras)?)
+    }
 }
 
 /// Handle to a running ceremony task (DKG or signing).
@@ -132,6 +157,24 @@ pub struct CeremonyHandle {
     /// Present for participant signing ceremonies that are paused at the
     /// approval gate; resolving it releases the round-2 signature share.
     pub approval: Option<oneshot::Sender<bool>>,
+    /// Whether an approval may be given (see `commands::signing`).
+    pub gate: ApprovalGate,
+}
+
+/// Whether a participant's "approve" is accepted for a signing ceremony.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum ApprovalGate {
+    /// Nothing to verify: DKG and coordinator ceremonies, non-wallet groups,
+    /// and raw-message signing when advanced options are on.
+    #[default]
+    Open,
+    /// A wallet signing request whose transaction hasn't been verified yet.
+    Pending,
+    /// The transaction was verified. Approving it records the sighash so the
+    /// same transaction's other per-note rounds are approved automatically.
+    Verified { sighash_hex: String },
+    /// Verification failed and the request was refused, for this reason.
+    Refused(String),
 }
 
 pub struct AppState {
@@ -147,11 +190,11 @@ pub struct AppState {
     /// Cancellation token for the in-flight wallet sync of each group, so a
     /// "Sync Now" can abandon a stalled sync and restart it cleanly.
     pub sync_cancels: Mutex<HashMap<String, CancellationToken>>,
-    /// App-wide "one wallet syncs at a time" gate. Trial decryption is CPU-bound
-    /// and saturates every core, so two groups syncing at once only thrash. Every
-    /// `wallet_sync` holds this for its whole run; combined with cancelling the
-    /// previous group's sync on an active-wallet switch, it guarantees the app's
-    /// processing stays focused on a single wallet.
+    /// App-wide "one wallet syncs at a time" gate. Scanning is CPU-bound, so two
+    /// groups syncing at once only thrash. Every sync
+    /// (`commands::wallet::sync_once`) holds this for its whole run; combined
+    /// with cancelling the previous group's sync on an active-wallet switch, it
+    /// keeps the app's processing focused on a single wallet.
     ///
     /// This global gate also subsumes the earlier per-group sync lock: since only
     /// one sync ever runs, a restarting sync can no longer race a cancelled one's
@@ -168,6 +211,21 @@ pub struct AppState {
     pub subtree_roots_fetched: Mutex<HashMap<String, std::time::Instant>>,
     /// Epoch-millis of the last user activity, used to drive the idle auto-lock.
     pub last_activity: AtomicI64,
+    /// Broadcasts whether the keystore is unlocked, so background work (the
+    /// wallet sync service) can start on unlock and stop on lock. Updated only
+    /// through [`AppState::set_unlocked`].
+    unlocked_tx: tokio::sync::watch::Sender<bool>,
+    /// Background wallet sync: wake-ups and the latest status per group.
+    pub sync_service: crate::sync_service::SyncService,
+    /// Sighashes of transactions this user approved, and when. A multi-note
+    /// send signs each note in its own round; once one round of a verified
+    /// transaction is approved, its other rounds are approved automatically.
+    pub approved_sighashes: Mutex<HashMap<String, std::time::Instant>>,
+    /// Sessions this app ran key generation in. The organizer keeps one open
+    /// briefly after it finishes, and it must not look like a signing request.
+    pub dkg_sessions: std::sync::Mutex<std::collections::HashSet<Uuid>>,
+    /// Serializes read-modify-write cycles of the private settings.
+    pub(crate) private_lock: Mutex<()>,
 }
 
 /// How long a sync may go without re-fetching subtree roots. A pool gains one
@@ -211,7 +269,32 @@ impl AppState {
             lightwalletd: Mutex::new(None),
             subtree_roots_fetched: Mutex::new(HashMap::new()),
             last_activity: AtomicI64::new(now_millis()),
+            unlocked_tx: tokio::sync::watch::channel(false).0,
+            sync_service: crate::sync_service::SyncService::default(),
+            approved_sighashes: Mutex::new(HashMap::new()),
+            dkg_sessions: Default::default(),
+            private_lock: Mutex::new(()),
         }
+    }
+
+    /// Replace the unlocked keystore contents (`None` locks) and tell anything
+    /// watching. Every lock and unlock must go through here.
+    pub async fn set_unlocked(&self, value: Option<UnlockedState>) {
+        let unlocked = value.is_some();
+        *self.unlocked.write().await = value;
+        if unlocked {
+            // Bring this device's data up to date before the sync service or
+            // the UI reads it: metadata from a restored backup, and per-group
+            // settings an older version kept in plaintext.
+            crate::commands::backup::apply_pending_restore(self).await;
+            crate::private::migrate_plaintext(self).await;
+        }
+        self.unlocked_tx.send_replace(unlocked);
+    }
+
+    /// Follow lock state changes (`true` = unlocked).
+    pub fn watch_unlocked(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.unlocked_tx.subscribe()
     }
 
     /// Record user activity now, deferring the idle auto-lock.
@@ -259,15 +342,29 @@ impl AppState {
         &self,
         f: impl FnOnce(&mut Config) -> AppResult<T>,
     ) -> AppResult<T> {
+        self.mutate_keystore(|config, _| f(config)).await
+    }
+
+    /// Change the config and the keystore's extras together, in one save.
+    pub async fn mutate_keystore<T>(
+        &self,
+        f: impl FnOnce(&mut Config, &mut frost_app_core::config::KeystoreExtras) -> AppResult<T>,
+    ) -> AppResult<T> {
         let mut guard = self.unlocked.write().await;
         let unlocked = guard.as_mut().ok_or_else(AppError::locked)?;
-        let result = f(&mut unlocked.config)?;
-        let toml = frost_app_core::config::serialize_config(&unlocked.config)
-            .map_err(AppError::from)?;
+        let result = f(&mut unlocked.config, &mut unlocked.extras)?;
         self.keystore()
-            .save_file(&unlocked.file, toml.as_bytes())
+            .save_file(&unlocked.file, unlocked.plaintext()?.as_bytes())
             .map_err(AppError::from)?;
         Ok(result)
+    }
+
+    /// The viewing seed a group's members agreed on, if it has one (groups
+    /// without one derive their viewing key from the group key alone).
+    pub async fn viewing_seed(&self, group_id: &str) -> AppResult<Option<zeroize::Zeroizing<[u8; 32]>>> {
+        let guard = self.unlocked.read().await;
+        let unlocked = guard.as_ref().ok_or_else(AppError::locked)?;
+        Ok(unlocked.extras.viewing_seed(group_id)?.map(zeroize::Zeroizing::new))
     }
 
     /// Read-only access to the unlocked config.
@@ -291,5 +388,12 @@ impl AppState {
         let unlocked = guard.as_ref().ok_or_else(AppError::locked)?;
         let info = format!("wallet-db:{group_id}");
         Ok(unlocked.file.derive_subkey(info.as_bytes()))
+    }
+
+    /// Key for a group's signed transactions awaiting broadcast.
+    pub async fn pending_tx_key(&self, group_id: &str) -> AppResult<zeroize::Zeroizing<[u8; 32]>> {
+        let guard = self.unlocked.read().await;
+        let unlocked = guard.as_ref().ok_or_else(AppError::locked)?;
+        Ok(unlocked.file.derive_subkey(format!("pending-tx-v1:{group_id}").as_bytes()))
     }
 }

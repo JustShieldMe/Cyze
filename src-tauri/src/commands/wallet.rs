@@ -79,7 +79,7 @@ pub async fn get_wallet_config(state: State<'_, AppState>) -> AppResult<WalletCo
 
 /// Save the wallet network and endpoint. An empty URL clears the override,
 /// reverting to the network's default endpoint. `regtest_upgrade` forces a
-/// devnet upgrade level (`"nu6"` … `"nu6_3"`); omitted or empty means auto.
+/// devnet upgrade level (`"nu6"` … `"nu7"`); omitted or empty means auto.
 #[tauri::command]
 pub async fn set_wallet_config(
     state: State<'_, AppState>,
@@ -106,6 +106,8 @@ pub async fn set_wallet_config(
     }
     settings.lightwalletd_url = (!url.is_empty()).then(|| url.to_string());
     state.save_settings(&settings)?;
+    // The wallet now lives on a different network or server: resync from it.
+    state.sync_service.wake(true);
     Ok(resolve_config(&state))
 }
 
@@ -146,7 +148,7 @@ pub struct DevnetStatus {
     pub dashboard: Option<String>,
     /// Chain height reported by the devnet's lightwalletd, when running.
     pub block_height: Option<u64>,
-    /// The upgrade level read from the node (`nu6` … `nu6_3`), when running.
+    /// The upgrade level read from the node (`nu6` … `nu7`), when running.
     pub detected_upgrade: Option<String>,
     /// Why the devnet isn't usable yet, phrased as what to do next.
     pub detail: Option<String>,
@@ -250,7 +252,7 @@ pub(crate) fn record_regtest_level(state: &AppState, info: &LightwalletdInfo) ->
 
 /// Resolve the wallet context for a RedPallas group: (network, lightwalletd
 /// URL, derived UFVK string).
-async fn group_wallet_ctx(
+pub(crate) async fn group_wallet_ctx(
     state: &AppState,
     group_id: &str,
 ) -> AppResult<(WalletNetwork, String, String)> {
@@ -272,7 +274,8 @@ async fn group_wallet_ctx(
     let cfg = resolve_config(state);
     let network = configured_network(&state.load_settings());
     // The group id is the hex of its verifying key (the Orchard ak).
-    let ufvk = frost_app_core::zcash::derive_orchard_keys_hex(group_id, network.network_type())?.ufvk;
+    let seed = state.viewing_seed(group_id).await?;
+    let ufvk = frost_app_core::zcash::derive_orchard_keys_hex(group_id, seed.as_deref(), network.network_type())?.ufvk;
     Ok((network, cfg.lightwalletd_url, ufvk))
 }
 
@@ -284,9 +287,10 @@ pub async fn wallet_group_status(
 ) -> AppResult<WalletStatus> {
     let (network, _url, ufvk) = group_wallet_ctx(&state, &group_id).await?;
     let db_key = state.wallet_db_key(&group_id).await?;
+    let wid = state.wallet_dir_id(&group_id).await?;
     Ok(wallet::group_status(
         &state.data_dir,
-        &group_id,
+        &wid,
         network,
         &ufvk,
         db_key.as_ref(),
@@ -306,23 +310,59 @@ pub async fn wallet_init_account(
     group_id: String,
     birthday_height: Option<u64>,
 ) -> AppResult<u64> {
-    let (network, url, ufvk) = group_wallet_ctx(&state, &group_id).await?;
-    let db_key = state.wallet_db_key(&group_id).await?;
+    init_account(&state, &group_id, birthday_height).await
+}
 
-    // Recorded birthdays are keyed by group, not network, and are only ever
-    // public-chain heights. A devnet always scans its whole (tiny) chain — see
-    // `default_birthday_height` — and is reset often, so it neither reuses a
-    // recorded height (a testnet ~4.1M would hide every devnet note) nor
-    // records its own (which would clobber the group's real birthday).
+/// Slack added to a group's age when estimating its birthday from its creation
+/// time, covering clock skew and block-time variance. A day of blocks scans in
+/// a few seconds; starting late would hide funds.
+const ESTIMATED_BIRTHDAY_MARGIN_SECS: u64 = 24 * 60 * 60;
+
+/// Set up a group's view-only account (see [`wallet_init_account`]). Shared by
+/// the command and the background sync service.
+///
+/// The first block to scan comes from, in order: `birthday_height`; the height
+/// recorded for this group on this network (at key generation, or by an
+/// earlier import); the legacy per-group record; an estimate from when the
+/// group was created; otherwise the chain tip.
+pub(crate) async fn init_account(
+    state: &AppState,
+    group_id: &str,
+    birthday_height: Option<u64>,
+) -> AppResult<u64> {
+    let (network, url, ufvk) = group_wallet_ctx(state, group_id).await?;
+    let db_key = state.wallet_db_key(group_id).await?;
+    let key = crate::state::wallet_session_key(group_id, network.dir_name());
+
+    // A devnet always scans its whole (tiny) chain (see
+    // `default_birthday_height`) and is reset often, so it neither reuses a
+    // recorded height (a public-chain ~4M would hide every devnet note) nor
+    // records its own.
     let is_devnet = matches!(network, WalletNetwork::Regtest(_));
-    let recorded = (!is_devnet)
-        .then(|| state.load_settings().wallet_birthdays.get(&group_id).copied())
-        .flatten();
-    let requested = birthday_height.or(recorded);
+    let private = state.load_private().await?;
+    let recorded = if is_devnet {
+        None
+    } else {
+        private
+            .network_birthdays
+            .get(&key)
+            .or_else(|| private.wallet_birthdays.get(group_id))
+            .copied()
+    };
+    let estimated = match (recorded, private.group_created_at.get(group_id)) {
+        (None, Some(&created)) if !is_devnet && birthday_height.is_none() => {
+            let tip = shared_lightwalletd(state, &url).await?.latest_height().await?;
+            let age = unix_now().saturating_sub(created);
+            Some(wallet::height_before(network, tip, age + ESTIMATED_BIRTHDAY_MARGIN_SECS))
+        }
+        _ => None,
+    };
+    let requested = birthday_height.or(recorded).or(estimated);
 
+    let wid = state.wallet_dir_id(group_id).await?;
     let scan_from = wallet::init_group_account(
         &state.data_dir,
-        &group_id,
+        &wid,
         network,
         &ufvk,
         &url,
@@ -335,48 +375,97 @@ pub async fn wallet_init_account(
     // roots yet, so its first sync must fetch them even if an earlier database
     // for this group did so this session.
     if scan_from > 0 {
-        state
-            .subtree_roots_fetched
-            .lock()
-            .await
-            .remove(&crate::state::wallet_session_key(&group_id, network.dir_name()));
+        state.subtree_roots_fetched.lock().await.remove(&key);
     }
 
     // Remember where this wallet starts, so a later rebuild of the (deleted)
     // wallet database scans from here again rather than from the chain tip.
     // `scan_from == 0` means the account already existed; nothing was imported.
     if scan_from > 0 && !is_devnet && recorded != Some(scan_from) {
-        let mut settings = state.load_settings();
-        settings.wallet_birthdays.insert(group_id, scan_from);
-        state.save_settings(&settings)?;
+        state.update_private(|p| p.network_birthdays.insert(key, scan_from)).await?;
     }
     Ok(scan_from)
 }
 
-/// Scan progress as `[fully_scanned_height, chain_tip_height]`, read without the
-/// wallet's write lock so it can be polled *while* `wallet_sync` is running.
-/// `wallet_sync` blocks for the whole catch-up, so this is the only way to see a
-/// long sync advance rather than appear frozen.
-#[tauri::command]
-pub async fn wallet_sync_progress(
-    state: State<'_, AppState>,
-    group_id: String,
-) -> AppResult<(u64, u64)> {
-    let (network, _url, _ufvk) = group_wallet_ctx(&state, &group_id).await?;
-    let db_key = state.wallet_db_key(&group_id).await?;
-    Ok(wallet::sync_progress(
-        &state.data_dir,
-        &group_id,
-        network,
-        db_key.as_ref(),
-    )?)
+/// How far before its old start a wallet rebuilt after a deep reorg rescans.
+/// Reorgs are a few blocks deep in practice; a thousand scan in about a second.
+const REORG_REBUILD_MARGIN: u64 = 1_000;
+
+/// Recover from a reorg below a wallet's start (`CoreError::Reorg`): delete
+/// its database and move its recorded start height back, so the next setup
+/// rescans from before the fork. Nothing is lost: the funds are on-chain.
+pub(crate) async fn rebuild_after_reorg(state: &AppState, group_id: &str) -> AppResult<()> {
+    let (network, _url, _ufvk) = group_wallet_ctx(state, group_id).await?;
+    let key = crate::state::wallet_session_key(group_id, network.dir_name());
+    // A devnet always rescans its whole chain, so it only needs the delete.
+    if !matches!(network, WalletNetwork::Regtest(_)) {
+        let db_key = state.wallet_db_key(group_id).await?;
+        let wid = state.wallet_dir_id(group_id).await?;
+        let from_db = wallet::wallet_start_height(&state.data_dir, &wid, network, db_key.as_ref())?;
+        let private = state.load_private().await?;
+        let recorded = private.network_birthdays.get(&key).or(private.wallet_birthdays.get(group_id)).copied();
+        if let Some(start) = [from_db, recorded].into_iter().flatten().min() {
+            let key = key.clone();
+            state
+                .update_private(|p| p.network_birthdays.insert(key, start.saturating_sub(REORG_REBUILD_MARGIN)))
+                .await?;
+        }
+    }
+    wallet::delete_wallet_db(&state.data_dir, &state.wallet_dir_id(group_id).await?, network)?;
+    state.subtree_roots_fetched.lock().await.remove(&key);
+    Ok(())
 }
 
-/// Sync the group's wallet from lightwalletd, then return the updated status.
-/// Long-running. Touches the network. Cancellable via [`wallet_cancel_sync`].
-#[tauri::command]
-pub async fn wallet_sync(state: State<'_, AppState>, group_id: String) -> AppResult<WalletStatus> {
-    let (network, url, ufvk) = group_wallet_ctx(&state, &group_id).await?;
+pub(crate) fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// Record when a new group was created and, if lightwalletd answers, the chain
+/// tip at that moment, as the group's wallet birthday on the configured
+/// network. Called right after key generation, so every member's device starts
+/// scanning where the group began, even if they first open the wallet weeks
+/// later, after it has received funds. Best effort: a failure only means the
+/// wallet falls back to estimating from the creation time.
+pub(crate) async fn record_new_group_birthday(state: &AppState, group_id: &str) {
+    let network = configured_network(&state.load_settings());
+    let mut tip = None;
+    if !matches!(network, WalletNetwork::Regtest(_)) {
+        let url = resolve_config(state).lightwalletd_url;
+        match tokio::time::timeout(std::time::Duration::from_secs(15), async {
+            wallet::Lightwalletd::connect(&url).await?.latest_height().await
+        })
+        .await
+        {
+            Ok(Ok(height)) => tip = Some(height),
+            Ok(Err(e)) => tracing::warn!("new group: couldn't read the chain tip for its birthday: {e}"),
+            Err(_) => tracing::warn!("new group: timed out reading the chain tip for its birthday"),
+        }
+    }
+    let key = crate::state::wallet_session_key(group_id, network.dir_name());
+    let saved = state
+        .update_private(|p| {
+            p.group_created_at.entry(group_id.to_string()).or_insert_with(unix_now);
+            if let Some(tip) = tip {
+                p.network_birthdays.entry(key).or_insert(tip);
+            }
+        })
+        .await;
+    if let Err(e) = saved {
+        tracing::warn!("new group: couldn't save its birthday: {}", e.message);
+    }
+}
+
+/// Sync one group's wallet from lightwalletd and return its updated status.
+/// Long-running; touches the network. Run by the background sync service; a
+/// running sync is cancelled through its token in `AppState::sync_cancels`.
+pub(crate) async fn sync_once(
+    state: &AppState,
+    group_id: &str,
+) -> AppResult<(WalletStatus, wallet::SyncStats)> {
+    let group_id = group_id.to_string();
+    let (network, url, ufvk) = group_wallet_ctx(state, &group_id).await?;
     let db_key = state.wallet_db_key(&group_id).await?;
 
     // Register a fresh cancellation token for this group, tripping (and replacing)
@@ -399,7 +488,7 @@ pub async fn wallet_sync(state: State<'_, AppState>, group_id: String) -> AppRes
     // cancelled one's still-open db connection — the "database is locked" case.
     let _gate = state.sync_gate.lock().await;
 
-    let lightwalletd = shared_lightwalletd(&state, &url).await?;
+    let lightwalletd = shared_lightwalletd(state, &url).await?;
     let roots_key = crate::state::wallet_session_key(&group_id, network.dir_name());
     let roots_fresh = state
         .subtree_roots_fetched
@@ -411,8 +500,9 @@ pub async fn wallet_sync(state: State<'_, AppState>, group_id: String) -> AppRes
         batch_size: state.load_settings().sync_batch_size,
         skip_subtree_roots: roots_fresh,
     };
+    let wid = state.wallet_dir_id(&group_id).await?;
     let result = wallet::sync_group(
-        &state.data_dir, &group_id, network, &lightwalletd, db_key.as_ref(), opts, &cancel,
+        &state.data_dir, &wid, network, &lightwalletd, db_key.as_ref(), opts, &cancel,
     )
     .await;
     match &result {
@@ -442,19 +532,47 @@ pub async fn wallet_sync(state: State<'_, AppState>, group_id: String) -> AppRes
         state.sync_cancels.lock().await.remove(&group_id);
     }
 
-    result?;
-    Ok(wallet::group_status(
-        &state.data_dir,
-        &group_id,
-        network,
-        &ufvk,
-        db_key.as_ref(),
-    )?)
+    let stats = result?;
+    let status = wallet::group_status(&state.data_dir, &wid, network, &ufvk, db_key.as_ref())?;
+    Ok((status, stats))
+}
+
+/// The current status of a group's wallet from its local database (no network).
+pub(crate) async fn local_status(state: &AppState, group_id: &str) -> AppResult<WalletStatus> {
+    let (network, _url, ufvk) = group_wallet_ctx(state, group_id).await?;
+    let db_key = state.wallet_db_key(group_id).await?;
+    let wid = state.wallet_dir_id(group_id).await?;
+    Ok(wallet::group_status(&state.data_dir, &wid, network, &ufvk, db_key.as_ref())?)
+}
+
+/// Ask the background sync service to sync the active wallet now. With
+/// `restart`, an in-flight sync is abandoned first (for one that has stalled).
+#[tauri::command]
+pub async fn wallet_sync_now(state: State<'_, AppState>, restart: bool) -> AppResult<()> {
+    if restart {
+        if let Some(group_id) = crate::sync_service::active_wallet(&state).await {
+            if let Some(token) = state.sync_cancels.lock().await.get(&group_id) {
+                token.cancel();
+            }
+        }
+    }
+    state.sync_service.wake(true);
+    Ok(())
+}
+
+/// The background sync service's latest status for a group, so a screen that
+/// opens mid-sync can show it before the next `wallet:sync` event.
+#[tauri::command]
+pub async fn wallet_sync_status(
+    state: State<'_, AppState>,
+    group_id: String,
+) -> AppResult<Option<crate::sync_service::SyncStatus>> {
+    Ok(state.sync_service.status(&group_id))
 }
 
 /// The app's lightwalletd connection for `url`: the open one if it points at
 /// the same endpoint, otherwise a fresh connection that replaces it.
-async fn shared_lightwalletd(state: &AppState, url: &str) -> AppResult<wallet::Lightwalletd> {
+pub(crate) async fn shared_lightwalletd(state: &AppState, url: &str) -> AppResult<wallet::Lightwalletd> {
     let mut slot = state.lightwalletd.lock().await;
     if let Some(conn) = slot.as_ref().filter(|c| c.url() == url.trim()) {
         return Ok(conn.clone());
@@ -464,16 +582,6 @@ async fn shared_lightwalletd(state: &AppState, url: &str) -> AppResult<wallet::L
     Ok(conn)
 }
 
-/// Cancel the in-flight sync for a group, if any. The current `wallet_sync`
-/// returns promptly with a "cancelled" error, freeing the wallet for a fresh
-/// sync. Safe to call when nothing is syncing (a no-op).
-#[tauri::command]
-pub async fn wallet_cancel_sync(state: State<'_, AppState>, group_id: String) -> AppResult<()> {
-    if let Some(token) = state.sync_cancels.lock().await.get(&group_id) {
-        token.cancel();
-    }
-    Ok(())
-}
 
 /// On-chain transaction history for a group wallet: received funds and sent
 /// transactions from the local wallet db, newest confirmed first.
@@ -487,7 +595,8 @@ pub async fn wallet_history(
     // other wallet command applies and prevents path traversal via the group id.
     let (network, _url, _ufvk) = group_wallet_ctx(&state, &group_id).await?;
     let db_key = state.wallet_db_key(&group_id).await?;
-    Ok(wallet::wallet_history(&state.data_dir, &group_id, network, db_key.as_ref())?)
+    let wid = state.wallet_dir_id(&group_id).await?;
+    Ok(wallet::wallet_history(&state.data_dir, &wid, network, db_key.as_ref())?)
 }
 
 /// The unspent Orchard notes that make up the group's balance (for the "Review
@@ -499,7 +608,8 @@ pub async fn wallet_notes(
 ) -> AppResult<Vec<wallet::NoteRecord>> {
     let (network, _url, _ufvk) = group_wallet_ctx(&state, &group_id).await?;
     let db_key = state.wallet_db_key(&group_id).await?;
-    Ok(wallet::wallet_notes(&state.data_dir, &group_id, network, db_key.as_ref())?)
+    let wid = state.wallet_dir_id(&group_id).await?;
+    Ok(wallet::wallet_notes(&state.data_dir, &wid, network, db_key.as_ref())?)
 }
 
 /// A rotating receive address plus the diversifier index it was derived at.
@@ -520,22 +630,25 @@ async fn resolve_receive_address(
 ) -> AppResult<ReceiveAddress> {
     let (network, _url, _ufvk) = group_wallet_ctx(state, group_id).await?;
     let db_key = state.wallet_db_key(group_id).await?;
-    let current_notes =
-        wallet::count_received_notes(&state.data_dir, group_id, network, db_key.as_ref())?;
+    let wid = state.wallet_dir_id(group_id).await?;
+    let current_notes = wallet::count_received_notes(&state.data_dir, &wid, network, db_key.as_ref())?;
+    let seed = state.viewing_seed(group_id).await?;
 
-    let mut settings = state.load_settings();
-    let entry = settings.receive_state.entry(group_id.to_string()).or_default();
-    // Rotate when explicitly asked, or when the address may have been used
-    // (received-note count grew since it was issued).
-    if force_new || current_notes > entry.baseline_notes {
-        entry.index = entry.index.saturating_add(1);
-        entry.baseline_notes = current_notes;
-    }
-    let index = entry.index;
-    state.save_settings(&settings)?;
+    let index = state
+        .update_private(|p| {
+            let entry = p.receive_state.entry(group_id.to_string()).or_default();
+            // Rotate when explicitly asked, or when the address may have been
+            // used (received-note count grew since it was issued).
+            if force_new || current_notes > entry.baseline_notes {
+                entry.index = entry.index.saturating_add(1);
+                entry.baseline_notes = current_notes;
+            }
+            entry.index
+        })
+        .await?;
 
     let address =
-        frost_app_core::zcash::derive_orchard_address_at(group_id, network.network_type(), index)?;
+        frost_app_core::zcash::derive_orchard_address_at(group_id, seed.as_deref(), network.network_type(), index)?;
     Ok(ReceiveAddress { address, index })
 }
 
@@ -570,9 +683,10 @@ pub async fn wallet_prepare_send(
 ) -> AppResult<wallet::DraftTransaction> {
     let (network, url, _ufvk) = group_wallet_ctx(&state, &group_id).await?;
     let db_key = state.wallet_db_key(&group_id).await?;
+    let wid = state.wallet_dir_id(&group_id).await?;
     Ok(wallet::prepare_send(
         &state.data_dir,
-        &group_id,
+        &wid,
         network,
         &recipient,
         amount_zatoshis,
@@ -642,9 +756,10 @@ pub async fn wallet_prepare_vote(
     let shapes = ballot.question_shapes();
     let votes: Vec<VoteEntry> = args.votes.into_iter().map(Into::into).collect();
 
+    let wid = state.wallet_dir_id(&args.group_id).await?;
     Ok(wallet::prepare_vote(
         &state.data_dir,
-        &args.group_id,
+        &wid,
         network,
         &args.reception_address,
         args.ballot_json.as_bytes(),
@@ -712,9 +827,10 @@ pub async fn wallet_send<R: tauri::Runtime>(
 
     // 1. Build the unsigned transaction (refreshes the chain tip so the expiry
     //    is anchored to the live tip).
+    let wid = state.wallet_dir_id(&args.group_id).await?;
     let draft = wallet::prepare_send(
         &state.data_dir,
-        &args.group_id,
+        &wid,
         network,
         &args.recipient,
         args.amount_zatoshis,
@@ -731,6 +847,10 @@ pub async fn wallet_send<R: tauri::Runtime>(
     }
     let message = hex::decode(draft.sighash_hex.trim())
         .map_err(|e| AppError::new("wallet", format!("sighash: {e}")))?;
+    // Co-signers verify the transaction itself, not our description of it
+    // (wallet::verify). Prepared now so an oversized transaction fails before
+    // anyone is asked to sign.
+    let signer_pczt = wallet::verify::pczt_for_signers(&draft.pczt_hex)?;
     // Each Orchard spend is re-randomized with its own α, so each needs its own
     // re-randomized FROST signature over the (shared) sighash.
     let spends = draft
@@ -785,6 +905,7 @@ pub async fn wallet_send<R: tauri::Runtime>(
         CeremonyHandle {
             cancel: cancel.clone(),
             approval: None,
+            gate: crate::state::ApprovalGate::Open,
         },
     );
 
@@ -803,6 +924,8 @@ pub async fn wallet_send<R: tauri::Runtime>(
     let pczt_hex = draft.pczt_hex.clone();
     let sighash_hex = draft.sighash_hex.clone();
     let group_id = args.group_id.clone();
+    let wallet_dir = wid.clone();
+    let pending_key = state.pending_tx_key(&args.group_id).await?;
     // Transaction context fields sent to co-signers (C-1). For a multi-note
     // spend each note is signed in its own FROST session; every one carries the
     // same `plan_id` (the ceremony id) and the shared `tx_sighash` so a
@@ -867,6 +990,7 @@ pub async fn wallet_send<R: tauri::Runtime>(
                         spend_index: (i as u32) + 1,
                         spend_total: total as u32,
                         tx_sighash: sighash_hex.clone(),
+                        pczt: Some(signer_pczt.clone()),
                     })
                     .unwrap_or_default();
                     let params = CoordinatorParams {
@@ -928,7 +1052,7 @@ pub async fn wallet_send<R: tauri::Runtime>(
         // via wallet_rebroadcast without gathering signatures again.
         let data_dir = task_app.state::<AppState>().data_dir.clone();
         let ceremony_str = ceremony_id.to_string();
-        let _ = wallet::save_pending_tx(&data_dir, &group_id, network, &ceremony_str, &signed_pczt_hex);
+        let _ = wallet::save_pending_tx(&data_dir, &wallet_dir, network, &ceremony_str, &signed_pczt_hex, &pending_key);
 
         // Prove + broadcast. Surfaced as its own phase since the proof build is
         // the slow part (several seconds).
@@ -948,7 +1072,7 @@ pub async fn wallet_send<R: tauri::Runtime>(
             .unwrap_or(url);
         match wallet::broadcast_signed(&signed_pczt_hex, network, &broadcast_url).await {
             Ok(txid) => {
-                wallet::clear_pending_tx(&data_dir, &group_id, network, &ceremony_str);
+                wallet::clear_pending_tx(&data_dir, &wallet_dir, network, &ceremony_str);
                 let _ = task_app.emit(
                     "send:complete",
                     serde_json::json!({
@@ -986,8 +1110,10 @@ pub async fn wallet_rebroadcast(
     ceremony_id: String,
 ) -> AppResult<String> {
     let (network, url, _ufvk) = group_wallet_ctx(&state, &group_id).await?;
-    let signed_pczt_hex = wallet::load_pending_tx(&state.data_dir, &group_id, network, &ceremony_id)?;
+    let wid = state.wallet_dir_id(&group_id).await?;
+    let key = state.pending_tx_key(&group_id).await?;
+    let signed_pczt_hex = wallet::load_pending_tx(&state.data_dir, &wid, network, &ceremony_id, &key)?;
     let txid = wallet::broadcast_signed(&signed_pczt_hex, network, &url).await?;
-    wallet::clear_pending_tx(&state.data_dir, &group_id, network, &ceremony_id);
+    wallet::clear_pending_tx(&state.data_dir, &wid, network, &ceremony_id);
     Ok(txid)
 }

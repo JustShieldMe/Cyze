@@ -41,7 +41,7 @@ pub fn cert_fingerprint(cert_pem: &str) -> Result<String, CoreError> {
         .join(":"))
 }
 
-fn pem_to_der(pem: &str) -> Result<Vec<u8>, CoreError> {
+pub(crate) fn pem_to_der(pem: &str) -> Result<Vec<u8>, CoreError> {
     let b64: String = pem
         .lines()
         .filter(|l| !l.starts_with("-----"))

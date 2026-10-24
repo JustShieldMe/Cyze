@@ -1,13 +1,16 @@
 # Sync optimization — design & roadmap
 
-Status: **the pipelined driver is the standard, only sync path** (validated on
-testnet; see "Status: standard driver" below). Its goal is to cut the wall-clock
-latency of wallet sync, especially the recovery / large-range case, without
-leaving the Ironwood-capable `zcash_client_backend` (ECC) stack. Measured numbers
-and what they imply for the next steps are under
+Status: **the pipelined driver is the standard, only sync path**, and since
+2026-10-23 the wallet runs on the **Zakura crate stack**, whose Orchard tree
+hashing made scanning 4.5x faster (see [The move to Zakura](#the-move-to-zakura)).
+The goal is the wall-clock latency of wallet sync, especially the
+recovery / large-range case. Measured numbers are under
 [Measurements](#measurements-2026-10-23).
 
-## Why we stay on the ECC stack
+## Why we first stayed on the ECC stack
+
+(Superseded by [the move to Zakura](#the-move-to-zakura), which keeps the
+same engine and APIs and only swaps in faster forks of the same crates.)
 
 We surveyed the open-source Zcash wallets (YWallet/ZKool, Zingo, Cake, ZODL,
 Vizor). All but ZODL are light wallets on lightwalletd compact blocks; the
@@ -180,10 +183,132 @@ What it says:
   writes), not trial decryption.
 - **Batch size is not a lever** between 2,500 and 10,000; 5,000 stays the default.
   Adaptive sizing is unlikely to pay off on today's blocks.
-- **Next:** profile that single thread (needs `perf` with
-  `kernel.perf_event_paranoid` ≤ 2) to see whether tree insertion, SQLCipher, or
-  block decoding dominates. That decides between an upstream change (e.g. skipping
-  Sapling tree work for an Orchard-only account) and local db tuning.
+
+### Profile: where the scan's time goes
+
+Sampled in-process with `pprof` (timer signals, so no `perf` permissions
+needed) over a 10,000-block mainnet sync:
+
+| Share of samples | Where |
+|---|---|
+| ~78% | Orchard note-commitment tree hashing (`MerkleHashOrchard::combine`, i.e. Sinsemilla over Pasta) |
+| ~56% | of that: single-threaded `shardtree` insertion inside `put_blocks` / `update_tree` |
+| ~13% | of that: `sinsemilla::HashDomain::new`, because upstream `orchard` 0.15.5 rebuilds the MerkleCRH domain (a hash-to-curve) on every hash |
+| ~13% | trial decryption (already parallel) |
+| <1% | Sapling tree hashing; SQLite/SQLCipher barely registers |
+
+So the bottleneck is Orchard tree hashing, not decryption, the database, or the
+network.
+
+## The Zakura crate stack (as used by Vizor)
+
+Vizor (Keplr's Zcash wallet, Apache-2.0, `chainapsis/vizor-wallet`) runs its sync
+on Rust with the same overall shape as ours: compact blocks fed to
+`scan_cached_blocks`, one batch prefetched ahead. Its notable differences:
+
+- It builds on **Zakura**, published forks of the whole Zcash crate family
+  (`zakura-core/common` for the crypto and protocol crates,
+  `zakura-core/wallet-libraries` for `zakura-client-backend` / `-sqlite` /
+  `-pczt`), with library names kept upstream so `use` paths don't change.
+- It ships compiled tree-state checkpoints, so most batches skip `get_tree_state`,
+  and checks that downloaded blocks actually follow that state (re-fetching by
+  hash if not).
+- Smaller batches (2,000 on desktop) and 100-block batches inside mainnet's
+  2022–23 spam range (1.71M–2.05M), matching ECC's mobile SDK.
+- Private queries (PIR) for transaction enhancement and transparent recovery,
+  and Tor.
+
+Zakura's Orchard fork caches the MerkleCRH domain and, with its
+`weighted-merkle` feature, hashes through precomputed tables over 10-bit words,
+plus a batched `combine_batch`. Micro-benchmark on identical inputs (outputs
+byte-identical across all 20,000 hashes):
+
+| Implementation | Per node hash | Speed-up |
+|---|---|---|
+| `orchard` 0.15.5 `combine` (what we use) | 87 µs | 1× |
+| upstream with the domain cached (a one-line patch) | 72 µs | 1.2× |
+| `zakura-orchard` 4.0.0 `combine` (drop-in) | 12 µs | 7.3× |
+| `zakura-orchard` 4.0.0 `combine_batch` | 5.2 µs | 16.8× |
+
+With tree hashing at ~78% of scan time, the drop-in hash alone predicts a catch-up
+roughly 3× faster (20,000 blocks: ~30 s to ~10 s); batching in the tree code
+would go further. A cached-domain patch upstream is not worth carrying on its
+own.
+
+### The move to Zakura
+
+Done on 2026-10-23. The core crate now depends on the Zakura packages under the
+upstream library names, pinned exactly to the family Vizor ships: the 3.x
+crypto crates with wallet libraries `0.1.0-rc9` (ranges would let cargo mix in
+the 4.x line, whose types don't interoperate). What it took:
+
+- `WalletDb`'s RNG is the `rand` 0.10 OS generator; the regtest network
+  parameters gained an `nu7` field; building the proving key returns a `Result`.
+- A group's viewing key and addresses are unchanged, byte for byte: a test pins
+  them to values computed on the old stack (`zcash::tests::derivation_matches_pinned_vectors`).
+- Zakura builds only NU6.3-era transactions (Orchard and Ironwood v3
+  bundles). Mainnet and testnet activated NU6.3 long ago; a local devnet must
+  run NU6.3 to send (syncing works at any level).
+- Wallet databases start fresh (`wallet-v2.sqlite`): the fork doesn't promise
+  to migrate an upstream rc.8 schema, and a rebuild from the recorded start
+  height takes seconds. The old file and the unused `blocks` cache are deleted.
+
+Result, 20,000 mainnet blocks (same machine and server as above):
+
+| | ECC crates | Zakura |
+|---|---|---|
+| Scan | 29.0–29.9 s | 6.6 s |
+| Whole catch-up | 30–32 s | 7.1–9.4 s (subtree roots vary 0.15–2.5 s, server side) |
+| Throughput | ~640 blocks/s | 2,100–2,800 blocks/s |
+
+Profile after the move: Orchard tree hashing ~39% (from ~78%), trial
+decryption ~37% (parallel), and Sapling tree hashing ~13%. That last one is
+wasted for an Orchard-only account, because the wallet still maintains the
+Sapling commitment tree; skipping trees for pools without keys would need an
+upstream change.
+
+### Zakura 4.0 and NU7
+
+Moved to the stable 4.0 crypto crates with wallet libraries `0.1.0-rc9.3`
+(rc9.3 is the newest; the wallet crates have no stable release yet) on
+2026-10-23. 4.0 carries mainnet's NU7 activation at height 3,543,405, about
+two weeks out at the time; the 3.x crates would have built transactions for
+NU6.3's branch after it, which the network rejects. Speed is unchanged:
+20,000 mainnet blocks in 9.7 s (scan 7.0 s, subtree roots 2.3 s), tip
+re-syncs ~55 ms.
+
+What it changed for Cyze:
+
+- The Orchard circuit is picked by whether NU6.3 is active, not by matching
+  its branch id: NU7 changes the branch but not the circuit.
+- NU7 cuts the block time from 75 s to 25 s (ZIP 218), so a birthday
+  estimated from a group's age uses the block time of each era
+  (`wallet::height_before`).
+- Devnets can run NU7 (thus-spoke-zakura 0.4). A real send and reorg
+  recovery pass on NU7 and NU6.3 devnets.
+- When a new wallet catches up, it scans the tip first and the blocks behind
+  it afterwards, and rc9.2+ no longer stores rewind checkpoints for that
+  back-filled range. A reorg reaching into it now rebuilds the wallet (a
+  rescan of seconds) instead of rewinding in place.
+- The wallet crates gained a pipelined decrypt/scan API
+  (`decrypt_cached_blocks`, `scan_decrypted_blocks`) that Cyze doesn't use
+  yet: decrypting the next range while storing the previous one.
+
+## Background sync service
+
+`src-tauri/src/sync_service.rs` runs the active wallet's sync in the backend
+from unlock to lock. Before it, the wallet page drove sync on a 10 s timer, so
+nothing synced unless that page was open. Each pass sets up the account if
+needed, checks the chain tip (one RPC on the shared connection), and syncs only
+when there is something new. Failures back off from 10 s to 5 min. "Sync Now", a
+wallet switch, a network change, or a finished signing ceremony wake it at
+once. The UI follows `wallet:sync` / `wallet:updated` events instead of polling.
+`tests/sync_service_live.rs` (ignored by default; needs the network) runs it end
+to end against mainnet after a real DKG.
+
+New groups record their wallet birthday at key generation (the chain tip then,
+per network), so a member who first opens the wallet weeks later still scans
+from the group's creation instead of from the current tip.
 
 ## Sequencing
 
@@ -193,14 +318,19 @@ What it says:
    driver (see the validation gate above).
 3. **[done] Reused connection, cached subtree roots, scan off the async worker,
    per-sync `SyncStats`, and the `sync_bench` benchmark.**
-4. **[next] Profile the single-threaded part of the scan** (see Measurements).
-5. **[deprioritized] Adaptive batch size.** The batch-size sweep shows little to
+4. **[done] Profile the scan.** Orchard tree hashing is ~78% (see above).
+5. **[done] Background sync service and birthdays recorded at key generation.**
+6. **[done] Zakura crate stack**: 4.5x faster scanning (see above).
+7. **[small, from Vizor] Spam-range batches and a block/tree-state consistency
+   check.** Only deep mainnet rescans cross the 2022–23 spam range.
+8. **[deprioritized] Adaptive batch size.** The batch-size sweep shows little to
    gain. ~~Parallel trial decryption~~ is already in place upstream.
-6. **[optional, infra] Zaino indexer** — evaluate a Rust indexer (Zingo's path)
+9. **[optional, infra] Zaino indexer** — evaluate a Rust indexer (Zingo's path)
    in place of stock lightwalletd for richer per-request data. Composes with the
    above; not a wallet rewrite.
 
 ## Explicit non-goals
 
-- No wholesale swap to Warp/ZKool's engine (no Ironwood support; own DB).
+- No wholesale swap to Warp/ZKool's engine (no Ironwood support; own DB). The
+  Zakura move is different: same engine and APIs, faster forks of the same crates.
 - No full/hybrid-node mode (privacy feature, not latency; large surface).

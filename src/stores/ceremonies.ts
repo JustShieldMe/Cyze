@@ -1,5 +1,8 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist } from "zustand/middleware";
+import { encryptedStorage } from "./encryptedStorage";
+import type { CreateInviteArgs } from "../ipc/commands";
+import { useKeystore } from "./keystore";
 
 export type CeremonyKind = "dkg" | "signing" | "send";
 
@@ -67,6 +70,10 @@ export interface CeremonyState {
   participants?: Record<string, "joined" | "approved">;
   /** When the ceremony was started (ms epoch), for ordering history. */
   startedAt?: number;
+  /** DKG the user organizes: what the invite needs once the session exists. */
+  inviteRequest?: Omit<CreateInviteArgs, "session_id">;
+  /** DKG the user organizes: the invite to send the members. */
+  invite?: string;
 }
 
 interface CeremoniesStore {
@@ -82,39 +89,46 @@ interface CeremoniesStore {
   /** txid → signer comm pubkeys; persisted so on-chain rows can show signers
    *  even after the pending ceremony entry has been cleared. */
   txSigners: Record<string, string[]>;
-  /** Bumped whenever a ceremony lands funds on-chain (a send we coordinated, or
-   *  a signing session we took part in). The wallet screen watches this and runs
-   *  a sync, so a signer who just approved a transaction sees it appear instead
-   *  of a stale balance that contradicts what they just did.
-   *
-   *  It is a *signal*, not the sync itself: the wallet screen owns the only
-   *  sync, so a second writer can never race the first (SQLite permits one). */
-  walletRefreshTick: number;
-  /** Ask the wallet screen to re-sync at the next opportunity. */
-  requestWalletRefresh: () => void;
   setActiveDkg: (id: string | null, label?: string) => void;
   setActiveSigning: (id: string | null) => void;
+  /** Record what a DKG's invite needs, or the invite itself once created. */
+  setInvite: (id: string, patch: Pick<CeremonyState, "inviteRequest" | "invite">) => void;
   /** Register a freshly-started send so it persists and can be reattached. */
   startSend: (ceremonyId: string, meta: SendMeta) => void;
   /** Drop the active send for a group (e.g. to start a new transaction). */
   clearSend: (groupId: string) => void;
+  /** Signing sessions joined this run (session id → ceremony id), so a
+   *  request is joined once, by hand or automatically. Kept in memory only. */
+  joinedSessions: Record<string, string>;
+  recordJoin: (sessionId: string, ceremonyId: string) => void;
   onProgress: (kind: CeremonyKind, payload: CeremonyEventPayload) => void;
   onComplete: (kind: CeremonyKind, payload: CeremonyEventPayload) => void;
   onFailed: (kind: CeremonyKind, payload: CeremonyEventPayload) => void;
   clear: (ceremonyId: string) => void;
 }
 
+const storage = encryptedStorage();
+
+type Persisted = Pick<
+  CeremoniesStore,
+  "ceremonies" | "activeDkgId" | "activeSigningId" | "activeSendByGroup" | "txSigners"
+>;
+
+const empty: Persisted = {
+  ceremonies: {},
+  activeDkgId: null,
+  activeSigningId: null,
+  activeSendByGroup: {},
+  txSigners: {},
+};
+
 export const useCeremonies = create<CeremoniesStore>()(
   persist(
     (set) => ({
-      ceremonies: {},
-      activeDkgId: null,
-      activeSigningId: null,
-      activeSendByGroup: {},
-      txSigners: {},
-      walletRefreshTick: 0,
-      requestWalletRefresh: () =>
-        set((s) => ({ walletRefreshTick: s.walletRefreshTick + 1 })),
+      ...empty,
+      joinedSessions: {},
+      recordJoin: (sessionId, ceremonyId) =>
+        set((s) => ({ joinedSessions: { ...s.joinedSessions, [sessionId]: ceremonyId } })),
       setActiveDkg: (id, label) =>
         set((s) => {
           if (!id) return { activeDkgId: null };
@@ -134,6 +148,8 @@ export const useCeremonies = create<CeremoniesStore>()(
           };
         }),
       setActiveSigning: (id) => set({ activeSigningId: id }),
+      setInvite: (id, patch) =>
+        set((s) => ({ ceremonies: { ...s.ceremonies, [id]: { ...s.ceremonies[id], ...patch } } })),
       startSend: (ceremonyId, meta) =>
         set((s) => ({
           activeSendByGroup: { ...s.activeSendByGroup, [meta.groupId]: ceremonyId },
@@ -262,16 +278,41 @@ export const useCeremonies = create<CeremoniesStore>()(
     }),
     {
       name: "frost-ceremonies",
-      partialize: (s) => ({
+      storage: createJSONStorage(() => storage),
+      // Loaded after unlock (below), since the history is encrypted.
+      skipHydration: true,
+      partialize: (s): Persisted => ({
         ceremonies: s.ceremonies,
         activeDkgId: s.activeDkgId,
         activeSigningId: s.activeSigningId,
         activeSendByGroup: s.activeSendByGroup,
         txSigners: s.txSigners,
       }),
+      // Keep anything that arrived between unlock and loading the history.
+      merge: (saved, current) => {
+        const s = (saved ?? {}) as Partial<Persisted>;
+        return {
+          ...current,
+          ...s,
+          ceremonies: { ...s.ceremonies, ...current.ceremonies },
+          activeSendByGroup: { ...s.activeSendByGroup, ...current.activeSendByGroup },
+          txSigners: { ...s.txSigners, ...current.txSigners },
+        };
+      },
     }
   )
 );
+
+// Load the history on unlock; forget it on lock, without touching what's saved.
+useKeystore.subscribe((s, prev) => {
+  if (s.unlocked === prev.unlocked) return;
+  if (s.unlocked) {
+    void useCeremonies.persist.rehydrate();
+  } else {
+    storage.lock();
+    useCeremonies.setState({ ...empty, joinedSessions: {} });
+  }
+});
 
 /** True when a DKG ceremony is running (tracked active id, not yet done). */
 export function selectDkgInProgress(s: CeremoniesStore): boolean {

@@ -1,11 +1,13 @@
 //! Keeping wallet secrets out of logs.
 //!
 //! Users copy the in-app diagnostics log into bug reports, and a desktop session
-//! may capture stdout into the system journal. A group's id is its Orchard `ak`,
-//! and the group's full viewing key is derived from `ak` alone (see
+//! may capture stdout into the system journal. A group's id is its Orchard `ak`.
+//! For groups without an agreed viewing seed (older groups, and groups with
+//! command-line members) the full viewing key is derived from `ak` alone (see
 //! `zcash::orchard_fvk_bytes`), so a logged group id exposes every balance and
-//! transaction the group has. Log a [`log_tag`] instead, and run every log line
-//! through [`redact_secrets`] as a backstop.
+//! transaction the group has; for the others it still identifies the group.
+//! Log a [`log_tag`] instead, and run every log line through
+//! [`redact_secrets`] as a backstop.
 
 use std::borrow::Cow;
 

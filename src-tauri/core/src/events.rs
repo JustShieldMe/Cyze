@@ -42,6 +42,11 @@ pub struct SigningContext {
     /// each request they approve is signing the one shared transaction.
     #[serde(default)]
     pub tx_sighash: String,
+    /// The unsigned transaction (base64 PCZT, see
+    /// `wallet::verify::pczt_for_signers`), so each signer can verify what the
+    /// sighash commits to instead of trusting the fields above.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pczt: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -66,6 +71,8 @@ pub enum DkgEvent {
     Round2,
     /// Computing the final key share.
     Finalizing,
+    /// Agreeing on the group's viewing seed (RedPallas groups).
+    ViewingKey,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -108,6 +115,10 @@ pub enum ParticipantEvent {
         message_hex: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         context: Option<SigningContext>,
+        /// The re-randomization the share would be produced with (hex), for
+        /// RedPallas spends.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        randomizer_hex: Option<String>,
     },
     /// Share computed and sent to the coordinator.
     ShareSent,

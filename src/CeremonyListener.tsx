@@ -1,5 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useTauriEvent } from "./ipc/events";
+import { SyncStatus, walletSyncNow } from "./ipc/commands";
 import { useCeremonies, CeremonyEventPayload } from "./stores/ceremonies";
 
 /**
@@ -8,16 +9,18 @@ import { useCeremonies, CeremonyEventPayload } from "./stores/ceremonies";
  * signing screens each owned their listeners, so navigating away dropped the
  * subscription and the (still-running) backend ceremony appeared to die.
  *
+ * Also relays the background wallet sync: `wallet:sync` statuses go into the
+ * query cache, and `wallet:updated` re-reads the panels that read the wallet.
+ *
  * Renders nothing; mounted once inside the unlocked layout.
  */
 export default function CeremonyListener() {
   const queryClient = useQueryClient();
-  const { onProgress, onComplete, onFailed, requestWalletRefresh } = useCeremonies();
+  const { onProgress, onComplete, onFailed } = useCeremonies();
 
   /**
    * A ceremony just moved funds. Re-read the wallet panels from the local db at
-   * once, and ask the wallet screen to sync so the on-chain transaction is
-   * actually scanned in.
+   * once, and have the backend sync so the on-chain transaction is scanned in.
    *
    * This runs for a *signing* completion too, not just a send we coordinated:
    * a participant who approves a transaction never runs the send themselves, so
@@ -28,13 +31,24 @@ export default function CeremonyListener() {
     for (const key of ["wallet-status", "wallet-history", "wallet-notes"]) {
       queryClient.invalidateQueries({ queryKey: [key] });
     }
-    requestWalletRefresh();
+    void walletSyncNow(false);
   };
+
+  useTauriEvent<SyncStatus>("wallet:sync", (status) => {
+    queryClient.setQueryData(["wallet-sync", status.group_id], status);
+  });
+  useTauriEvent<{ group_id: string }>("wallet:updated", ({ group_id }) => {
+    for (const key of ["wallet-status", "wallet-history", "wallet-notes", "receive-address"]) {
+      queryClient.invalidateQueries({ queryKey: [key, group_id] });
+    }
+  });
 
   useTauriEvent<CeremonyEventPayload>("dkg:progress", (p) => onProgress("dkg", p));
   useTauriEvent<CeremonyEventPayload>("dkg:complete", (p) => {
     onComplete("dkg", p);
     queryClient.invalidateQueries({ queryKey: ["groups"] });
+    // A new group isn't in any backup yet.
+    queryClient.invalidateQueries({ queryKey: ["backup-status"] });
   });
   useTauriEvent<CeremonyEventPayload>("dkg:failed", (p) => onFailed("dkg", p));
 

@@ -137,6 +137,7 @@ async fn dkg_and_sign(suite: Suite) {
             participants: if i == 0 { all_pubkeys.clone() } else { vec![] },
             known_pubkeys: all_pubkeys.clone(),
             session_id: None,
+            agree_viewing_key: true,
         };
         let (tx, mut rx) = mpsc::channel(32);
         // Drain events so senders never block.
@@ -156,6 +157,10 @@ async fn dkg_and_sign(suite: Suite) {
     }
     assert_eq!(outputs[0].group_id, outputs[1].group_id);
     assert_eq!(outputs[0].group_id, outputs[2].group_id);
+    // RedPallas groups agree on one viewing seed; Ed25519 groups have none.
+    let seeds: Vec<_> = outputs.iter().map(|o| o.viewing_seed).collect();
+    assert_eq!(seeds[0].is_some(), suite == Suite::RedPallas);
+    assert!(seeds.iter().all(|s| *s == seeds[0]), "every member has the same viewing seed");
     let group_id = outputs[0].group_id.clone();
     eprintln!("DKG complete: group {group_id}");
 
@@ -292,6 +297,7 @@ async fn participant_rejection_aborts() {
             participants: if i == 0 { all_pubkeys.clone() } else { vec![] },
             known_pubkeys: all_pubkeys.clone(),
             session_id: None,
+            agree_viewing_key: true,
         };
         let (tx, mut rx) = mpsc::channel(32);
         tokio::spawn(async move { while rx.recv().await.is_some() {} });
@@ -385,4 +391,28 @@ async fn participant_rejection_aborts() {
     coord_cancel2.cancel();
     let r = coordinator.await.unwrap();
     assert!(r.is_err(), "coordinator must not produce a signature");
+}
+
+/// A pinned certificate is trusted exactly: the server presenting it is
+/// reachable, and a server presenting any other certificate is refused, even
+/// one that would otherwise be valid for the address. System roots alone
+/// don't trust a self-signed server at all.
+#[tokio::test]
+async fn pinning_trusts_exactly_the_pinned_certificate() {
+    let Some(server) = start_server().await else {
+        eprintln!("skipping: sidecar frostd binary not built");
+        return;
+    };
+    let url = format!("https://127.0.0.1:{}", server.port);
+    let pinned = |pem: &str| ServerTrust::PinnedCertificate(pem.as_bytes().to_vec());
+
+    let right = FrostdClient::new(url.clone(), &pinned(&server.cert_pem)).unwrap();
+    assert!(right.challenge().await.is_ok());
+
+    let other = tls::generate_self_signed(&[]).unwrap();
+    let wrong = FrostdClient::new(url.clone(), &pinned(&other.cert_pem)).unwrap();
+    assert!(wrong.challenge().await.is_err(), "another certificate must not be accepted");
+
+    let roots_only = FrostdClient::new(url, &ServerTrust::SystemRoots).unwrap();
+    assert!(roots_only.challenge().await.is_err());
 }

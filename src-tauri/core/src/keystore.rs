@@ -82,6 +82,27 @@ impl Default for KdfParams {
     }
 }
 
+impl KdfParams {
+    /// Upper bounds on parameters read from a file. They're used before
+    /// anything is authenticated, so a tampered keystore or backup could
+    /// otherwise make an unlock allocate terabytes or hash forever. Generous
+    /// against the 64 MiB / 3-pass default, so stronger settings can come later.
+    pub const MAX_M_COST_KIB: u32 = 1024 * 1024;
+    pub const MAX_T_COST: u32 = 64;
+    pub const MAX_P_COST: u8 = 16;
+
+    fn check(&self) -> Result<(), CoreError> {
+        if self.m_cost_kib > Self::MAX_M_COST_KIB || self.t_cost > Self::MAX_T_COST || self.p_cost > Self::MAX_P_COST {
+            return Err(CoreError::Crypto(format!(
+                "the file asks for unreasonable key-derivation settings ({} KiB, {} passes, {} lanes); \
+                 it may be damaged or tampered with",
+                self.m_cost_kib, self.t_cost, self.p_cost
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// Build the AEAD cipher from a 32-byte key. Explicit `Key::from_slice`
 /// typing avoids an `AsRef`/`Into` inference ambiguity that appears when other
 /// crypto crates (e.g. the Zcash wallet stack) are also in the dependency tree.
@@ -94,6 +115,7 @@ fn derive_key(
     salt: &[u8],
     params: &KdfParams,
 ) -> Result<Zeroizing<[u8; 32]>, CoreError> {
+    params.check()?;
     let argon_params = Params::new(params.m_cost_kib, params.t_cost, params.p_cost as u32, Some(32))
         .map_err(|e| CoreError::Crypto(e.to_string()))?;
     let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, argon_params);
@@ -386,7 +408,9 @@ fn open_v2(
                         aad: header,
                     },
                 )
-                .map_err(|_| CoreError::InvalidPassphrase)?;
+                // The secret unwrapped the data key, so it was right: a body
+                // that won't decrypt is damage, not a wrong passphrase.
+                .map_err(|_| CoreError::MalformedKeystore("its encrypted contents are damaged".into()))?;
             return Ok((
                 KeystoreFile { dek, slots: slots.clone() },
                 Zeroizing::new(plaintext),
@@ -459,9 +483,13 @@ pub fn open(data: &[u8], passphrase: &str) -> Result<Zeroizing<Vec<u8>>, CoreErr
     Ok(Zeroizing::new(plaintext))
 }
 
-/// Atomically write `data` to `path` (temp file in the same directory, then
-/// rename), mirroring upstream frost-client's write_atomic behavior.
+/// Atomically and durably write `data` to `path`: a temp file in the same
+/// directory, flushed to disk, then renamed over `path`, then the directory
+/// flushed so the rename itself survives a crash. Without the flushes, a power
+/// loss shortly after a save can leave an empty or partial file on some
+/// filesystems, and for the keystore that file is the user's key share.
 pub fn write_atomic(path: &Path, data: &[u8]) -> Result<(), CoreError> {
+    use std::io::Write;
     let dir = path
         .parent()
         .ok_or_else(|| CoreError::Config("keystore path has no parent".into()))?;
@@ -470,12 +498,21 @@ pub fn write_atomic(path: &Path, data: &[u8]) -> Result<(), CoreError> {
         ".{}.tmp",
         path.file_name().unwrap_or_default().to_string_lossy()
     ));
-    std::fs::write(&tmp, data)?;
-    // Restrict to owner-only before the rename so the final file is never
-    // momentarily world-readable. Sensitive files (keystore, settings) must not
-    // be left at the default umask on multi-user systems.
+    {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        // Owner-only from the moment it exists, so the file is never readable
+        // by other local users, even briefly.
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        let mut f = options.open(&tmp)?;
+        f.write_all(data)?;
+        f.sync_all()?;
+    }
     restrict_to_owner(&tmp)?;
     std::fs::rename(&tmp, path)?;
+    #[cfg(unix)]
+    std::fs::File::open(dir)?.sync_all()?;
     Ok(())
 }
 
@@ -502,6 +539,11 @@ pub fn restrict_dir_to_owner(path: &Path) -> Result<(), CoreError> {
     #[cfg(not(unix))]
     let _ = path;
     Ok(())
+}
+
+/// True when `data` starts like a keystore file (either format version).
+pub fn is_keystore(data: &[u8]) -> bool {
+    data.len() >= 8 && (&data[..8] == MAGIC_V2 || &data[..8] == MAGIC_V1)
 }
 
 /// On-disk keystore handle: knows its path, seals/opens on demand.
@@ -561,8 +603,62 @@ impl Keystore {
     }
 
     /// Persist a re-sealed payload from an unlocked model (config mutations).
+    /// The version being replaced is kept as [`Keystore::previous_path`].
     pub fn save_file(&self, file: &KeystoreFile, plaintext: &[u8]) -> Result<(), CoreError> {
-        write_atomic(&self.path, &file.reseal(plaintext)?)
+        let sealed = file.reseal(plaintext)?;
+        if let Ok(current) = std::fs::read(&self.path) {
+            if is_keystore(&current) {
+                write_atomic(&self.previous_path(), &current)?;
+            }
+        }
+        write_atomic(&self.path, &sealed)
+    }
+
+    /// Where the previous version of the keystore is kept. Unlocking falls
+    /// back to it if the current file is damaged.
+    pub fn previous_path(&self) -> PathBuf {
+        let mut name = self.path.file_name().unwrap_or_default().to_os_string();
+        name.push(".bak");
+        self.path.with_file_name(name)
+    }
+
+    /// The keystore file's (encrypted) bytes, for a backup.
+    pub fn read_encrypted(&self) -> Result<Vec<u8>, CoreError> {
+        if !self.exists() {
+            return Err(CoreError::KeystoreNotFound);
+        }
+        Ok(std::fs::read(&self.path)?)
+    }
+
+    /// Install an encrypted keystore file from a backup. Refuses to replace an
+    /// existing keystore, and anything that isn't a keystore.
+    pub fn install(&self, encrypted: &[u8]) -> Result<(), CoreError> {
+        if self.exists() {
+            return Err(CoreError::KeystoreExists);
+        }
+        if !is_keystore(encrypted) {
+            return Err(CoreError::MalformedKeystore("not a Cyze keystore".into()));
+        }
+        write_atomic(&self.path, encrypted)
+    }
+
+    /// Run `open` on the current file; if it is damaged (malformed, not a wrong
+    /// secret), try the previous version instead.
+    fn open_with_fallback<T>(
+        &self,
+        open: impl Fn(&[u8]) -> Result<T, CoreError>,
+    ) -> Result<T, CoreError> {
+        let result = open(&std::fs::read(&self.path)?);
+        match result {
+            Err(CoreError::MalformedKeystore(_)) => match std::fs::read(self.previous_path()) {
+                Ok(previous) => {
+                    tracing::warn!("keystore file is damaged; unlocking its previous version");
+                    open(&previous).or(result)
+                }
+                Err(_) => result,
+            },
+            other => other,
+        }
     }
 
     /// Unlock with the passphrase. Transparently handles legacy v1 files,
@@ -574,15 +670,16 @@ impl Keystore {
         if !self.exists() {
             return Err(CoreError::KeystoreNotFound);
         }
-        let data = std::fs::read(&self.path)?;
-        if data.len() >= 8 && &data[..8] == MAGIC_V2 {
-            open_v2(&data, passphrase, KIND_PASSPHRASE)
-        } else if data.len() >= 8 && &data[..8] == MAGIC_V1 {
-            let plaintext = open(&data, passphrase)?;
-            Ok((KeystoreFile::migrated(passphrase)?, plaintext))
-        } else {
-            Err(CoreError::MalformedKeystore("unrecognized keystore".into()))
-        }
+        self.open_with_fallback(|data| {
+            if data.len() >= 8 && &data[..8] == MAGIC_V2 {
+                open_v2(data, passphrase, KIND_PASSPHRASE)
+            } else if data.len() >= 8 && &data[..8] == MAGIC_V1 {
+                let plaintext = open(data, passphrase)?;
+                Ok((KeystoreFile::migrated(passphrase)?, plaintext))
+            } else {
+                Err(CoreError::MalformedKeystore("unrecognized keystore".into()))
+            }
+        })
     }
 
     /// Unlock with the recovery phrase (forgotten-passphrase path). Only works
@@ -594,13 +691,12 @@ impl Keystore {
         if !self.exists() {
             return Err(CoreError::KeystoreNotFound);
         }
-        let data = std::fs::read(&self.path)?;
-        if data.len() < 8 || &data[..8] != MAGIC_V2 {
-            return Err(CoreError::Crypto(
-                "this keystore has no recovery code".into(),
-            ));
-        }
-        open_v2(&data, phrase, KIND_RECOVERY)
+        self.open_with_fallback(|data| {
+            if data.len() < 8 || &data[..8] != MAGIC_V2 {
+                return Err(CoreError::Crypto("this keystore has no recovery code".into()));
+            }
+            open_v2(data, phrase, KIND_RECOVERY)
+        })
     }
 }
 
@@ -608,12 +704,69 @@ impl Keystore {
 mod tests {
     use super::*;
 
+    #[test]
+    fn saving_keeps_the_previous_version_and_unlock_falls_back_to_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let ks = Keystore::new(dir.path().join("keystore.frost"));
+        let (_, file) = ks.create(b"v1", "pw").unwrap();
+        ks.save_file(&file, b"v2").unwrap();
+        assert!(ks.previous_path().ends_with("keystore.frost.bak"));
+        assert_eq!(ks.unlock("pw").unwrap().1.as_slice(), b"v2");
+
+        // A damaged body (passphrase right, contents corrupt) opens the
+        // previous version instead.
+        let mut current = std::fs::read(ks.path()).unwrap();
+        let last = current.len() - 1;
+        current[last] ^= 0xff;
+        std::fs::write(ks.path(), &current).unwrap();
+        assert_eq!(ks.unlock("pw").unwrap().1.as_slice(), b"v1");
+        // A wrong passphrase is still just wrong.
+        assert!(matches!(ks.unlock("nope"), Err(CoreError::InvalidPassphrase)));
+
+        // A truncated file falls back too.
+        std::fs::write(ks.path(), &current[..20]).unwrap();
+        assert_eq!(ks.unlock("pw").unwrap().1.as_slice(), b"v1");
+    }
+
+    #[test]
+    fn install_restores_a_keystore_but_never_replaces_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let original = Keystore::new(dir.path().join("a.frost"));
+        original.create(b"shares", "pw").unwrap();
+        let bytes = original.read_encrypted().unwrap();
+
+        let restored = Keystore::new(dir.path().join("b.frost"));
+        assert!(restored.install(b"not a keystore").is_err());
+        restored.install(&bytes).unwrap();
+        assert_eq!(restored.unlock("pw").unwrap().1.as_slice(), b"shares");
+        assert!(matches!(restored.install(&bytes), Err(CoreError::KeystoreExists)));
+    }
+
     fn test_params() -> KdfParams {
         KdfParams {
             m_cost_kib: 8,
             t_cost: 1,
             p_cost: 1,
         }
+    }
+
+    /// A file asking for absurd Argon2 settings is refused before any hashing,
+    /// for a whole-keystore (v1) file as for a slot.
+    #[test]
+    fn refuses_unreasonable_kdf_settings_from_a_file() {
+        for bad in [
+            KdfParams { m_cost_kib: u32::MAX, ..test_params() },
+            KdfParams { t_cost: 1_000_000, ..test_params() },
+            KdfParams { p_cost: 255, ..test_params() },
+        ] {
+            let started = std::time::Instant::now();
+            assert!(derive_key("pw", &[0u8; 16], &bad).is_err(), "{bad:?}");
+            assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        }
+        let mut sealed = seal(b"hello frost", "pass", &test_params()).unwrap();
+        sealed[9..13].copy_from_slice(&u32::MAX.to_le_bytes()); // m_cost in the v1 header
+        assert!(open(&sealed, "pass").is_err());
+        assert!(derive_key("pw", &[0u8; 16], &KdfParams::default()).is_ok());
     }
 
     #[test]
