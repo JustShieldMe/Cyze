@@ -71,8 +71,15 @@ Supports both frost-tools ciphersuites: **Ed25519** (generic signing) and
   with upstream `~/.config/frost/credentials.toml`, so an existing frost-client
   config imports in one step.
 - The **recovery code is shown once** at setup behind an explicit
-  acknowledgement and is never stored — it is your only way back in if you forget
-  the passphrase. Back it up.
+  acknowledgement and is never stored. It unlocks the keystore if you forget the
+  passphrase.
+- **Backups** restore your key shares on another device. A backup file holds the
+  encrypted keystore plus the wallet's scan start heights, which are encrypted
+  under a key derived from the keystore. It opens only with your passphrase or
+  recovery code, and neither half is enough alone. The app reminds you to back
+  up whenever a group isn't in any backup yet.
+- Keystore writes are atomic and flushed to disk, and the previous version is
+  kept; unlocking falls back to it if the current file is damaged.
 - All ceremony messages are **end-to-end encrypted** (Noise, via frost-client);
   `frostd` is an untrusted relay.
 - Self-signed server certificates are **pinned explicitly** (trust-on-first-use

@@ -84,8 +84,15 @@ On first launch you create your local keystore.
 - A wrong passphrase or code is rejected cleanly.
 
 Your key shares and contacts are stored encrypted at rest. The passphrase and the
-recovery code each unlock the keystore; losing both means the data cannot be
-recovered, which is why the recovery code must be backed up.
+recovery code each unlock the keystore.
+
+**Back up your keys** once you're in a group. A banner reminds you, or use
+**Wallet Settings → Key backup**. The backup file is encrypted and opens only with
+your passphrase or recovery code, so keep it somewhere other than this computer.
+To restore on a new device, choose **Restore from a backup** on the first screen,
+then unlock with your passphrase, or with your recovery code if you've forgotten
+it. Without a backup file, the recovery code alone can't bring back a lost
+device's key shares.
 
 ---
 

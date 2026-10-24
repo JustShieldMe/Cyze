@@ -5,6 +5,7 @@
 //! `cargo test`. The Tauri app crate is a thin adapter that forwards
 //! ceremony events to the frontend.
 
+pub mod backup;
 pub mod ciphersuite;
 pub mod config;
 pub mod dkg;

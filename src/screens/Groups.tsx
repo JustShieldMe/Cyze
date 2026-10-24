@@ -2026,7 +2026,7 @@ function ShareRepairGuide({ group }: { group: GroupSummary }) {
                 <strong>{t}</strong> other members to help, but only {n - 1}{" "}
                 exist, so <strong>a lost share in this group cannot be repaired</strong>.
                 Your only protection against losing a share is your recovery code
-                and an encrypted keystore backup (below). If a member permanently
+                and a current backup file (Settings → Key backup). If a member permanently
                 loses their share, the group must run a new DKG to form a fresh
                 group.
               </span>
@@ -2040,13 +2040,19 @@ function ShareRepairGuide({ group }: { group: GroupSummary }) {
               use your 12-word recovery code to set a new one.
             </li>
             <li>
-              <strong>Device failure</strong>, but you kept an encrypted keystore
-              backup: restore the backup and unlock as normal.
+              <strong>Device failure</strong>, but you kept a backup file: on the
+              new device choose <em>Restore from a backup</em>, then unlock with your
+              passphrase or recovery code.
             </li>
             <li>
               <strong>Lost the share entirely</strong> (no device, no backup):{" "}
               {repairable ? (
-                "repair it with help from the group, using the steps below."
+                <>
+                  the group can rebuild it with FROST's repair protocol (below),
+                  but that isn't built into Cyze yet. Until it is, while at least{" "}
+                  {t} members still hold their shares, move the funds to a new group
+                  made with a fresh DKG.
+                </>
               ) : (
                 <>
                   this {t}-of-{n} group cannot repair a share — the group would
@@ -2068,7 +2074,7 @@ function ShareRepairGuide({ group }: { group: GroupSummary }) {
                 </span>
               </div>
 
-              <h3 style={{ marginTop: 16 }}>The repair, step by step</h3>
+              <h3 style={{ marginTop: 16 }}>How repair works (not in the app yet)</h3>
               <ol className="steps">
                 <li>
                   <div className="step-title">Choose your helpers</div>
@@ -2124,11 +2130,10 @@ function ShareRepairGuide({ group }: { group: GroupSummary }) {
           )}
 
           <p className="dim" style={{ marginTop: 12 }}>
-            This screen documents the protocol (FROST's repairable threshold
-            scheme, implemented in <span className="code-inline">frost-core</span>). A
-            guided in-app repair ceremony — like the DKG wizard — is the planned
-            next step; until then, the safest habit is to keep your recovery code
-            and an encrypted keystore backup so you rarely need a full repair.
+            The protocol above is FROST's repairable threshold scheme
+            (<span className="code-inline">frost-core</span>). A guided in-app repair
+            ceremony is planned. Until then, keep your recovery code and a current
+            backup file, so a lost device never needs a repair.
           </p>
         </div>
       )}

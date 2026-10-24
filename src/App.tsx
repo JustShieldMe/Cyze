@@ -22,6 +22,7 @@ import {
 } from "./ipc/commands";
 import CeremonyListener from "./CeremonyListener";
 import { Logo } from "./components/Logo";
+import { BackupReminder } from "./components/Backup";
 import Unlock from "./screens/Unlock";
 import Dashboard from "./screens/Dashboard";
 import Contacts from "./screens/Contacts";
@@ -237,6 +238,7 @@ function Layout() {
         </a>
       </nav>
       <main className="content">
+        <BackupReminder />
         <Outlet />
       </main>
     </div>
