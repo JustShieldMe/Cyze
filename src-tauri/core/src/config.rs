@@ -3,7 +3,7 @@
 //! keystore stores this TOML as its encrypted plaintext, so the app stays
 //! byte-compatible with the upstream CLI.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use frost_client::cli::config::{Config, Group};
 use frost_client::cli::contact::Contact;
@@ -34,6 +34,12 @@ pub struct KeystoreExtras {
     /// (see `zcash::ViewingSeed`). Without it a group's funds can't be seen.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub viewing_seeds: BTreeMap<String, String>,
+    /// Groups that made their viewing key private after they were created.
+    /// Their funds were under the key derived from the group id alone, so the
+    /// wallet keeps watching that old address and lets the group move what's
+    /// there (see `viewing::agree_new_viewing_key`).
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub old_viewing_keys: BTreeSet<String>,
 }
 
 impl Drop for KeystoreExtras {
@@ -45,7 +51,13 @@ impl Drop for KeystoreExtras {
 
 impl KeystoreExtras {
     pub fn is_empty(&self) -> bool {
-        self.viewing_seeds.is_empty()
+        self.viewing_seeds.is_empty() && self.old_viewing_keys.is_empty()
+    }
+
+    /// Whether a group made its viewing key private after it was created, so
+    /// funds may still be at its old address.
+    pub fn has_old_viewing_key(&self, group_id: &str) -> bool {
+        self.old_viewing_keys.contains(group_id) && self.viewing_seeds.contains_key(group_id)
     }
 
     /// The viewing seed recorded for a group, if it has one.

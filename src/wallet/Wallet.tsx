@@ -8,6 +8,7 @@ import {
   walletGroupStatus,
   walletSyncNow,
   walletSyncStatus,
+  walletPrepareMove,
   walletPrepareSend,
   walletPrepareVote,
   walletSend,
@@ -25,6 +26,7 @@ import { useCeremonies, selectActiveSend } from "../stores/ceremonies";
 import { useAdvancedMode } from "../lib/advanced";
 import { WalletTxHistory } from "./Activity";
 import { ReviewNotesTab } from "./Notes";
+import { ViewingKeyCallout } from "./Privacy";
 import { ReceiveShieldCard } from "./Receive";
 import { SendSessionPanel } from "./SendProgress";
 import { VoteTab } from "./Vote";
@@ -37,8 +39,10 @@ const SELF_SEND_FEE_BUFFER = 100_000;
 
 type Panel = "receive" | "send" | "notes" | "vote";
 
-/** What a prepared transaction is for, which changes how it's reviewed. */
-type DraftKind = "payment" | "consolidation" | "migration" | "vote";
+/** What a prepared transaction is for, which changes how it's reviewed:
+ *  "migration" moves old-pool Orchard funds into Ironwood; "move" empties the
+ *  group's old (publicly viewable) address into its private one. */
+type DraftKind = "payment" | "consolidation" | "migration" | "move" | "vote";
 
 /** A group's Zcash wallet: balance, receive, send, and activity. Shown on Home
  *  for the active wallet. */
@@ -117,6 +121,13 @@ export function GroupWallet({ group, network }: { group: GroupSummary; network: 
       return { kind, draft: await walletPrepareSend(group.id, ownAddress, amount - SELF_SEND_FEE_BUFFER) };
     },
     onSuccess: ({ kind, draft }) => review(draft, kind),
+    onError: (e) => setErr((e as unknown as AppError).message ?? String(e)),
+  });
+
+  // Everything at the old address, to the group's private one.
+  const prepareMove = useMutation({
+    mutationFn: () => walletPrepareMove(group.id),
+    onSuccess: (d) => review(d, "move"),
     onError: (e) => setErr((e as unknown as AppError).message ?? String(e)),
   });
 
@@ -242,6 +253,13 @@ export function GroupWallet({ group, network }: { group: GroupSummary; network: 
             </button>
           </div>
         )}
+        <ViewingKeyCallout
+          group={group}
+          network={network}
+          sendInProgress={sendInProgress}
+          movePending={prepareMove.isPending}
+          onMove={() => prepareMove.mutate()}
+        />
       </div>
 
       {err && <SyncErrorView text={err} />}
@@ -490,7 +508,7 @@ function ReviewSend({
     }
   }, [identity.data, group]);
   const [checked, setChecked] = useState(false);
-  const selfSend = kind === "consolidation" || kind === "migration";
+  const selfSend = kind === "consolidation" || kind === "migration" || kind === "move";
   const needsCheck = network === "main" && !selfSend;
 
   const send = useMutation({
@@ -501,6 +519,7 @@ function ReviewSend({
         amount_zatoshis: draft.amount_zatoshis,
         signers: [...signers],
         memo: draft.memo ?? null,
+        from_old_address: kind === "move",
       }),
     onSuccess: (id) => {
       onError(null);
@@ -523,6 +542,7 @@ function ReviewSend({
     payment: "Review payment",
     consolidation: "Review: combine notes",
     migration: "Review: move funds",
+    move: "Review: move to the private address",
     vote: "Review vote",
   }[kind];
   const u = unit(network);
@@ -534,6 +554,11 @@ function ReviewSend({
         <p className="dim">Sends the old pool's funds back to this wallet, into the current pool.</p>
       )}
       {kind === "consolidation" && <p className="dim">Sends the funds back to this wallet as one note.</p>}
+      {kind === "move" && (
+        <p className="dim">
+          Moves everything at the group's old address to its new, private one. The fee comes out of the amount.
+        </p>
+      )}
       {kind === "vote" && (
         <p className="dim">
           Sends your answers to the poll. Your vote counts the balance at the poll's snapshot, not this amount.
@@ -543,7 +568,7 @@ function ReviewSend({
         <tbody>
           <tr>
             <td>To</td>
-            <td className="mono-cell" style={{ wordBreak: "break-all" }}>{selfSend ? "This wallet" : draft.recipient}</td>
+            <td className="mono-cell" style={{ wordBreak: "break-all" }}>{kind === "move" ? "This wallet's private address" : selfSend ? "This wallet" : draft.recipient}</td>
           </tr>
           <tr>
             <td>Amount</td>

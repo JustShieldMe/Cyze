@@ -416,3 +416,94 @@ async fn pinning_trusts_exactly_the_pinned_certificate() {
     let roots_only = FrostdClient::new(url, &ServerTrust::SystemRoots).unwrap();
     assert!(roots_only.challenge().await.is_err());
 }
+
+/// An existing group's members agree on a new viewing key over a session of
+/// their own: they all end up with the same seed, and a session that doesn't
+/// hold exactly the group's members is refused.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_existing_group_agrees_on_a_new_viewing_key() {
+    use frost_app_core::viewing::{agree_new_viewing_key, NewViewingKeyParams, ViewingKeyEvent};
+
+    let Some(server) = start_server().await else {
+        eprintln!("skipping: sidecar frostd binary not built (run scripts/build-sidecar.sh)");
+        return;
+    };
+    let server_url = format!("127.0.0.1:{}", server.port);
+    let trust = ServerTrust::PinnedCertificate(server.cert_pem.clone().into_bytes());
+    let users: Vec<User> = (0..3).map(|_| new_user()).collect();
+    let members: Vec<PublicKey> = users.iter().map(|u| u.pubkey.clone()).collect();
+    let group_id = "5a".repeat(32);
+    let params = |user: &User, members: &[PublicKey], session_id| NewViewingKeyParams {
+        server_url: server_url.clone(),
+        trust: trust.clone(),
+        comm_privkey: user.privkey.clone(),
+        comm_pubkey: user.pubkey.clone(),
+        group_id: group_id.clone(),
+        members: members.to_vec(),
+        session_id,
+    };
+
+    // Member 0 starts; the others join the session it created.
+    let (tx, mut rx) = mpsc::channel(32);
+    let starter = tokio::spawn(agree_new_viewing_key(params(&users[0], &members, None), tx, CancellationToken::new()));
+    let session_id = loop {
+        match rx.recv().await.expect("starter events") {
+            ViewingKeyEvent::SessionReady { session_id } => break session_id,
+            _ => continue,
+        }
+    };
+    let mut joiners = Vec::new();
+    for user in &users[1..] {
+        let (tx, mut rx) = mpsc::channel(32);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        joiners.push(tokio::spawn(agree_new_viewing_key(
+            params(user, &members, Some(session_id)),
+            tx,
+            CancellationToken::new(),
+        )));
+    }
+    // The starter heard who it was waiting for.
+    let mut heard_waiting = false;
+    while let Ok(Some(event)) = tokio::time::timeout(Duration::from_secs(5), rx.recv()).await {
+        heard_waiting |= matches!(event, ViewingKeyEvent::Waiting { .. });
+    }
+    let seed = starter.await.unwrap().expect("the starter agrees");
+    for joiner in joiners {
+        assert_eq!(joiner.await.unwrap().expect("a member agrees"), seed);
+    }
+    assert!(heard_waiting, "the starter reports members it's waiting for");
+
+    // A session that leaves member 2 out is refused by a member who knows the
+    // whole group, before anything is sent.
+    let (tx, mut rx) = mpsc::channel(32);
+    let cancel = CancellationToken::new();
+    let partial = tokio::spawn(agree_new_viewing_key(params(&users[0], &members[..2], None), tx, cancel.clone()));
+    let session_id = loop {
+        match rx.recv().await.expect("starter events") {
+            ViewingKeyEvent::SessionReady { session_id } => break session_id,
+            _ => continue,
+        }
+    };
+    let (tx, mut drain) = mpsc::channel(32);
+    tokio::spawn(async move { while drain.recv().await.is_some() {} });
+    let refused = agree_new_viewing_key(params(&users[1], &members, Some(session_id)), tx, CancellationToken::new()).await;
+    assert!(
+        matches!(&refused, Err(e) if e.to_string().contains("aren't exactly")),
+        "{refused:?}"
+    );
+    cancel.cancel();
+    assert!(partial.await.unwrap().is_err());
+
+    // A signing session isn't mistaken for one.
+    let mut client = FrostdClient::new(format!("https://{server_url}"), &trust).unwrap();
+    client.login(&users[0].privkey, &users[0].pubkey).await.unwrap();
+    let signing = client
+        .create_new_session(&frost_client::api::CreateNewSessionArgs { pubkeys: members.clone(), message_count: 1 })
+        .await
+        .unwrap()
+        .session_id;
+    let (tx, mut drain) = mpsc::channel(32);
+    tokio::spawn(async move { while drain.recv().await.is_some() {} });
+    let refused = agree_new_viewing_key(params(&users[1], &members, Some(signing)), tx, CancellationToken::new()).await;
+    assert!(matches!(&refused, Err(e) if e.to_string().contains("isn't for agreeing")), "{refused:?}");
+}

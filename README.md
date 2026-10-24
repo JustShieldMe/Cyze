@@ -85,9 +85,17 @@ Supports both frost-tools ciphersuites: **Ed25519** (generic signing) and
   compares a digest of the result before the group is saved. The seed lives in
   each member's keystore, so it's encrypted and backed up with their share.
   Knowing the group's id (its Orchard `ak`) is then not enough to see its
-  payments. Groups created before this, or with a member using the upstream
-  command-line tools (an advanced option), still derive their viewing key
-  from `ak`.
+  payments. Groups with a member using the upstream command-line tools (an
+  advanced option) still derive their viewing key from `ak`.
+- **Older groups can go private.** A group created before private viewing
+  keys can have its members run the same agreement later, over a frostd
+  session that holds exactly the group's members (each app refuses any other).
+  Every member's app records the seed, keeps watching the old address, and
+  hands out a new one. The funds move with an ordinary payment the group
+  approves; co-signers' apps verify it, accepting notes under the old key as
+  the group's but counting only outputs to the new key as change, so nothing
+  can be routed back to the publicly viewable address unnoticed. Payments made
+  before the move stay visible to anyone who knows the group's id.
 - **Nothing outside the keystore names a group.** Per-group settings, contact
   nicknames, signed transactions awaiting broadcast, and the ceremony history
   are encrypted under keys derived from the keystore, and wallet folders have

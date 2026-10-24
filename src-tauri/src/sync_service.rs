@@ -8,7 +8,10 @@
 //!
 //! Each pass: pick the active RedPallas group, set up its view-only account if
 //! needed, then check the chain tip (one small RPC on the shared connection)
-//! and sync only when there is something new. Failures back off exponentially.
+//! and sync only when there is something new. A group that made its viewing
+//! key private also has its old wallet kept current, after the new one, so
+//! funds still arriving at the old address show up. Failures back off
+//! exponentially.
 //! "Sync Now", a wallet switch, or a network change wakes it immediately.
 //! Progress reaches the UI as `wallet:sync` events (a [`SyncStatus`]);
 //! `wallet:updated` tells it to re-read balances, notes and history.
@@ -22,10 +25,10 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tokio::sync::Notify;
 
 use crate::commands::wallet::{
-    group_wallet_ctx, init_account, local_status, rebuild_after_reorg, shared_lightwalletd, sync_once,
+    init_account_of, local_status, rebuild_after_reorg, shared_lightwalletd, sync_once, wallet_ctx,
 };
 use crate::error::AppError;
-use crate::state::{wallet_session_key, AppState};
+use crate::state::{AppState, WalletKind};
 
 /// How often a caught-up wallet checks for a new block. Blocks arrive about
 /// every 75 s (25 s from NU7), so a new one shows up within ~15 s.
@@ -145,7 +148,7 @@ async fn run<R: Runtime>(app: AppHandle<R>) {
 
         // A lock mid-pass cancels the sync: its key material is going away.
         let outcome = tokio::select! {
-            outcome = pass(&app, &state, &group_id, force, &mut synced_since_unlock) => Some(outcome),
+            outcome = pass_group(&app, &state, &group_id, force, &mut synced_since_unlock) => Some(outcome),
             _ = until_locked(&mut unlocked) => None,
         };
         let Some(outcome) = outcome else {
@@ -162,10 +165,10 @@ async fn run<R: Runtime>(app: AppHandle<R>) {
             }
             // Cancelled by a restart, a wallet switch or a network change; the
             // wake that caused it is already pending, so go straight round.
-            Err(e) if e.code == "cancelled" => Duration::ZERO,
+            Err((_, e)) if e.code == "cancelled" => Duration::ZERO,
             // A reorg below the wallet's start: rebuild it from an earlier
             // height and sync again straight away.
-            Err(e) if e.code == "reorg" => match rebuild_after_reorg(&state, &group_id).await {
+            Err((kind, e)) if e.code == "reorg" => match rebuild_after_reorg(&state, &group_id, kind).await {
                 Ok(()) => {
                     tracing::warn!("rebuilt the wallet after a chain reorganization: {}", e.message);
                     synced_since_unlock.clear();
@@ -177,14 +180,17 @@ async fn run<R: Runtime>(app: AppHandle<R>) {
                     backoff.unwrap_or(FIRST_BACKOFF)
                 }
             },
-            Err(e) => {
-                tracing::warn!("wallet sync failed: {}", e.message);
-                let mut status = state.sync_service.status(&group_id).unwrap_or_default();
-                status.group_id = group_id.clone();
-                status.state = "error";
-                status.error = Some(e.message);
-                status.error_code = Some(e.code.to_string());
-                state.sync_service.report(&app, status);
+            Err((kind, e)) => {
+                tracing::warn!(?kind, "wallet sync failed: {}", e.message);
+                // The old wallet's trouble doesn't make the current one look broken.
+                if kind == WalletKind::Current {
+                    let mut status = state.sync_service.status(&group_id).unwrap_or_default();
+                    status.group_id = group_id.clone();
+                    status.state = "error";
+                    status.error = Some(e.message);
+                    status.error_code = Some(e.code.to_string());
+                    state.sync_service.report(&app, status);
+                }
                 let next = backoff.map_or(FIRST_BACKOFF, |b| (b * 2).min(MAX_BACKOFF));
                 backoff = Some(next);
                 next
@@ -194,17 +200,44 @@ async fn run<R: Runtime>(app: AppHandle<R>) {
     }
 }
 
-/// One pass for `group_id`: set up, check the tip, sync if needed.
-async fn pass<R: Runtime>(
+/// One pass for a group: its current wallet, then its old one if it has one.
+/// An error says which wallet it came from.
+async fn pass_group<R: Runtime>(
     app: &AppHandle<R>,
     state: &AppState,
     group_id: &str,
     force: bool,
     synced_since_unlock: &mut HashSet<String>,
+) -> Result<(), (WalletKind, AppError)> {
+    pass(app, state, group_id, WalletKind::Current, force, synced_since_unlock)
+        .await
+        .map_err(|e| (WalletKind::Current, e))?;
+    if state.has_old_viewing_key(group_id).await.unwrap_or(false) {
+        pass(app, state, group_id, WalletKind::Old, force, synced_since_unlock)
+            .await
+            .map_err(|e| (WalletKind::Old, e))?;
+    }
+    Ok(())
+}
+
+/// One pass for one of a group's wallets: set up, check the tip, sync if
+/// needed. Only the current wallet's progress is reported to the UI.
+async fn pass<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+    group_id: &str,
+    kind: WalletKind,
+    force: bool,
+    synced_since_unlock: &mut HashSet<String>,
 ) -> Result<(), AppError> {
     let service = &state.sync_service;
-    let (network, url, _ufvk) = group_wallet_ctx(state, group_id).await?;
-    let session_key = wallet_session_key(group_id, network.dir_name());
+    let ctx = wallet_ctx(state, group_id, kind).await?;
+    let session_key = ctx.key.clone();
+    let report = |status: SyncStatus| {
+        if kind == WalletKind::Current {
+            service.report(app, status);
+        }
+    };
     let base = |state: &'static str, scanned: u64, tip: u64| SyncStatus {
         group_id: group_id.to_string(),
         state,
@@ -215,22 +248,22 @@ async fn pass<R: Runtime>(
         error_code: None,
     };
 
-    let mut local = local_status(state, group_id).await?;
+    let mut local = local_status(state, group_id, kind).await?;
     if !local.initialized {
-        service.report(app, base("setting_up", 0, 0));
-        init_account(state, group_id, None).await?;
-        local = local_status(state, group_id).await?;
+        report(base("setting_up", 0, 0));
+        init_account_of(state, group_id, kind, None).await?;
+        local = local_status(state, group_id, kind).await?;
     }
 
-    let tip = shared_lightwalletd(state, &url).await?.latest_height().await?;
+    let tip = shared_lightwalletd(state, &ctx.url).await?.latest_height().await?;
     let needed = force || !synced_since_unlock.contains(&session_key) || tip > local.synced_height;
     if !needed {
-        service.report(app, base("idle", local.synced_height, tip));
+        report(base("idle", local.synced_height, tip));
         return Ok(());
     }
 
-    service.report(app, base("syncing", local.synced_height, tip.max(local.chain_tip_height)));
-    let sync = sync_once(state, group_id);
+    report(base("syncing", local.synced_height, tip.max(local.chain_tip_height)));
+    let sync = sync_once(state, group_id, kind);
     tokio::pin!(sync);
     let mut ticker = tokio::time::interval(PROGRESS_TICK);
     ticker.tick().await; // the first tick is immediate
@@ -240,9 +273,9 @@ async fn pass<R: Runtime>(
             _ = ticker.tick() => {
                 // A just-imported wallet reads 0/0 until its first batch lands;
                 // keep showing the last known heights rather than zeros.
-                if let Ok((scanned, tip)) = progress(state, group_id).await {
+                if let Ok((scanned, tip)) = progress(state, group_id, kind).await {
                     if tip > 0 {
-                        service.report(app, base("syncing", scanned, tip));
+                        report(base("syncing", scanned, tip));
                     }
                 }
             }
@@ -250,28 +283,20 @@ async fn pass<R: Runtime>(
     };
 
     let first = synced_since_unlock.insert(session_key);
-    service.report(
-        app,
-        SyncStatus {
-            last_synced_ms: Some(now_ms()),
-            ..base("idle", status.synced_height, status.chain_tip_height)
-        },
-    );
+    report(SyncStatus {
+        last_synced_ms: Some(now_ms()),
+        ..base("idle", status.synced_height, status.chain_tip_height)
+    });
     if stats.blocks > 0 || first {
         let _ = app.emit("wallet:updated", serde_json::json!({ "group_id": group_id }));
     }
     Ok(())
 }
 
-async fn progress(state: &AppState, group_id: &str) -> Result<(u64, u64), AppError> {
-    let (network, _url, _ufvk) = group_wallet_ctx(state, group_id).await?;
+async fn progress(state: &AppState, group_id: &str, kind: WalletKind) -> Result<(u64, u64), AppError> {
+    let ctx = wallet_ctx(state, group_id, kind).await?;
     let db_key = state.wallet_db_key(group_id).await?;
-    Ok(frost_app_core::wallet::sync_progress(
-        &state.data_dir,
-        group_id,
-        network,
-        db_key.as_ref(),
-    )?)
+    Ok(frost_app_core::wallet::sync_progress(&state.data_dir, &ctx.dir, ctx.network, db_key.as_ref())?)
 }
 
 /// Sleep for `delay`, returning early on a wake-up or a lock change.

@@ -54,6 +54,7 @@ pub async fn remove_group(state: State<'_, AppState>, id: String) -> AppResult<(
     state
         .mutate_keystore(|config, extras| {
             extras.viewing_seeds.remove(&id);
+            extras.old_viewing_keys.remove(&id);
             config
                 .group
                 .remove(&id)

@@ -20,6 +20,13 @@
 //! 5. requires the randomizer it is asked to sign with to belong to one of the
 //!    group's unsigned spends.
 //!
+//! A group that made its viewing key private (see `frost_app_core::viewing`)
+//! may still hold notes under the key derived from its id alone, and moves them
+//! with the same spend authority. Spends under either key verify, but only
+//! outputs to the private key count as change: anything paid back to the old
+//! address is listed as a payment, so it can't quietly go where anyone who
+//! knows the group's id can see it.
+//!
 //! [`check_coordinator_claims`] then compares the coordinator's description
 //! with the result, and the app refuses to sign if they disagree.
 
@@ -59,6 +66,10 @@ pub struct VerifiedTransaction {
     pub change_zatoshis: u64,
     /// What is left for the network: spent minus payments and change.
     pub fee_zatoshis: u64,
+    /// It spends notes under the viewing key derived from the group's id: funds
+    /// a group that made its viewing key private is moving off its old address.
+    #[serde(default)]
+    pub from_old_address: bool,
 }
 
 /// One payment leaving the group.
@@ -88,6 +99,37 @@ pub fn group_fvk(group_ak_hex: &str, seed: Option<&crate::zcash::ViewingSeed>) -
         .ok_or_else(|| fail("the group key is not 32 bytes of hex"))?;
     FullViewingKey::from_bytes(&crate::zcash::orchard_fvk_bytes(&ak, seed))
         .ok_or_else(|| fail("the group key is not a valid Orchard spend validating key"))
+}
+
+/// The viewing keys a group's notes can be under: its current one and, for a
+/// group with a viewing seed, the one derived from its id alone, which held its
+/// funds if it made its viewing key private after it was created.
+struct GroupKeys {
+    current: FullViewingKey,
+    old: Option<FullViewingKey>,
+}
+
+impl GroupKeys {
+    fn new(group_ak_hex: &str, seed: Option<&crate::zcash::ViewingSeed>) -> Result<Self, CoreError> {
+        Ok(Self {
+            current: group_fvk(group_ak_hex, seed)?,
+            old: seed.map(|_| group_fvk(group_ak_hex, None)).transpose()?,
+        })
+    }
+
+    fn all(&self) -> impl Iterator<Item = &FullViewingKey> {
+        std::iter::once(&self.current).chain(self.old.as_ref())
+    }
+
+    /// The key a spent note is under, judged by its recipient address. A note
+    /// under neither (someone else's, or a dummy) is checked against the
+    /// current key, which refuses the first and ignores the key for the second.
+    fn for_spend(&self, spend: &orchard::pczt::Spend) -> &FullViewingKey {
+        spend
+            .recipient()
+            .and_then(|r| self.all().find(|k| k.scope_for_address(&r).is_some()))
+            .unwrap_or(&self.current)
+    }
 }
 
 fn serialize_b64(pczt: pczt::Pczt) -> Result<String, CoreError> {
@@ -142,6 +184,8 @@ struct Totals {
     payments: Vec<VerifiedPayment>,
     /// Randomizers of the group's spends that still need its signature.
     unsigned_alphas: Vec<[u8; 32]>,
+    /// Some spent note is under the group's old viewing key.
+    from_old_address: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -157,9 +201,10 @@ fn orchard_ua(raw: [u8; 43], net: NetworkType) -> Result<String, String> {
         .map_err(|e| format!("unified address: {e:?}"))
 }
 
-fn recover_memo(pool: Pool, action: &orchard::pczt::Action, fvk: &FullViewingKey) -> Option<String> {
+fn recover_memo(pool: Pool, action: &orchard::pczt::Action, keys: &GroupKeys) -> Option<String> {
     let out_ciphertext = &action.output().encrypted_note().out_ciphertext;
-    [Scope::External, Scope::Internal].into_iter().find_map(|scope| {
+    let scopes = [Scope::External, Scope::Internal];
+    keys.all().flat_map(|fvk| scopes.map(|scope| (fvk, scope))).find_map(|(fvk, scope)| {
         let ovk = fvk.to_ovk(scope);
         let memo = match pool {
             Pool::Orchard => try_output_recovery_with_ovk(
@@ -186,7 +231,7 @@ fn recover_memo(pool: Pool, action: &orchard::pczt::Action, fvk: &FullViewingKey
 fn check_bundle(
     pool: Pool,
     bundle: &orchard::pczt::Bundle,
-    fvk: &FullViewingKey,
+    keys: &GroupKeys,
     net: NetworkType,
     totals: &mut Totals,
 ) -> Result<(), OrchardError<String>> {
@@ -195,6 +240,7 @@ fn check_bundle(
         let spend = action.spend();
         let output = action.output();
         // The spent note: real (the group's) or a zero-value dummy with its own key.
+        let fvk = keys.for_spend(spend);
         spend.verify_nullifier(Some(fvk)).map_err(OrchardError::Verify)?;
         spend.verify_rk(Some(fvk)).map_err(OrchardError::Verify)?;
         // The new note: its recipient and value are what its commitments say.
@@ -206,6 +252,7 @@ fn check_bundle(
             && spend.recipient().is_some_and(|r| fvk.scope_for_address(&r).is_some());
         if groups_note {
             totals.spent += spent;
+            totals.from_old_address |= spent > 0 && Some(fvk) == keys.old.as_ref();
             if spend.spend_auth_sig().is_none() {
                 if let Some(alpha) = spend.alpha() {
                     totals.unsigned_alphas.push(alpha.to_bytes());
@@ -221,14 +268,14 @@ fn check_bundle(
         let recipient = output
             .recipient()
             .ok_or_else(|| OrchardError::Custom("an output has no recipient".into()))?;
-        if fvk.scope_for_address(&recipient).is_some() {
+        if keys.current.scope_for_address(&recipient).is_some() {
             totals.change += value;
         } else if value > 0 {
             totals.payments.push(VerifiedPayment {
                 address: orchard_ua(recipient.to_raw_address_bytes(), net).map_err(OrchardError::Custom)?,
                 value_zatoshis: value,
                 transparent: false,
-                memo: recover_memo(pool, action, fvk),
+                memo: recover_memo(pool, action, keys),
             });
         }
         // A zero-value output to someone else is bundle padding.
@@ -267,7 +314,7 @@ pub fn verify_signing_request(
     message_hex: &str,
     randomizer_hex: Option<&str>,
 ) -> Result<VerifiedTransaction, CoreError> {
-    let fvk = group_fvk(group_ak_hex, viewing_seed)?;
+    let keys = GroupKeys::new(group_ak_hex, viewing_seed)?;
     let net = network.network_type();
     let bytes = B64
         .decode(pczt_b64.trim())
@@ -294,9 +341,9 @@ pub fn verify_signing_request(
     let expiry_height = *pczt.global().expiry_height();
     let mut totals = Totals::default();
     Verifier::new(pczt)
-        .with_orchard(|b| check_bundle(Pool::Orchard, b, &fvk, net, &mut totals))
+        .with_orchard(|b| check_bundle(Pool::Orchard, b, &keys, net, &mut totals))
         .map_err(|e| fail(describe(e)))?
-        .with_ironwood(|b| check_bundle(Pool::Ironwood, b, &fvk, net, &mut totals))
+        .with_ironwood(|b| check_bundle(Pool::Ironwood, b, &keys, net, &mut totals))
         .map_err(|e| fail(describe(e)))?
         .with_transparent(|b| {
             if !b.inputs().is_empty() {
@@ -342,6 +389,7 @@ pub fn verify_signing_request(
         spent_zatoshis: totals.spent,
         change_zatoshis: totals.change,
         fee_zatoshis: fee,
+        from_old_address: totals.from_old_address,
     })
 }
 
@@ -504,6 +552,18 @@ mod tests {
     /// value always lands in Ironwood, so spending a legacy Orchard note is a
     /// "turnstile" transaction across both bundles.
     fn draft(pool: Pool, fvk: &FullViewingKey, pay: u64, memo: &str) -> Draft {
+        draft_to(pool, fvk, payee(), pay, memo, fvk.address_at(0u32, Scope::Internal))
+    }
+
+    /// [`draft`], with the payment going to `pay_to` and the change to `change_to`.
+    fn draft_to(
+        pool: Pool,
+        fvk: &FullViewingKey,
+        pay_to: orchard::Address,
+        pay: u64,
+        memo: &str,
+        change_to: orchard::Address,
+    ) -> Draft {
         let note = received_note(pool, fvk);
         let (anchor, path): (orchard::Anchor, orchard::tree::MerklePath) = {
             let leaf = MerkleHashOrchard::from_cmx(&note.commitment().into());
@@ -518,7 +578,6 @@ mod tests {
             Pool::Ironwood => (None, Some(anchor)),
         };
         let memo = if memo.is_empty() { MemoBytes::empty() } else { memo.parse::<Memo>().unwrap().encode() };
-        let change_to = fvk.address_at(0u32, Scope::Internal);
         let (ext_ovk, int_ovk) = (Some(fvk.to_ovk(Scope::External)), Some(fvk.to_ovk(Scope::Internal)));
         let builder_with_change = |change: u64| {
             let mut builder = Builder::new(
@@ -537,7 +596,7 @@ mod tests {
                 Pool::Ironwood => builder.add_ironwood_spend::<zip317::FeeRule>(fvk.clone(), note, path.clone()).unwrap(),
             }
             builder
-                .add_ironwood_output::<zip317::FeeRule>(ext_ovk.clone(), payee(), Zatoshis::const_from_u64(pay), memo.clone())
+                .add_ironwood_output::<zip317::FeeRule>(ext_ovk.clone(), pay_to, Zatoshis::const_from_u64(pay), memo.clone())
                 .unwrap();
             builder
                 .add_ironwood_output::<zip317::FeeRule>(int_ovk.clone(), change_to, Zatoshis::const_from_u64(change), MemoBytes::empty())
@@ -623,6 +682,50 @@ mod tests {
         let v = verify_signing_request(DEVNET, &ak, Some(&seed), &b64, &d.sighash_hex, Some(&d.alpha_hex)).unwrap();
         assert_eq!(v.change_zatoshis, NOTE - 100_000 - d.fee);
         assert!(verify_signing_request(DEVNET, &ak, None, &b64, &d.sighash_hex, Some(&d.alpha_hex)).is_err());
+    }
+
+    /// A group that made its viewing key private moves its funds off the
+    /// address derived from its id: the spend is under the old key, the money
+    /// arrives at the private one, and it verifies as a move within the group.
+    #[test]
+    fn moving_funds_off_the_old_address_verifies_as_a_transfer_within_the_group() {
+        let (ak, old) = group(1);
+        let seed = [5u8; 32];
+        let private = group_fvk(&ak, Some(&seed)).unwrap();
+        let to = private.address_at(0u32, Scope::External);
+        let d = draft_to(Pool::Ironwood, &old, to, 600_000, "", private.address_at(0u32, Scope::Internal));
+        let b64 = pczt_for_signers(&d.pczt_hex).unwrap();
+        let v = verify_signing_request(DEVNET, &ak, Some(&seed), &b64, &d.sighash_hex, Some(&d.alpha_hex)).unwrap();
+        assert!(v.from_old_address);
+        assert!(v.payments.is_empty(), "{:?}", v.payments);
+        assert_eq!(v.change_zatoshis, NOTE - d.fee);
+        check_coordinator_claims(DEVNET, &ak, Some(&seed), &v, &claims(&d, ua(to), 600_000, None)).unwrap();
+
+        // An ordinary send from the private key isn't flagged.
+        let d = draft(Pool::Ironwood, &private, 100_000, "");
+        let b64 = pczt_for_signers(&d.pczt_hex).unwrap();
+        let v = verify_signing_request(DEVNET, &ak, Some(&seed), &b64, &d.sighash_hex, Some(&d.alpha_hex)).unwrap();
+        assert!(!v.from_old_address);
+    }
+
+    /// Change sent back to the old address isn't change: anyone who knows the
+    /// group's id could watch it, so the signer sees it as a payment.
+    #[test]
+    fn change_to_the_old_address_is_shown_as_a_payment() {
+        let (ak, old) = group(1);
+        let seed = [5u8; 32];
+        let private = group_fvk(&ak, Some(&seed)).unwrap();
+        let d = draft_to(Pool::Ironwood, &private, payee(), 100_000, "", old.address_at(0u32, Scope::Internal));
+        let b64 = pczt_for_signers(&d.pczt_hex).unwrap();
+        let v = verify_signing_request(DEVNET, &ak, Some(&seed), &b64, &d.sighash_hex, Some(&d.alpha_hex)).unwrap();
+        assert_eq!(v.change_zatoshis, 0);
+        assert_eq!(v.payments.len(), 2);
+        let old_change = ua(old.address_at(0u32, Scope::Internal));
+        assert!(v.payments.iter().any(|p| p.address == old_change && p.value_zatoshis == NOTE - 100_000 - d.fee));
+        assert_refused(
+            check_coordinator_claims(DEVNET, &ak, Some(&seed), &v, &claims(&d, ua(payee()), 100_000, None)),
+            "makes 2",
+        );
     }
 
     #[test]

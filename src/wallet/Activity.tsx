@@ -229,8 +229,10 @@ export function TxDetail({
   rows.push({ label: "Date & Time", value: dateStr });
   if (blockHeight != null) rows.push({ label: "Block", value: `#${blockHeight.toLocaleString()}` });
   if (txid) rows.push({ label: "Transaction ID", value: txid, mono: true });
-  if (direction) rows.push({ label: "Type", value: direction === "receive" ? "Received" : "Sent" });
-  if (amount != null) rows.push({ label: "Amount", value: `${direction === "receive" ? "+" : "−"}${zec(amount)} ${unit(network)}` });
+  const type = { receive: "Received", move: "Moved from the old address to the private one" }[direction ?? ""] ?? "Sent";
+  const sign = { receive: "+", move: "" }[direction ?? ""] ?? "−";
+  if (direction) rows.push({ label: "Type", value: type });
+  if (amount != null) rows.push({ label: "Amount", value: `${sign}${zec(amount)} ${unit(network)}` });
   // Always report the fee, for every transaction type. It used to be omitted
   // whenever it was unknown, which is precisely the received case — leaving no
   // indication of whether a fee existed at all. A received transaction's fee was
@@ -442,7 +444,8 @@ export function OnchainTxRow({
   network: WalletNetwork;
 }) {
   const isReceive = tx.direction === "receive";
-  const addrDisplay = isReceive
+  const isMove = tx.direction === "move";
+  const addrDisplay = isReceive || isMove
     ? "—"
     : tx.recipient
       ? tx.recipient.slice(0, 10) + "…"
@@ -461,13 +464,17 @@ export function OnchainTxRow({
         <td style={{ maxWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {isReceive ? (
             <span style={{ color: "#4ade80", fontSize: 12 }}>↓ Received</span>
+          ) : isMove ? (
+            <span className="dim" style={{ fontSize: 12 }} title="Moved from the old address to the private one">
+              ⇄ Made private
+            </span>
           ) : (
             <span style={{ color: "var(--accent)", fontSize: 12 }}>↑ Sent</span>
           )}
         </td>
         <td style={{ textAlign: "right", paddingRight: 12, maxWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12 }}>
           <span style={{ color: isReceive ? "#4ade80" : undefined }}>
-            {isReceive ? "+" : "−"}
+            {isReceive ? "+" : isMove ? "" : "−"}
             {zec(tx.amount_zatoshis)} {unit(network)}
           </span>
         </td>

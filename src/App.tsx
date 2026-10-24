@@ -15,7 +15,9 @@ import {
   recordActivity,
   getSettings,
   joinSigningSession,
+  joinViewingKeySession,
   listPendingSessions,
+  signingRequests,
 } from "./ipc/commands";
 import CeremonyListener from "./CeremonyListener";
 import { Logo } from "./components/Logo";
@@ -66,7 +68,7 @@ function Layout() {
     refetchInterval: 10_000,
     retry: false,
   });
-  const pendingCount = pendingSessions.data?.length ?? 0;
+  const pendingCount = signingRequests(pendingSessions.data).length;
 
   // Join new signing requests in the background, so they arrive verified and
   // ready to review instead of waiting for the user to open each one. Joining
@@ -77,11 +79,19 @@ function Layout() {
   const joinedSessions = useCeremonies((s) => s.joinedSessions);
   const recordJoin = useCeremonies((s) => s.recordJoin);
   const joining = useRef(new Set<string>());
+  //
+  // A session agreeing on a group's private viewing key is joined the same
+  // way: it reveals nothing and needs every member, and the backend refuses
+  // one that doesn't hold exactly the group's members.
   useEffect(() => {
     for (const s of pendingSessions.data ?? []) {
       if (s.matching_groups.length !== 1) continue;
       if (joinedSessions[s.session_id] || joining.current.has(s.session_id)) continue;
       joining.current.add(s.session_id);
+      if (s.kind === "viewing_key") {
+        joinViewingKeySession(s.matching_groups[0], s.session_id, s.coordinator_pubkey).catch(() => {});
+        continue;
+      }
       joinSigningSession({ group_id: s.matching_groups[0], session_id: s.session_id, server_url: null })
         .then((ceremonyId) => recordJoin(s.session_id, ceremonyId))
         .catch(() => {});

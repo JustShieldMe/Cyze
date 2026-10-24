@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
-use crate::state::{AppState, ReceiveState};
+use crate::state::{AppState, ReceiveState, WalletKind};
 
 const FILE: &str = "private-settings.enc";
 const KEY_INFO: &[u8] = b"private-settings-v1";
@@ -91,9 +91,28 @@ impl AppState {
     /// The folder name for a group's wallet: derived from the keystore, so the
     /// folder doesn't reveal the group id (which is enough to view the wallet).
     pub async fn wallet_dir_id(&self, group_id: &str) -> AppResult<String> {
+        self.wallet_dir_id_of(group_id, WalletKind::Current).await
+    }
+
+    /// The folder name for one of a group's wallets (see [`wallet_dir_id`]).
+    /// A group that made its viewing key private keeps its old wallet where it
+    /// always was and starts the private one in a folder named after its seed,
+    /// so a later new seed gets a fresh wallet too.
+    ///
+    /// [`wallet_dir_id`]: AppState::wallet_dir_id
+    pub async fn wallet_dir_id_of(&self, group_id: &str, kind: WalletKind) -> AppResult<String> {
         let guard = self.unlocked.read().await;
         let unlocked = guard.as_ref().ok_or_else(AppError::locked)?;
-        let id = unlocked.file.derive_subkey(format!("wallet-dir-v1:{group_id}").as_bytes());
+        let info = match (kind, unlocked.extras.has_old_viewing_key(group_id)) {
+            (WalletKind::Current, true) => {
+                let seed = zeroize::Zeroizing::new(unlocked.extras.viewing_seed(group_id)?.unwrap_or_default());
+                let ak = hex::decode(group_id).map_err(|e| AppError::new("config", e.to_string()))?;
+                let tag = frost_app_core::viewing::digest(&ak, &seed);
+                format!("wallet-dir-v1:{group_id}:{}", hex::encode(&tag[..8]))
+            }
+            _ => format!("wallet-dir-v1:{group_id}"),
+        };
+        let id = unlocked.file.derive_subkey(info.as_bytes());
         Ok(hex::encode(&id[..16]))
     }
 }

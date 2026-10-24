@@ -4,6 +4,7 @@ import {
   joinSigningSession,
   listGroups,
   listPendingSessions,
+  signingRequests,
   respondToSigning,
   AppError,
 } from "../ipc/commands";
@@ -52,6 +53,8 @@ interface VerifiedTransaction {
   spent_zatoshis: number;
   change_zatoshis: number;
   fee_zatoshis: number;
+  /** Spends notes at the group's old address (moving them to its private one). */
+  from_old_address?: boolean;
 }
 
 /** Format zatoshis in the request's network ticker (1 unit = 100,000,000
@@ -108,7 +111,11 @@ function VerifiedSummary({
           {tx.payments.length === 0 && (
             <tr>
               <td className="dim">Pays</td>
-              <td>Nobody: funds stay within the group</td>
+              <td>
+                {tx.from_old_address
+                  ? "Nobody: moves the group's funds from its old address to its private one"
+                  : "Nobody: funds stay within the group"}
+              </td>
             </tr>
           )}
           {tx.payments.map((p, i) => (
@@ -202,8 +209,8 @@ export default function Inbox() {
       )}
       {error && <div className="error">{error}</div>}
 
-      {sessions.data?.length ? (
-        sessions.data.map((s) => {
+      {signingRequests(sessions.data).length ? (
+        signingRequests(sessions.data).map((s) => {
           const ceremonyId = joinedSessions[s.session_id];
           const ceremony = ceremonyId ? ceremonies[ceremonyId] : undefined;
           const detail = ceremony?.detail ?? {};

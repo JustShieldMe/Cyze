@@ -224,6 +224,12 @@ pub struct AppState {
     /// Sessions this app ran key generation in. The organizer keeps one open
     /// briefly after it finishes, and it must not look like a signing request.
     pub dkg_sessions: std::sync::Mutex<std::collections::HashSet<Uuid>>,
+    /// Each group's run of agreeing on a private viewing key, while it runs
+    /// (or after it failed, until dismissed).
+    pub viewing_key_runs: std::sync::Mutex<HashMap<String, crate::commands::viewing::ViewingKeyRun>>,
+    /// Viewing-key sessions this app took part in. The member who started one
+    /// keeps it open briefly after it ends; it mustn't be joined again.
+    pub viewing_key_sessions: std::sync::Mutex<std::collections::HashSet<Uuid>>,
     /// Serializes read-modify-write cycles of the private settings.
     pub(crate) private_lock: Mutex<()>,
 }
@@ -236,6 +242,18 @@ pub const SUBTREE_ROOTS_REFRESH: std::time::Duration = std::time::Duration::from
 /// Session-cache key for one group's wallet on one network.
 pub fn wallet_session_key(group_id: &str, network: &str) -> String {
     format!("{network}/{group_id}")
+}
+
+/// Which of a group's wallets. A group has one, its current wallet, except
+/// after it made its viewing key private: then the wallet under the key
+/// derived from its id is kept too, as `Old`, so funds still at the old
+/// address show up and can be moved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WalletKind {
+    #[default]
+    Current,
+    Old,
 }
 
 impl Default for AppState {
@@ -273,6 +291,8 @@ impl AppState {
             sync_service: crate::sync_service::SyncService::default(),
             approved_sighashes: Mutex::new(HashMap::new()),
             dkg_sessions: Default::default(),
+            viewing_key_runs: Default::default(),
+            viewing_key_sessions: Default::default(),
             private_lock: Mutex::new(()),
         }
     }
@@ -288,6 +308,9 @@ impl AppState {
             // settings an older version kept in plaintext.
             crate::commands::backup::apply_pending_restore(self).await;
             crate::private::migrate_plaintext(self).await;
+        } else if let Ok(mut runs) = self.viewing_key_runs.lock() {
+            // A run can't save its result into a locked keystore.
+            runs.drain().for_each(|(_, run)| run.cancel.cancel());
         }
         self.unlocked_tx.send_replace(unlocked);
     }
@@ -365,6 +388,14 @@ impl AppState {
         let guard = self.unlocked.read().await;
         let unlocked = guard.as_ref().ok_or_else(AppError::locked)?;
         Ok(unlocked.extras.viewing_seed(group_id)?.map(zeroize::Zeroizing::new))
+    }
+
+    /// Whether a group made its viewing key private after it was created, so
+    /// it also has an old wallet (see [`WalletKind`]).
+    pub async fn has_old_viewing_key(&self, group_id: &str) -> AppResult<bool> {
+        let guard = self.unlocked.read().await;
+        let unlocked = guard.as_ref().ok_or_else(AppError::locked)?;
+        Ok(unlocked.extras.has_old_viewing_key(group_id))
     }
 
     /// Read-only access to the unlocked config.

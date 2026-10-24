@@ -47,9 +47,25 @@ fn unix_now() -> u64 {
 }
 
 /// The current groups' fingerprint (see `backup::groups_fingerprint`), and
-/// whether there are any.
+/// whether there are any. A group that made its viewing key private counts
+/// with its seed, so a backup from before then shows as out of date: restoring
+/// it would bring back a device that can't see the group's funds.
 async fn groups_fingerprint(state: &AppState) -> AppResult<(String, bool)> {
-    let ids: Vec<String> = state.with_config(|c| Ok(c.group.keys().cloned().collect())).await?;
+    let guard = state.unlocked.read().await;
+    let unlocked = guard.as_ref().ok_or_else(AppError::locked)?;
+    let ids: Vec<String> = unlocked
+        .config
+        .group
+        .keys()
+        .map(|id| match (unlocked.extras.has_old_viewing_key(id), unlocked.extras.viewing_seed(id)) {
+            (true, Ok(Some(seed))) => {
+                let seed = zeroize::Zeroizing::new(seed);
+                let ak = hex::decode(id).unwrap_or_default();
+                format!("{id}:{}", hex::encode(frost_app_core::viewing::digest(&ak, &seed)))
+            }
+            _ => id.clone(),
+        })
+        .collect();
     Ok((backup::groups_fingerprint(&ids), !ids.is_empty()))
 }
 

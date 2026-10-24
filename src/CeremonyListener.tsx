@@ -38,9 +38,18 @@ export default function CeremonyListener() {
     queryClient.setQueryData(["wallet-sync", status.group_id], status);
   });
   useTauriEvent<{ group_id: string }>("wallet:updated", ({ group_id }) => {
-    for (const key of ["wallet-status", "wallet-history", "wallet-notes", "receive-address"]) {
+    for (const key of ["wallet-status", "wallet-history", "wallet-notes", "receive-address", "viewing-key"]) {
       queryClient.invalidateQueries({ queryKey: [key, group_id] });
     }
+  });
+
+  // Agreeing on a group's private viewing key: its status, and once it's
+  // saved, a new address and a backup that's now out of date.
+  useTauriEvent<{ group_id: string }>("viewing_key:updated", ({ group_id }) => {
+    for (const key of ["viewing-key", "wallet-status", "receive-address", "orchard-keys"]) {
+      queryClient.invalidateQueries({ queryKey: [key, group_id] });
+    }
+    queryClient.invalidateQueries({ queryKey: ["backup-status"] });
   });
 
   useTauriEvent<CeremonyEventPayload>("dkg:progress", (p) => onProgress("dkg", p));

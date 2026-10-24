@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import {
   getWalletConfig,
   listPendingSessions,
+  signingRequests,
   walletGroupStatus,
   GroupSummary,
 } from "../ipc/commands";
@@ -62,7 +63,7 @@ function ApprovalsBanner() {
     queryFn: () => listPendingSessions(null),
     enabled: false,
   });
-  const count = pending.data?.length ?? 0;
+  const count = signingRequests(pending.data).length;
   if (count === 0) return null;
   return (
     <div className="callout" style={{ marginBottom: 16, alignItems: "center" }}>
