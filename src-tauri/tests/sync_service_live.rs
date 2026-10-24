@@ -79,6 +79,11 @@ async fn service_sets_up_and_syncs_a_new_group() {
     })
     .await;
     assert!(done["tip_height"].as_u64().unwrap() >= birthday);
+    // With no server chosen, it synced from the fastest of the known ones.
+    let cfg = commands::wallet::get_wallet_config(alice_state.clone()).await.unwrap();
+    assert!(cfg.automatic && cfg.auto_latency_ms.is_some(), "no server was picked");
+    assert!(frost_app_core::wallet::WalletNetwork::Main.known_lightwalletd().contains(&cfg.lightwalletd_url.as_str()));
+    eprintln!("picked {} ({} ms)", cfg.lightwalletd_url, cfg.auto_latency_ms.unwrap());
     assert!(done["scanned_height"].as_u64().unwrap() >= birthday);
     assert!(
         updated_events.lock().unwrap().iter().any(|v| v["group_id"] == gid.as_str()),

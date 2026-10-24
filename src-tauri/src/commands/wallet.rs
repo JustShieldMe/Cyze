@@ -44,20 +44,29 @@ pub struct WalletConfig {
     pub regtest_detected: Option<String>,
     /// Regtest: the level actually in use (override, else detected, else NU6).
     pub regtest_effective: Option<String>,
+    /// No server was chosen: the app uses the fastest known one (`pick_server`).
+    pub automatic: bool,
+    /// How quickly the automatically chosen server answered, once one was.
+    pub auto_latency_ms: Option<u64>,
 }
 
-/// Resolve the effective wallet config, filling in the network's default
-/// lightwalletd endpoint when none is saved.
+/// Resolve the effective wallet config. With no lightwalletd endpoint saved,
+/// that's the server picked automatically (`pick_server`), or the network's
+/// default until one is.
 pub(crate) fn resolve_config(state: &AppState) -> WalletConfig {
     let s = state.load_settings();
     // Mainnet is the default: it is where the wallet is actually used, and the
     // mainnet guardrails (badge, confirmation modal, address checks) make the
     // active network unmissable. Testnet remains one click away in settings.
     let net = configured_network(&s);
-    let lightwalletd_url = s
-        .lightwalletd_url
-        .clone()
-        .filter(|u| !u.trim().is_empty())
+    let saved = s.lightwalletd_url.clone().filter(|u| !u.trim().is_empty());
+    let automatic = saved.is_none() && !net.known_lightwalletd().is_empty();
+    let auto = automatic
+        .then(|| state.auto_lightwalletd.lock().ok()?.get(net.as_str()).cloned())
+        .flatten();
+    let auto_latency_ms = auto.as_ref().map(|p| p.latency_ms);
+    let lightwalletd_url = saved
+        .or(auto.map(|p| p.url))
         .unwrap_or_else(|| net.default_lightwalletd().to_string());
     let regtest_effective = match net {
         WalletNetwork::Regtest(level) => Some(level.as_str().to_string()),
@@ -69,7 +78,32 @@ pub(crate) fn resolve_config(state: &AppState) -> WalletConfig {
         regtest_upgrade: s.regtest_upgrade.clone(),
         regtest_detected: s.regtest_detected.clone(),
         regtest_effective,
+        automatic,
+        auto_latency_ms,
     }
+}
+
+/// With no server chosen, pick the fastest of the known ones on the network
+/// (see `wallet::fastest_lightwalletd`): once a session, and again with
+/// `again` after the one in use stopped answering. Returns whether the server
+/// in use changed.
+pub(crate) async fn pick_server(state: &AppState, again: bool) -> bool {
+    let cfg = resolve_config(state);
+    if !cfg.automatic || (cfg.auto_latency_ms.is_some() && !again) {
+        return false;
+    }
+    let net = configured_network(&state.load_settings());
+    let timeout = std::time::Duration::from_secs(5);
+    let Some(best) = wallet::fastest_lightwalletd(net, net.known_lightwalletd(), timeout).await else {
+        tracing::warn!("none of the known sync servers answered");
+        return false;
+    };
+    tracing::info!(url = %best.url, latency_ms = best.latency_ms, "using the fastest sync server");
+    let changed = best.url != cfg.lightwalletd_url;
+    if let Ok(mut picks) = state.auto_lightwalletd.lock() {
+        picks.insert(net.as_str(), best);
+    }
+    changed
 }
 
 #[tauri::command]

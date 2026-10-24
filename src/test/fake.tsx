@@ -40,7 +40,12 @@ const defaults: Record<string, Handler> = {
     { name: "alice", pubkey: ALICE, alias: "Alice", text: "zffrost1alice", safety_code: "1", verified: true },
     { name: "bob", pubkey: BOB, alias: "Bob", text: "zffrost1bob", safety_code: "2", verified: false },
   ],
-  get_wallet_config: () => ({ network: "main", lightwalletd_url: "https://zec.rocks:443" }),
+  get_wallet_config: () => ({
+    network: "main",
+    lightwalletd_url: "https://eu.zec.rocks:443",
+    automatic: true,
+    auto_latency_ms: 48,
+  }),
   wallet_group_status: () => ({
     initialized: true,
     address: "u1group",

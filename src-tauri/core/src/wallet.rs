@@ -192,6 +192,31 @@ impl WalletNetwork {
         }
     }
 
+    /// The servers the app picks from by itself when none is chosen: lightwalletd
+    /// endpoints known to serve Ironwood, all run by zec.rocks, one per region.
+    pub fn known_lightwalletd(self) -> &'static [&'static str] {
+        match self {
+            WalletNetwork::Main => &[
+                "https://zec.rocks:443",
+                "https://na.zec.rocks:443",
+                "https://eu.zec.rocks:443",
+                "https://ap.zec.rocks:443",
+                "https://sa.zec.rocks:443",
+            ],
+            WalletNetwork::Test => &["https://testnet.zec.rocks:443"],
+            WalletNetwork::Regtest(_) => &[],
+        }
+    }
+
+    /// The chain name lightwalletd reports for this network.
+    fn chain_name(self) -> &'static str {
+        match self {
+            WalletNetwork::Main => "main",
+            WalletNetwork::Test => "test",
+            WalletNetwork::Regtest(_) => "regtest",
+        }
+    }
+
     /// A sensible default lightwalletd endpoint for this network. For regtest
     /// this is lightwalletd's conventional local port; a devnet that picks its
     /// own port (thus-spoke-zakura) is found with devnet detection instead.
@@ -440,6 +465,57 @@ pub async fn lightwalletd_info(url: &str) -> Result<LightwalletdInfo, CoreError>
         wallet_branch_id: None,
         branch_supported: None,
     })
+}
+
+/// A server that answered [`fastest_lightwalletd`]'s probe.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ServerProbe {
+    pub url: String,
+    /// Connecting plus one round trip, in milliseconds.
+    pub latency_ms: u64,
+    pub height: u64,
+}
+
+/// How far behind the highest tip a probed server may be and still be chosen.
+const PROBE_MAX_LAG: u64 = 3;
+
+/// Probe `urls` at once and return the fastest that's on `network`'s chain and
+/// within a few blocks of the highest tip any of them reports, so a server
+/// that's lagging or on the wrong chain is never chosen for being quick. One
+/// that doesn't answer within `timeout` is skipped. `None` if none qualifies.
+pub async fn fastest_lightwalletd(
+    network: WalletNetwork,
+    urls: &[&str],
+    timeout: std::time::Duration,
+) -> Option<ServerProbe> {
+    let mut probes = tokio::task::JoinSet::new();
+    for url in urls {
+        let url = url.to_string();
+        probes.spawn(async move {
+            let started = std::time::Instant::now();
+            let info = tokio::time::timeout(timeout, lightwalletd_info(&url)).await.ok()?.ok()?;
+            Some((info, ServerProbe { url, latency_ms: elapsed_ms(started), height: 0 }))
+        });
+    }
+    let mut answered = Vec::new();
+    while let Some(probe) = probes.join_next().await {
+        if let Ok(Some((info, mut probe))) = probe {
+            if info.chain_name == network.chain_name() {
+                probe.height = info.block_height;
+                answered.push(probe);
+            }
+        }
+    }
+    choose_server(answered)
+}
+
+/// The quickest of the servers near the highest tip (see [`fastest_lightwalletd`]).
+fn choose_server(answered: Vec<ServerProbe>) -> Option<ServerProbe> {
+    let tip = answered.iter().map(|p| p.height).max()?;
+    answered
+        .into_iter()
+        .filter(|p| p.height + PROBE_MAX_LAG >= tip)
+        .min_by_key(|p| p.latency_ms)
 }
 
 // ---------------------------------------------------------------------------
@@ -3151,6 +3227,20 @@ mod tests {
     /// the upstream `sync::running` step-7 semantics: contiguous, priority-
     /// preserving, `batch_size`-block sub-ranges that exactly cover the input and
     /// never produce an empty range.
+    #[test]
+    fn the_quickest_server_near_the_tip_is_chosen() {
+        let probe = |url: &str, latency_ms, height| ServerProbe { url: url.into(), latency_ms, height };
+        // The fastest one is far behind; the next fastest that's current wins.
+        let chosen = choose_server(vec![
+            probe("lagging", 10, 1_000),
+            probe("slow", 90, 1_010),
+            probe("quick", 40, 1_008),
+        ]);
+        assert_eq!(chosen.map(|p| p.url), Some("quick".to_string()));
+        assert_eq!(choose_server(vec![]), None);
+        assert!(WalletNetwork::Main.known_lightwalletd().contains(&WalletNetwork::Main.default_lightwalletd()));
+    }
+
     #[test]
     fn a_batch_must_start_right_after_its_tree_state() {
         use zcash_primitives::block::BlockHash;

@@ -22,7 +22,13 @@ const PRESETS: Record<WalletNetwork, { label: string; url: string }[]> = {
     { label: "tz.ombie.cash", url: "https://tz.ombie.cash:443" },
     { label: "tl.ombie.cash", url: "https://tl.ombie.cash:443" },
   ],
-  main: [{ label: "zec.rocks", url: "https://zec.rocks:443" }],
+  main: [
+    { label: "zec.rocks", url: "https://zec.rocks:443" },
+    { label: "zec.rocks — North America", url: "https://na.zec.rocks:443" },
+    { label: "zec.rocks — Europe", url: "https://eu.zec.rocks:443" },
+    { label: "zec.rocks — Asia-Pacific", url: "https://ap.zec.rocks:443" },
+    { label: "zec.rocks — South America", url: "https://sa.zec.rocks:443" },
+  ],
   // A devnet picks its own port; "Detect local devnet" fills the real one.
   regtest: [],
 };
@@ -61,8 +67,11 @@ export default function WalletSettings() {
   // Mainnet is the default (matches the backend), so the app opens on the network
   // it is actually used on rather than quietly pointing at testnet.
   const net: WalletNetwork = network ?? config.data?.network ?? "main";
-  const effectiveUrl = url ?? config.data?.lightwalletd_url ?? "";
   const isDevnet = net === "regtest";
+  // An empty URL means "pick the fastest known server" (not on a devnet).
+  const automatic = !isDevnet && (url === "" || (url === null && !!config.data?.automatic));
+  const effectiveUrl = automatic ? "" : (url ?? config.data?.lightwalletd_url ?? "");
+  const autoInUse = automatic && url === null && network === null ? config.data : null;
   const detected = config.data?.regtest_detected ?? null;
   const upgradeChoice = upgrade ?? config.data?.regtest_upgrade ?? "auto";
   const effectiveUpgrade: RegtestUpgrade =
@@ -127,8 +136,11 @@ export default function WalletSettings() {
     }
   };
 
+  const urlChanged =
+    url !== null &&
+    (url === "" ? !config.data?.automatic : url !== config.data?.lightwalletd_url || !!config.data?.automatic);
   const unsaved =
-    network !== null || url !== null || (upgrade !== null && upgrade !== (config.data?.regtest_upgrade ?? "auto"));
+    network !== null || urlChanged || (upgrade !== null && upgrade !== (config.data?.regtest_upgrade ?? "auto"));
   // A devnet reports "regtest"; its branch check is the devnet card's job
   // (the generic mismatch text below is about public-network upgrades).
   const infoIsDevnet = info?.chain_name === "regtest";
@@ -177,11 +189,15 @@ export default function WalletSettings() {
         {showNetworks && <label>Sync server (lightwalletd)</label>}
         {PRESETS[net].length > 0 && (
           <select
-            value={PRESETS[net].some((p) => p.url === effectiveUrl) ? effectiveUrl : "custom"}
+            value={automatic ? "auto" : PRESETS[net].some((p) => p.url === effectiveUrl) ? effectiveUrl : "custom"}
             onChange={(e) => {
-              if (e.target.value !== "custom") setUrl(e.target.value);
+              const v = e.target.value;
+              if (v === "auto") setUrl("");
+              else if (v === "custom") setUrl(effectiveUrl || config.data?.lightwalletd_url || "https://");
+              else setUrl(v);
             }}
           >
+            <option value="auto">Automatic: the fastest available</option>
             {PRESETS[net].map((p) => (
               <option key={p.url} value={p.url}>
                 {p.label} — {p.url}
@@ -190,13 +206,21 @@ export default function WalletSettings() {
             <option value="custom">Custom…</option>
           </select>
         )}
-        <input
-          type="text"
-          placeholder={PLACEHOLDER[net]}
-          value={effectiveUrl}
-          onChange={(e) => setUrl(e.target.value)}
-        />
-        <p className="dim" style={{ marginTop: -6 }}>
+        {automatic ? (
+          <p className="dim" style={{ marginTop: -2 }}>
+            {autoInUse?.auto_latency_ms != null
+              ? `Using ${hostOf(autoInUse.lightwalletd_url)}, which answered in ${autoInUse.auto_latency_ms} ms. If it stops answering, the app switches to another.`
+              : "The app measures the known servers and uses the quickest that's up to date."}
+          </p>
+        ) : (
+          <input
+            type="text"
+            placeholder={PLACEHOLDER[net]}
+            value={effectiveUrl}
+            onChange={(e) => setUrl(e.target.value)}
+          />
+        )}
+        {!automatic && <p className="dim" style={{ marginTop: -6 }}>
           {isDevnet ? (
             <>
               Plain <span className="code-inline">http://</span> is allowed only for{" "}
@@ -208,7 +232,7 @@ export default function WalletSettings() {
               <span className="code-inline">host:443</span> works too).
             </>
           )}
-        </p>
+        </p>}
 
         <div className="row" style={{ marginTop: 4, alignItems: "center" }}>
           <button onClick={() => save.mutate()} disabled={save.isPending}>
@@ -270,6 +294,11 @@ export default function WalletSettings() {
 
     </div>
   );
+}
+
+/** "eu.zec.rocks" from "https://eu.zec.rocks:443". */
+function hostOf(url: string): string {
+  return url.replace(/^https?:\/\//, "").replace(/:\d+$/, "").replace(/\/.*$/, "");
 }
 
 /** Local-devnet controls: find a running thus-spoke-zakura devnet, and choose

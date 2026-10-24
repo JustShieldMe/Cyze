@@ -17,6 +17,9 @@ test("every Settings tab opens", async () => {
 
   fireEvent.click(ui.getByRole("link", { name: "Wallet" }));
   await ui.findByRole("heading", { name: /^(Network|Sync server)$/ });
+  // No server chosen: the app shows which one it picked.
+  await ui.findByText(/Using eu.zec.rocks, which answered in 48 ms/);
+  expect((ui.getByRole("combobox") as HTMLSelectElement).value).toBe("auto");
 
   fireEvent.click(ui.getByRole("link", { name: "Security" }));
   await ui.findByText("Key backup");

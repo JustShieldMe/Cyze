@@ -137,6 +137,10 @@ export interface WalletConfig {
   regtest_detected: RegtestUpgrade | null;
   /** Devnet: the level in use (override, else detected, else NU6). */
   regtest_effective: RegtestUpgrade | null;
+  /** No server was chosen: the app uses the fastest known one. */
+  automatic: boolean;
+  /** How quickly the automatically chosen server answered, once one was. */
+  auto_latency_ms: number | null;
 }
 /** What "Detect local devnet" found. */
 export interface DevnetStatus {
