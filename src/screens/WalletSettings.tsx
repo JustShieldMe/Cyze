@@ -1,14 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   getWalletConfig,
   lightwalletdInfo,
-  setAdvancedMode,
   setWalletConfig,
   detectLocalDevnet,
   openUrl,
-  getLogs,
-  clearLogs,
   AppError,
   DevnetStatus,
   LightwalletdInfo,
@@ -46,7 +43,7 @@ const INSTALL_CMD =
   "curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/zcashlabs/thus-spoke-zakura/main/install.sh | sh";
 
 /** Settings → Wallet: which network, and the lightwalletd server it syncs from. */
-export default function Wallet() {
+export default function WalletSettings() {
   const queryClient = useQueryClient();
   const config = useQuery({ queryKey: ["wallet-config"], queryFn: getWalletConfig });
   const advanced = useAdvancedMode();
@@ -275,34 +272,6 @@ export default function Wallet() {
   );
 }
 
-/** The switch for advanced options. Off by default so everyday screens stay
- *  focused on the mainnet wallet. */
-export function AdvancedCard({ enabled }: { enabled: boolean }) {
-  const queryClient = useQueryClient();
-  const toggle = useMutation({
-    mutationFn: (on: boolean) => setAdvancedMode(on),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["settings"] }),
-  });
-  return (
-    <div className="card" style={{ marginTop: 18 }}>
-      <label className="row" style={{ gap: 8, alignItems: "center", margin: 0 }}>
-        <input
-          type="checkbox"
-          style={{ width: "auto", margin: 0 }}
-          checked={enabled}
-          disabled={toggle.isPending}
-          onChange={(e) => toggle.mutate(e.target.checked)}
-        />
-        <strong>Show advanced options</strong>
-      </label>
-      <p className="dim" style={{ fontSize: 12, margin: "6px 0 0" }}>
-        Test networks and local devnet, diagnostics log, Ed25519 groups, raw-message
-        signing, and coinholder voting.
-      </p>
-    </div>
-  );
-}
-
 /** Local-devnet controls: find a running thus-spoke-zakura devnet, and choose
  *  which network upgrade its chain runs (auto-read from the node by default). */
 function DevnetPanel({
@@ -421,100 +390,6 @@ function DevnetPanel({
           </span>
         </div>
       )}
-    </div>
-  );
-}
-
-/** In-app diagnostics log: shows what the app has logged this session (sync
- *  timing, errors, ceremony steps) so it can be copied and shared without a
- *  terminal. In-memory only — cleared when the app restarts. */
-export function LogsCard() {
-  const [live, setLive] = useState(true);
-  const [copied, setCopied] = useState(false);
-  const preRef = useRef<HTMLPreElement>(null);
-  const atBottomRef = useRef(true);
-
-  const logs = useQuery({
-    queryKey: ["app-logs"],
-    queryFn: getLogs,
-    refetchInterval: live ? 2000 : false,
-  });
-  const lines = logs.data ?? [];
-
-  const clear = useMutation({
-    mutationFn: clearLogs,
-    onSuccess: () => logs.refetch(),
-  });
-
-  // Keep the view pinned to the newest line while live, unless the user has
-  // scrolled up to read older output.
-  useEffect(() => {
-    const el = preRef.current;
-    if (el && atBottomRef.current) el.scrollTop = el.scrollHeight;
-  }, [lines.length]);
-
-  const onScroll = () => {
-    const el = preRef.current;
-    if (!el) return;
-    atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-  };
-
-  const copyAll = async () => {
-    await navigator.clipboard.writeText(lines.join("\n"));
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  };
-
-  return (
-    <div className="card" style={{ marginTop: 18 }}>
-      <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-        <h3 style={{ margin: 0 }}>Diagnostics log</h3>
-        <span className="dim" style={{ fontSize: 12 }}>
-          {lines.length} line{lines.length === 1 ? "" : "s"} · this session
-        </span>
-      </div>
-      <p className="dim" style={{ fontSize: 12, marginTop: 6 }}>
-        What the app has logged while running (sync timing, errors, ceremony
-        steps). Kept in memory only and cleared on restart — copy it here to share
-        for troubleshooting.
-      </p>
-
-      <div className="row" style={{ gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
-        <button className="secondary" onClick={() => copyAll()} disabled={lines.length === 0}>
-          {copied ? "Copied!" : "Copy all"}
-        </button>
-        <button className="secondary" onClick={() => logs.refetch()}>
-          Refresh
-        </button>
-        <button className="secondary" onClick={() => clear.mutate()} disabled={lines.length === 0}>
-          Clear
-        </button>
-        <label className="row" style={{ gap: 6, alignItems: "center", fontSize: 13 }}>
-          <input type="checkbox" checked={live} onChange={(e) => setLive(e.target.checked)} />
-          Live
-        </label>
-      </div>
-
-      <pre
-        ref={preRef}
-        onScroll={onScroll}
-        className="mono"
-        style={{
-          margin: 0,
-          maxHeight: 320,
-          overflow: "auto",
-          fontSize: 11.5,
-          lineHeight: 1.5,
-          whiteSpace: "pre-wrap",
-          wordBreak: "break-word",
-          background: "var(--bg-elevated, rgba(0,0,0,0.04))",
-          border: "1px solid var(--border)",
-          borderRadius: 6,
-          padding: 10,
-        }}
-      >
-        {lines.length ? lines.join("\n") : "No log output yet."}
-      </pre>
     </div>
   );
 }

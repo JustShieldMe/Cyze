@@ -63,7 +63,7 @@ function CopyButton({ text, label }: { text: string; label: string }) {
   );
 }
 
-export default function SessionSetup() {
+export default function ConnectionSettings() {
   const settings = useQuery({ queryKey: ["settings"], queryFn: getSettings });
   const savedRole = settings.data?.session_role as Role | null | undefined;
   const configured = !!settings.data?.session_configured;
