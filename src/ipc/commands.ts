@@ -361,7 +361,12 @@ export const walletSend = (args: {
   /** Move everything at the group's old address to its private one instead
    *  (recipient, amount and memo are ignored). */
   from_old_address?: boolean;
+  /** Send everything spendable to the recipient (the amount is ignored). */
+  send_max?: boolean;
 }) => invoke<string>("wallet_send", { args });
+/** Like walletPrepareSend, paying everything spendable; the fee comes out of it. */
+export const walletPrepareSendMax = (groupId: string, recipient: string, memo?: string) =>
+  invoke<DraftTransaction>("wallet_prepare_send_max", { groupId, recipient, memo: memo ?? null });
 
 /** Re-broadcast a signed transaction whose first broadcast failed, without
  *  re-running the signing ceremony. Returns the broadcast txid. */

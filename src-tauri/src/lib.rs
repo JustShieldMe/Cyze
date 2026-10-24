@@ -110,6 +110,7 @@ pub fn run() {
             commands::wallet::wallet_receive_address,
             commands::wallet::wallet_new_receive_address,
             commands::wallet::wallet_prepare_send,
+            commands::wallet::wallet_prepare_send_max,
             commands::wallet::wallet_prepare_vote,
             commands::wallet::resolve_zns_name,
             commands::wallet::wallet_send,

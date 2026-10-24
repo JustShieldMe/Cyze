@@ -798,6 +798,21 @@ pub async fn wallet_prepare_send(
     .await?)
 }
 
+/// Like [`wallet_prepare_send`], but paying everything spendable, with the
+/// fee coming out of it: what "Send all" reviews.
+#[tauri::command]
+pub async fn wallet_prepare_send_max(
+    state: State<'_, AppState>,
+    group_id: String,
+    recipient: String,
+    memo: Option<String>,
+) -> AppResult<wallet::DraftTransaction> {
+    let (network, url, _ufvk) = group_wallet_ctx(&state, &group_id).await?;
+    let db_key = state.wallet_db_key(&group_id).await?;
+    let wid = state.wallet_dir_id(&group_id).await?;
+    Ok(wallet::prepare_send_max(&state.data_dir, &wid, network, &recipient, memo, &url, db_key.as_ref()).await?)
+}
+
 /// One answer in a cast vote, as sent from the UI. Maps to
 /// `frost_app_core::voting::VoteEntry`.
 #[derive(Deserialize)]
@@ -915,6 +930,10 @@ pub struct WalletSendArgs {
     /// and `memo` are then ignored.
     #[serde(default)]
     pub from_old_address: bool,
+    /// Send everything spendable to `recipient`, the fee coming out of it
+    /// ([`wallet_prepare_send_max`]); `amount_zatoshis` is then ignored.
+    #[serde(default)]
+    pub send_max: bool,
 }
 
 /// Build, FROST-sign, and (next phase) broadcast an Orchard transfer. Builds the
@@ -937,6 +956,9 @@ pub async fn wallet_send<R: tauri::Runtime>(
     let wid = state.wallet_dir_id(&args.group_id).await?;
     let draft = if args.from_old_address {
         crate::commands::viewing::prepare_move(&state, &args.group_id).await?
+    } else if args.send_max {
+        wallet::prepare_send_max(&state.data_dir, &wid, network, &args.recipient, args.memo, &url, db_key.as_ref())
+            .await?
     } else {
         wallet::prepare_send(
             &state.data_dir,

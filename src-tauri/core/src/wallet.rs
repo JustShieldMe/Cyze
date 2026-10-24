@@ -2056,15 +2056,17 @@ pub async fn prepare_send(
     draft_from_proposal(&mut db, network, account_id, &proposal, recipient, amount_zatoshis, is_unshield, memo)
 }
 
-/// Build an unsigned transaction that moves everything spendable in a wallet
-/// to `recipient` and leaves nothing behind as change: how a group that made
-/// its viewing key private empties its old address. The fee comes out of the
-/// amount moved. Notes still waiting for confirmations stay, for a later move.
-pub async fn prepare_sweep(
+/// Build an unsigned transaction that pays everything spendable in a wallet to
+/// `recipient` and leaves nothing behind as change: "send all", and how a
+/// group that made its viewing key private empties its old address. The fee
+/// comes out of the amount. Notes still waiting for confirmations stay. A memo
+/// is dropped for a transparent recipient, which can't receive one.
+pub async fn prepare_send_max(
     data_dir: &Path,
     wallet_id: &str,
     network: WalletNetwork,
     recipient: &str,
+    memo: Option<String>,
     lightwalletd_url: &str,
     db_key: &[u8],
 ) -> Result<DraftTransaction, CoreError> {
@@ -2076,9 +2078,11 @@ pub async fn prepare_sweep(
     let params = network.params();
     let (mut db, account_id) = open_for_send(data_dir, wallet_id, network, lightwalletd_url, db_key).await?;
     let to = decode_recipient(network, recipient)?;
-    if matches!(to, Address::Transparent(_)) {
-        return Err(CoreError::Ceremony("funds can only be moved to a shielded address".into()));
-    }
+    let is_unshield = matches!(to, Address::Transparent(_));
+    let memo = if is_unshield { None } else { memo.filter(|m| !m.is_empty()) };
+    let memo_bytes = memo
+        .as_deref()
+        .map(|m| m.parse::<Memo>().map(|m| m.encode()).unwrap_or_else(|_| MemoBytes::empty()));
     let proposal = propose_send_max_transfer::<_, _, _, std::convert::Infallible>(
         &mut db,
         &params,
@@ -2086,7 +2090,7 @@ pub async fn prepare_sweep(
         &[ShieldedPool::Orchard, ShieldedPool::Ironwood],
         &StandardFeeRule::Zip317,
         to.to_zcash_address(&params),
-        None, // memo
+        memo_bytes,
         MaxSpendMode::MaxSpendable,
         ConfirmationsPolicy::default(),
         &LockedInputPolicy::Exclude,
@@ -2094,9 +2098,9 @@ pub async fn prepare_sweep(
     )
     .map_err(|e| match format!("{e:?}") {
         m if m.contains("InsufficientFunds") => {
-            CoreError::Ceremony("there's too little at this address to cover the network fee".into())
+            CoreError::Ceremony("there's too little spendable to cover the network fee".into())
         }
-        m => CoreError::Ceremony(format!("couldn't build the transfer ({m})")),
+        m => CoreError::Ceremony(format!("couldn't build the payment ({m})")),
     })?;
     let amount = proposal
         .steps()
@@ -2106,7 +2110,7 @@ pub async fn prepare_sweep(
         .ok()
         .flatten()
         .map_or(0, u64::from);
-    draft_from_proposal(&mut db, network, account_id, &proposal, recipient, amount, false, None)
+    draft_from_proposal(&mut db, network, account_id, &proposal, recipient, amount, is_unshield, memo)
 }
 
 /// Open a wallet to build a transaction: its chain tip refreshed from

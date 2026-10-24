@@ -10,6 +10,7 @@ import {
   walletSyncStatus,
   walletPrepareMove,
   walletPrepareSend,
+  walletPrepareSendMax,
   walletPrepareVote,
   walletSend,
   resolveZnsName,
@@ -40,9 +41,10 @@ const SELF_SEND_FEE_BUFFER = 100_000;
 type Panel = "receive" | "send" | "notes" | "vote";
 
 /** What a prepared transaction is for, which changes how it's reviewed:
- *  "migration" moves old-pool Orchard funds into Ironwood; "move" empties the
- *  group's old (publicly viewable) address into its private one. */
-type DraftKind = "payment" | "consolidation" | "migration" | "move" | "vote";
+ *  "max" pays everything spendable; "migration" moves old-pool Orchard funds
+ *  into Ironwood; "move" empties the group's old (publicly viewable) address
+ *  into its private one. */
+type DraftKind = "payment" | "max" | "consolidation" | "migration" | "move" | "vote";
 
 /** A group's Zcash wallet: balance, receive, send, and activity. Shown on Home
  *  for the active wallet. */
@@ -295,7 +297,7 @@ export function GroupWallet({ group, network }: { group: GroupSummary; network: 
             pending={s.orchard.pending_zatoshis + s.ironwood.pending_zatoshis}
             caughtUp={caughtUp}
             blocksRemaining={blocksRemaining}
-            onPrepared={(d) => review(d, "payment")}
+            onPrepared={(d, all) => review(d, all ? "max" : "payment")}
           />
         )
       ) : panel === "notes" && advanced ? (
@@ -346,10 +348,12 @@ function EnterSend({
   pending: number;
   caughtUp: boolean;
   blocksRemaining: number;
-  onPrepared: (draft: DraftTransaction) => void;
+  onPrepared: (draft: DraftTransaction, all: boolean) => void;
 }) {
   const [recipient, setRecipient] = useState("");
   const [amount, setAmount] = useState("");
+  /** "Send all": everything spendable, the fee coming out of it. */
+  const [all, setAll] = useState(false);
   const [memo, setMemo] = useState("");
   const [err, setErr] = useState<string | null>(null);
 
@@ -373,13 +377,15 @@ function EnterSend({
   const address = zns?.address ?? recipient.trim();
   const needsLookup = isName && !zns;
   const check = needsLookup ? { transparent: false, error: null } : checkRecipient(address, network);
-  const zats = Math.round(Number(amount) * 1e8);
-  const tooMuch = zats > 0 && zats > spendable;
+  const zats = all ? spendable : Math.round(Number(amount) * 1e8);
+  const tooMuch = !all && zats > 0 && zats > spendable;
 
   const prepare = useMutation({
-    mutationFn: () =>
-      walletPrepareSend(group.id, address, zats, !check.transparent && memo.trim() ? memo.trim() : undefined),
-    onSuccess: onPrepared,
+    mutationFn: () => {
+      const m = !check.transparent && memo.trim() ? memo.trim() : undefined;
+      return all ? walletPrepareSendMax(group.id, address, m) : walletPrepareSend(group.id, address, zats, m);
+    },
+    onSuccess: (d) => onPrepared(d, all),
     onError: (e) => {
       const appErr = e as unknown as AppError;
       setErr(appErr.message);
@@ -434,12 +440,30 @@ function EnterSend({
           </button>
         ))}
 
-      <label>Amount ({unit(network)})</label>
-      <input type="text" inputMode="decimal" placeholder="0.00" value={amount} onChange={(e) => setAmount(e.target.value)} />
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <label>Amount ({unit(network)})</label>
+        {spendable > 0 && !all && (
+          <button className="link-button" onClick={() => setAll(true)}>
+            Send all
+          </button>
+        )}
+      </div>
+      <input
+        type="text"
+        inputMode="decimal"
+        placeholder="0.00"
+        value={all ? zec(spendable) : amount}
+        onChange={(e) => {
+          setAll(false);
+          setAmount(e.target.value);
+        }}
+      />
       <p className="dim" style={{ marginTop: -6, fontSize: 12 }}>
-        {tooMuch
-          ? `You can send up to ${zec(spendable)} ${unit(network)}; the network fee is added on top.`
-          : `${zec(spendable)} ${unit(network)} available.`}
+        {all
+          ? "Everything available. The network fee comes out of it."
+          : tooMuch
+            ? `You can send up to ${zec(spendable)} ${unit(network)}; the network fee is added on top.`
+            : `${zec(spendable)} ${unit(network)} available.`}
       </p>
 
       {!check.transparent && (
@@ -520,6 +544,7 @@ function ReviewSend({
         signers: [...signers],
         memo: draft.memo ?? null,
         from_old_address: kind === "move",
+        send_max: kind === "max",
       }),
     onSuccess: (id) => {
       onError(null);
@@ -540,6 +565,7 @@ function ReviewSend({
 
   const title = {
     payment: "Review payment",
+    max: "Review payment",
     consolidation: "Review: combine notes",
     migration: "Review: move funds",
     move: "Review: move to the private address",
@@ -554,6 +580,7 @@ function ReviewSend({
         <p className="dim">Sends these funds back to this wallet in the current format.</p>
       )}
       {kind === "consolidation" && <p className="dim">Sends the funds back to this wallet as one note.</p>}
+      {kind === "max" && <p className="dim">Sends everything available now. The network fee comes out of it.</p>}
       {kind === "move" && (
         <p className="dim">
           Moves everything at the group's old address to its new, private one. The fee comes out of the amount.
