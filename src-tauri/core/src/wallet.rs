@@ -1277,17 +1277,35 @@ impl BlockSource for MemBlockSource {
 /// before the range (needed by `scan_cached_blocks`).
 type PrefetchedBatch = (ScanRange, Vec<CompactBlock>, ChainState);
 
+/// Mainnet's 2022–23 spam: blocks so full of outputs that a normal batch of
+/// them would take gigabytes of memory. ECC's mobile SDK and Vizor scan them
+/// [`SPAM_BATCH_SIZE`] blocks at a time. Only deep rescans reach back this far.
+const MAINNET_SPAM: std::ops::Range<u32> = 1_710_000..2_050_000;
+const SPAM_BATCH_SIZE: u32 = 100;
+
+/// The spam range on `params`' network, if it has one.
+fn spam_range(params: &WalletParams) -> Option<std::ops::Range<u32>> {
+    (*params == WalletParams::Consensus(Network::MainNetwork)).then_some(MAINNET_SPAM)
+}
+
 /// Split a suggested scan range into `batch_size`-block sub-ranges, preserving
-/// priority. Ported verbatim from the upstream `sync::running` step-7 splitter so
-/// the pipelined driver scans in the exact same units as the stock driver.
-fn split_scan_range(range: ScanRange, batch_size: u32) -> Vec<ScanRange> {
+/// priority, as the upstream `sync::running` step-7 splitter does, except
+/// inside `spam` (see [`MAINNET_SPAM`]): batches stop where it starts and are
+/// [`SPAM_BATCH_SIZE`] blocks within it.
+fn split_scan_range(range: ScanRange, batch_size: u32, spam: Option<std::ops::Range<u32>>) -> Vec<ScanRange> {
     let mut acc = range;
     let mut out = Vec::new();
     loop {
         if acc.is_empty() {
             break;
         }
-        match acc.split_at(acc.block_range().start + batch_size) {
+        let start = u32::from(acc.block_range().start);
+        let len = match &spam {
+            Some(r) if r.contains(&start) => SPAM_BATCH_SIZE.min(r.end - start),
+            Some(r) if start < r.start => batch_size.min(r.start - start),
+            _ => batch_size,
+        };
+        match acc.split_at(acc.block_range().start + len) {
             Some((cur, next)) => {
                 out.push(cur);
                 acc = next;
@@ -1388,9 +1406,7 @@ async fn running_pipelined(
         match scan_ranges.first() {
             Some(sr) if sr.priority() == ScanPriority::Verify => {
                 let sr = sr.clone();
-                let blocks = download_blocks_pipelined(client, &sr).await?;
-                let chain_state =
-                    download_chain_state_pipelined(client, sr.block_range().start - 1).await?;
+                let (blocks, chain_state) = download_batch(client, &sr).await?;
                 let src = MemBlockSource(blocks);
                 if run_blocking(|| scan_batch(params, &src, db, &chain_state, &sr))? {
                     // Ranges changed; re-request and re-check for a Verify range.
@@ -1410,7 +1426,7 @@ async fn running_pipelined(
         .map_err(|e| CoreError::Crypto(format!("suggest_scan_ranges: {e}")))?;
     let batches: Vec<ScanRange> = scan_ranges
         .into_iter()
-        .flat_map(|r| split_scan_range(r, batch_size))
+        .flat_map(|r| split_scan_range(r, batch_size, spam_range(params)))
         .collect();
     if batches.is_empty() {
         return Ok(false);
@@ -1428,8 +1444,8 @@ async fn running_pipelined(
         use std::sync::atomic::Ordering::Relaxed;
         for sr in batches {
             let dl_start = std::time::Instant::now();
-            let blocks = match download_blocks_pipelined(&mut producer_client, &sr).await {
-                Ok(b) => b,
+            let (blocks, chain_state) = match download_batch(&mut producer_client, &sr).await {
+                Ok(batch) => batch,
                 Err(e) => {
                     let _ = tx.send(Err(e)).await;
                     return;
@@ -1441,18 +1457,6 @@ async fn running_pipelined(
                 sr,
                 dl_start.elapsed().as_millis()
             );
-            let chain_state = match download_chain_state_pipelined(
-                &mut producer_client,
-                sr.block_range().start - 1,
-            )
-            .await
-            {
-                Ok(cs) => cs,
-                Err(e) => {
-                    let _ = tx.send(Err(e)).await;
-                    return;
-                }
-            };
             producer_times.download_ms.fetch_add(elapsed_ms(dl_start), Relaxed);
             // If the consumer has hung up (ranges changed, or an error broke the
             // loop) stop downloading. Time spent blocked here is time the
@@ -1800,6 +1804,34 @@ async fn download_blocks_pipelined(
 
 /// Fetch the chain-state anchor at `block_height` (the tree state just before a
 /// range's first block). Ported from the upstream `download_chain_state`.
+/// Download a batch's blocks and the tree state just before them, checking that
+/// the blocks follow it, as scanning from it assumes. They can disagree when
+/// the chain reorganizes between the two requests, so a mismatch is fetched
+/// once more; a second one means the server's data is inconsistent.
+async fn download_batch(
+    client: &mut CompactTxStreamerClient<Channel>,
+    sr: &ScanRange,
+) -> Result<(Vec<CompactBlock>, ChainState), CoreError> {
+    for _ in 0..2 {
+        let blocks = download_blocks_pipelined(client, sr).await?;
+        let chain_state = download_chain_state_pipelined(client, sr.block_range().start - 1).await?;
+        if blocks_follow(&chain_state, &blocks) {
+            return Ok((blocks, chain_state));
+        }
+        tracing::info!("blocks for {sr} don't follow the tree state before them; fetching again");
+    }
+    Err(CoreError::Connection(
+        "the sync server's blocks don't match its own record of the chain. Try again, or choose another \
+         server in Settings → Wallet"
+            .into(),
+    ))
+}
+
+/// Whether `blocks` start right after the block `chain_state` describes.
+fn blocks_follow(chain_state: &ChainState, blocks: &[CompactBlock]) -> bool {
+    blocks.first().is_none_or(|b| b.prev_hash() == chain_state.block_hash())
+}
+
 async fn download_chain_state_pipelined(
     client: &mut CompactTxStreamerClient<Channel>,
     block_height: BlockHeight,
@@ -3120,12 +3152,41 @@ mod tests {
     /// preserving, `batch_size`-block sub-ranges that exactly cover the input and
     /// never produce an empty range.
     #[test]
+    fn a_batch_must_start_right_after_its_tree_state() {
+        use zcash_primitives::block::BlockHash;
+        let state = ChainState::empty(BlockHeight::from_u32(99), BlockHash([7; 32]));
+        let block = |prev: u8| CompactBlock { height: 100, prev_hash: vec![prev; 32], ..Default::default() };
+        assert!(blocks_follow(&state, &[block(7)]));
+        assert!(!blocks_follow(&state, &[block(8)]));
+        assert!(blocks_follow(&state, &[]));
+    }
+
+    /// Inside mainnet's spam range, batches are small; a batch before it stops
+    /// where it starts, and normal batches resume after it.
+    #[test]
+    fn spam_blocks_are_scanned_in_small_batches() {
+        let h = BlockHeight::from_u32;
+        let spam = Some(1_000..1_250);
+        let range = ScanRange::from_parts(h(400)..h(1_800), ScanPriority::Historic);
+        let lens: Vec<(u32, u32)> = split_scan_range(range, 500, spam)
+            .iter()
+            .map(|b| (u32::from(b.block_range().start), b.len() as u32))
+            .collect();
+        assert_eq!(
+            lens,
+            vec![(400, 500), (900, 100), (1_000, 100), (1_100, 100), (1_200, 50), (1_250, 500), (1_750, 50)]
+        );
+        assert_eq!(spam_range(&WalletNetwork::Main.params()), Some(MAINNET_SPAM));
+        assert_eq!(spam_range(&WalletNetwork::Test.params()), None);
+    }
+
+    #[test]
     fn split_scan_range_matches_upstream_batching() {
         let h = BlockHeight::from_u32;
         let range = ScanRange::from_parts(h(100)..h(1050), ScanPriority::Historic);
 
         // An evenly-plus-remainder range → full batches then a short tail.
-        let batches = split_scan_range(range.clone(), 400);
+        let batches = split_scan_range(range.clone(), 400, None);
         assert_eq!(batches.len(), 3);
         assert_eq!(*batches[0].block_range(), h(100)..h(500));
         assert_eq!(*batches[1].block_range(), h(500)..h(900));
@@ -3142,13 +3203,13 @@ mod tests {
 
         // A range smaller than one batch → a single batch equal to the input.
         let small = ScanRange::from_parts(h(10)..h(30), ScanPriority::ChainTip);
-        let one = split_scan_range(small.clone(), 5000);
+        let one = split_scan_range(small.clone(), 5000, None);
         assert_eq!(one.len(), 1);
         assert_eq!(*one[0].block_range(), h(10)..h(30));
 
         // A range that is an exact multiple of the batch size → no empty tail.
         let exact = ScanRange::from_parts(h(0)..h(1000), ScanPriority::Historic);
-        let even = split_scan_range(exact, 500);
+        let even = split_scan_range(exact, 500, None);
         assert_eq!(even.len(), 2);
         assert_eq!(*even[1].block_range(), h(500)..h(1000));
     }
