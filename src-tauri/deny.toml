@@ -1,4 +1,4 @@
-# cargo-deny configuration, run in CI as `cargo deny check advisories`.
+# cargo-deny configuration, run in CI as `cargo deny check advisories licenses`.
 # https://embarkstudios.github.io/cargo-deny/
 
 [advisories]
@@ -11,3 +11,40 @@ yanked = "deny"
 unmaintained = "workspace"
 # Anything listed here must say why it is safe to ignore and when to revisit.
 ignore = []
+
+[licenses]
+# What Cyze accepts in what it ships, kept in step with about.toml (which
+# writes the bundled third-party notices). Anything else fails CI.
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-1-Clause",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "CC0-1.0",
+    "Unlicense",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
+    # File-level copyleft (cssparser and friends, via Tauri): unmodified, with
+    # their source public on crates.io.
+    "MPL-2.0",
+]
+confidence-threshold = 0.9
+
+[licenses.private]
+# Cyze's own crates aren't published.
+ignore = true
+
+# frost-client (ZcashFoundation/frost-tools) is dual MIT/Apache-2.0 per the
+# LICENSE-MIT and LICENSE-APACHE at its repository root, but its Cargo.toml has
+# no license field. Revisit when the pinned revision (scripts/PINNED_REV) moves.
+[[licenses.clarify]]
+crate = "frost-client"
+expression = "MIT OR Apache-2.0"
+license-files = []
