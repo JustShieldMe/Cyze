@@ -27,12 +27,12 @@ import { WalletSwitcher } from "./components/WalletSwitcher";
 import Unlock from "./screens/Unlock";
 import Home from "./screens/Home";
 import Groups, { GroupDetail, OpenWallet } from "./screens/Groups";
-import SessionSetup from "./screens/SessionSetup";
+import ConnectionSettings from "./screens/ConnectionSettings";
 import NewGroup from "./screens/NewGroup";
 import JoinGroup from "./screens/JoinGroup";
 import NewSigningSession from "./screens/NewSigningSession";
 import Inbox from "./screens/Inbox";
-import Wallet from "./screens/Wallet";
+import WalletSettings from "./screens/WalletSettings";
 import Settings, { AboutSettings, AdvancedSettings, SecuritySettings } from "./screens/Settings";
 
 /** A red dot with a white "!", shown against a nav entry that needs the user to
@@ -201,8 +201,8 @@ const router = createBrowserRouter([
         path: "settings",
         element: <Settings />,
         children: [
-          { index: true, element: <SessionSetup /> },
-          { path: "wallet", element: <Wallet /> },
+          { index: true, element: <ConnectionSettings /> },
+          { path: "wallet", element: <WalletSettings /> },
           { path: "security", element: <SecuritySettings /> },
           { path: "advanced", element: <AdvancedSettings /> },
           { path: "about", element: <AboutSettings /> },
