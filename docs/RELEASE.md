@@ -93,6 +93,33 @@ git push origin v0.1.0
 
 Review and publish the draft release in the GitHub UI.
 
+## Licenses and SBOMs
+
+Each build writes **third-party notices** (`scripts/third-party-notices.sh`)
+and bundles them; the app shows them under **Settings → About**. They list,
+with each license's text, the Rust crates in Cyze and in the bundled `frostd`
+(from cargo-about, configured in `src-tauri/about.toml`), the bundled
+`cloudflared`, and the npm packages in the frontend. The copy in the repository
+is a placeholder. To write the real file locally:
+
+```bash
+cargo install cargo-about --features cli
+scripts/third-party-notices.sh ~/.cargo/git/checkouts/frost-tools-*/<rev>   # frostd's checkout
+```
+
+After the builds, the `sbom` job attaches to the draft release a CycloneDX
+SBOM for each part (`cyze-<version>-rust.cdx.json`, `-frostd.cdx.json`,
+`-npm.cdx.json`) and the notices.
+
+Which licenses may ship is decided in two places that must agree:
+`src-tauri/deny.toml` (CI fails on anything else, through
+`cargo deny check licenses`) and `src-tauri/about.toml`. Both list the same
+permissive licenses, plus MPL-2.0 for unmodified crates whose source is public
+on crates.io. `frost-client` and `frostd` declare no license in their manifests;
+both config files clarify them as MIT OR Apache-2.0, after the license files at
+the frost-tools repository root. Check that again when `scripts/PINNED_REV`
+moves.
+
 ## Code signing (for distribution)
 
 Unsigned builds run but trigger OS warnings (macOS Gatekeeper, Windows

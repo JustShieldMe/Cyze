@@ -121,6 +121,19 @@ jobs:
           echo "Sidecar placed at: $DEST"
           ls -la "$(dirname "$DEST")"
 
+      # --- Third-party notices, bundled with the app ----------------------
+      # The open-source software in Cyze, the frostd it bundles (from the
+      # checkout above), cloudflared and the frontend, with their licenses,
+      # shown under Settings → About. Replaces the repository's placeholder.
+      - name: Install cargo-about
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about@0.9.2
+
+      - name: Write third-party notices
+        shell: bash
+        run: scripts/third-party-notices.sh "$RUNNER_TEMP/frost-tools"
+
       # --- Fetch the cloudflared sidecar for this target -----------------
       # cloudflared is bundled (Apache-2.0) so the optional Cloudflare quick
       # tunnel works with zero user setup. The release is pinned and each
@@ -181,3 +194,56 @@ jobs:
           # Auto-flag semver pre-release tags (anything with a hyphen, e.g.
           # v0.1.0-rc.1 / v0.1.0-beta.1) as a GitHub pre-release.
           prerelease: ${{ contains(github.ref_name, '-') }}
+
+  # A CycloneDX SBOM for each part Cyze ships (the app's Rust crates, the
+  # bundled frostd's, the frontend's npm packages) and the third-party notices,
+  # attached to the draft release the builds created.
+  sbom:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Install SBOM and notice tools
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-cyclonedx@0.5.9,cargo-about@0.9.2
+
+      - name: Write SBOMs and notices
+        shell: bash
+        run: |
+          set -euxo pipefail
+          OUT="$RUNNER_TEMP/attach"
+          mkdir -p "$OUT"
+          VERSION="${GITHUB_REF_NAME#v}"
+          git clone --filter=blob:none https://github.com/ZcashFoundation/frost-tools.git "$RUNNER_TEMP/frost-tools"
+          git -C "$RUNNER_TEMP/frost-tools" checkout "$(tr -d '[:space:]' < scripts/PINNED_REV)"
+
+          (cd src-tauri && cargo cyclonedx --format json --spec-version 1.5 --no-build-deps)
+          cp src-tauri/frost-app.cdx.json "$OUT/cyze-$VERSION-rust.cdx.json"
+          (cd "$RUNNER_TEMP/frost-tools/frostd" && cargo cyclonedx --format json --spec-version 1.5 --no-build-deps)
+          cp "$RUNNER_TEMP/frost-tools/frostd/frostd.cdx.json" "$OUT/cyze-$VERSION-frostd.cdx.json"
+          npx --yes @cyclonedx/cyclonedx-npm@6.0.1 --omit dev --spec-version 1.5 \
+            --output-file "$OUT/cyze-$VERSION-npm.cdx.json"
+
+          scripts/third-party-notices.sh "$RUNNER_TEMP/frost-tools"
+          cp src-tauri/resources/THIRD-PARTY-NOTICES.txt "$OUT/cyze-$VERSION-THIRD-PARTY-NOTICES.txt"
+          ls -la "$OUT"
+
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$GITHUB_REF_NAME" "$RUNNER_TEMP"/attach/* --clobber
