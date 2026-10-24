@@ -521,13 +521,15 @@ function ReviewSend({
       }),
     [group, identity.data, contacts.data]
   );
-  // This device's member signs locally, so it starts selected.
+  // This device's member signs locally, so it starts selected. Added to the
+  // selection rather than replacing it: anyone ticked before the identity
+  // loaded stays ticked.
   const [signers, setSigners] = useState<Set<string>>(new Set());
   const seeded = useRef(false);
   useEffect(() => {
     const self = identity.data?.pubkey;
     if (!seeded.current && self && Object.values(group.participants).includes(self)) {
-      setSigners(new Set([self]));
+      setSigners((prev) => new Set([...prev, self]));
       seeded.current = true;
     }
   }, [identity.data, group]);
