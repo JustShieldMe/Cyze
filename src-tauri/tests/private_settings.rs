@@ -109,3 +109,30 @@ async fn ui_history_is_encrypted_and_needs_the_keystore_unlocked() {
     save_ui_state(state.clone(), key.clone(), None).await.unwrap();
     assert_eq!(load_ui_state(state.clone(), key).await.unwrap(), None);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn safety_codes_match_across_devices_and_verification_stays_private() {
+    let (alice_app, bob_app) = (make_user(), make_user());
+    let (alice, bob) = (alice_app.app.state::<AppState>(), bob_app.app.state::<AppState>());
+    commands::keystore::create_keystore(alice.clone(), "passphrase".into()).await.unwrap();
+    commands::keystore::create_keystore(bob.clone(), "passphrase".into()).await.unwrap();
+    let alice_contact = commands::contacts::export_my_contact(alice.clone(), "alice".into()).await.unwrap();
+    commands::contacts::add_contact(bob.clone(), alice_contact.text.clone(), None).await.unwrap();
+
+    // What Alice reads out is what Bob's app shows for her.
+    let alice_reads = commands::keystore::get_identity(alice.clone()).await.unwrap().safety_code.unwrap();
+    let bobs_view = commands::contacts::list_contacts(bob.clone()).await.unwrap().remove(0);
+    assert_eq!(bobs_view.safety_code, alice_reads);
+    assert!(!bobs_view.verified);
+
+    commands::contacts::set_contact_verified(bob.clone(), bobs_view.pubkey.clone(), true).await.unwrap();
+    assert!(commands::contacts::list_contacts(bob.clone()).await.unwrap()[0].verified);
+    let settings = std::fs::read_to_string(bob.data_dir.join("settings.json")).unwrap_or_default();
+    assert!(!settings.contains(&bobs_view.pubkey), "who you verified isn't stored in the clear");
+    assert!(commands::contacts::set_contact_verified(bob.clone(), "ab".repeat(32), true).await.is_err());
+
+    // Removing the contact forgets the verification too.
+    commands::contacts::remove_contact(bob.clone(), bobs_view.pubkey.clone()).await.unwrap();
+    commands::contacts::add_contact(bob.clone(), alice_contact.text, None).await.unwrap();
+    assert!(!commands::contacts::list_contacts(bob.clone()).await.unwrap()[0].verified);
+}

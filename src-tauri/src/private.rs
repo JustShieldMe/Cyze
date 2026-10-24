@@ -44,6 +44,9 @@ pub struct PrivateSettings {
     /// Local nicknames for contacts, keyed by hex comm pubkey.
     #[serde(default)]
     pub contact_aliases: HashMap<String, String>,
+    /// Contacts whose safety code the user compared with them (hex comm pubkeys).
+    #[serde(default)]
+    pub verified_contacts: std::collections::BTreeSet<String>,
     /// Digest of the group ids the last backup held, so the app can tell when
     /// a newer group isn't in any backup yet. Not plaintext either: anyone who
     /// knows a group id could check it against the digest.
@@ -108,6 +111,7 @@ pub(crate) async fn migrate_plaintext(state: &AppState) {
         receive_state: std::mem::take(&mut settings.receive_state),
         active_group_id: settings.active_group_id.take(),
         contact_aliases: std::mem::take(&mut settings.contact_aliases),
+        verified_contacts: Default::default(),
         backup_fingerprint: settings.backup_fingerprint.take(),
     };
     let had_legacy = !(legacy.network_birthdays.is_empty()

@@ -131,6 +131,8 @@ pub struct InviteMember {
     pub status: &'static str,
     /// Your name for them, when they're already a contact.
     pub contact_name: Option<String>,
+    /// You compared their safety code with them.
+    pub verified: bool,
 }
 
 #[derive(Serialize)]
@@ -159,7 +161,8 @@ pub async fn read_invite(state: State<'_, AppState>, code: String) -> AppResult<
             Ok((me, contacts))
         })
         .await?;
-    let aliases = state.load_private().await?.contact_aliases;
+    let private = state.load_private().await?;
+    let (aliases, verified) = (private.contact_aliases.clone(), private.verified_contacts.clone());
     let view = |m: &Member| {
         let known = contacts.iter().find(|(k, _)| k.eq_ignore_ascii_case(&m.pubkey));
         let status = if m.pubkey.eq_ignore_ascii_case(&me) {
@@ -174,6 +177,7 @@ pub async fn read_invite(state: State<'_, AppState>, code: String) -> AppResult<
             pubkey: m.pubkey.to_ascii_lowercase(),
             status,
             contact_name: known.map(|(k, name)| aliases.get(k).cloned().unwrap_or_else(|| name.clone())),
+            verified: known.is_some_and(|(k, _)| verified.contains(k)),
         }
     };
     let organizer = invite

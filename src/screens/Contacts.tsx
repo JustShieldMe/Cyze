@@ -7,6 +7,7 @@ import {
   listContacts,
   removeContact,
   setContactAlias,
+  setContactVerified,
   AppError,
   ContactDto,
 } from "../ipc/commands";
@@ -64,6 +65,79 @@ function AliasCell({ contact, onSaved }: { contact: ContactDto; onSaved: () => v
   );
 }
 
+/** A contact, and comparing their safety code with them. */
+function ContactRow({
+  contact: c,
+  ownCode,
+  checking,
+  onCheck,
+  onChanged,
+  onRemove,
+}: {
+  contact: ContactDto;
+  ownCode: string | null;
+  checking: boolean;
+  onCheck: () => void;
+  onChanged: () => void;
+  onRemove: () => void;
+}) {
+  const verify = useMutation({
+    mutationFn: (verified: boolean) => setContactVerified(c.pubkey, verified),
+    onSuccess: onChanged,
+  });
+  return (
+    <>
+      <tr>
+        <td>{c.name}</td>
+        <td>
+          <AliasCell contact={c} onSaved={onChanged} />
+        </td>
+        <td>
+          {c.verified ? <span className="badge green">verified</span> : null}{" "}
+          <button className="link-button" onClick={onCheck}>
+            {checking ? "Close" : c.verified ? "Show" : "Check"}
+          </button>
+        </td>
+        <td style={{ textAlign: "right" }}>
+          <button className="danger" onClick={onRemove}>
+            Remove
+          </button>
+        </td>
+      </tr>
+      {checking && (
+        <tr>
+          <td colSpan={4}>
+            <div className="safety-check">
+              <p style={{ marginTop: 0 }}>
+                Ask {c.alias || c.name} to read you their safety code, by phone or in person. It should be:
+              </p>
+              <div className="safety-code">{c.safety_code}</div>
+              {ownCode && (
+                <p className="dim" style={{ fontSize: 12 }}>
+                  Yours, for them to check: <span className="code-inline">{ownCode}</span>
+                </p>
+              )}
+              <label className="row confirm" style={{ margin: 0 }}>
+                <input
+                  type="checkbox"
+                  style={{ width: "auto", margin: 0 }}
+                  checked={c.verified}
+                  disabled={verify.isPending}
+                  onChange={(e) => verify.mutate(e.target.checked)}
+                />
+                <span>It matches</span>
+              </label>
+              <p className="dim" style={{ fontSize: 12, marginBottom: 0 }}>
+                If it doesn't, the contact code you have may not be theirs. Remove it and ask them again.
+              </p>
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
 export default function Contacts() {
   const queryClient = useQueryClient();
   const contacts = useQuery({ queryKey: ["contacts"], queryFn: listContacts });
@@ -72,6 +146,7 @@ export default function Contacts() {
   const identity = useQuery({ queryKey: ["identity"], queryFn: getIdentity });
   const [myName, setMyName] = useState<string | null>(null);
   const name = myName ?? identity.data?.username ?? "";
+  const [checking, setChecking] = useState<string | null>(null);
   const [myContact, setMyContact] = useState<ContactDto | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -105,24 +180,21 @@ export default function Contacts() {
               <tr>
                 <th>Name</th>
                 <th>Nickname</th>
-                <th>Public key</th>
+                <th>Safety code</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
               {contacts.data.map((c) => (
-                <tr key={c.pubkey}>
-                  <td>{c.name}</td>
-                  <td>
-                    <AliasCell contact={c} onSaved={invalidate} />
-                  </td>
-                  <td className="dim mono-cell">{c.pubkey.slice(0, 16)}…</td>
-                  <td style={{ textAlign: "right" }}>
-                    <button className="danger" onClick={() => remove.mutate(c.pubkey)}>
-                      Remove
-                    </button>
-                  </td>
-                </tr>
+                <ContactRow
+                  key={c.pubkey}
+                  contact={c}
+                  ownCode={identity.data?.safety_code ?? null}
+                  checking={checking === c.pubkey}
+                  onCheck={() => setChecking((cur) => (cur === c.pubkey ? null : c.pubkey))}
+                  onChanged={invalidate}
+                  onRemove={() => remove.mutate(c.pubkey)}
+                />
               ))}
             </tbody>
           </table>
@@ -151,6 +223,11 @@ export default function Contacts() {
               Show
             </button>
           </div>
+          {identity.data?.safety_code && (
+            <p className="dim" style={{ fontSize: 12 }}>
+              Your safety code: <span className="code-inline">{identity.data.safety_code}</span>
+            </p>
+          )}
           {myContact && (
             <div style={{ marginTop: 12 }}>
               <div className="mono">{myContact.text}</div>

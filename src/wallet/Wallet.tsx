@@ -394,7 +394,12 @@ function EnterSend({
           A transparent address: the amount and recipient will be public.
         </p>
       )}
-      {isName &&
+      {isName && network === "main" && (
+        <p className="dim" style={{ marginTop: -4, fontSize: 12 }}>
+          ZcashNames lookups are off on mainnet until there's a production directory. Paste the address instead.
+        </p>
+      )}
+      {isName && network !== "main" &&
         (zns ? (
           <div className="callout" style={{ marginBottom: 12, display: "block" }}>
             <div className="dim">{zns.name}.zcash is this address. Check it before sending:</div>

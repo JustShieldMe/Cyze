@@ -82,6 +82,27 @@ impl Default for KdfParams {
     }
 }
 
+impl KdfParams {
+    /// Upper bounds on parameters read from a file. They're used before
+    /// anything is authenticated, so a tampered keystore or backup could
+    /// otherwise make an unlock allocate terabytes or hash forever. Generous
+    /// against the 64 MiB / 3-pass default, so stronger settings can come later.
+    pub const MAX_M_COST_KIB: u32 = 1024 * 1024;
+    pub const MAX_T_COST: u32 = 64;
+    pub const MAX_P_COST: u8 = 16;
+
+    fn check(&self) -> Result<(), CoreError> {
+        if self.m_cost_kib > Self::MAX_M_COST_KIB || self.t_cost > Self::MAX_T_COST || self.p_cost > Self::MAX_P_COST {
+            return Err(CoreError::Crypto(format!(
+                "the file asks for unreasonable key-derivation settings ({} KiB, {} passes, {} lanes); \
+                 it may be damaged or tampered with",
+                self.m_cost_kib, self.t_cost, self.p_cost
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// Build the AEAD cipher from a 32-byte key. Explicit `Key::from_slice`
 /// typing avoids an `AsRef`/`Into` inference ambiguity that appears when other
 /// crypto crates (e.g. the Zcash wallet stack) are also in the dependency tree.
@@ -94,6 +115,7 @@ fn derive_key(
     salt: &[u8],
     params: &KdfParams,
 ) -> Result<Zeroizing<[u8; 32]>, CoreError> {
+    params.check()?;
     let argon_params = Params::new(params.m_cost_kib, params.t_cost, params.p_cost as u32, Some(32))
         .map_err(|e| CoreError::Crypto(e.to_string()))?;
     let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, argon_params);
@@ -726,6 +748,25 @@ mod tests {
             t_cost: 1,
             p_cost: 1,
         }
+    }
+
+    /// A file asking for absurd Argon2 settings is refused before any hashing,
+    /// for a whole-keystore (v1) file as for a slot.
+    #[test]
+    fn refuses_unreasonable_kdf_settings_from_a_file() {
+        for bad in [
+            KdfParams { m_cost_kib: u32::MAX, ..test_params() },
+            KdfParams { t_cost: 1_000_000, ..test_params() },
+            KdfParams { p_cost: 255, ..test_params() },
+        ] {
+            let started = std::time::Instant::now();
+            assert!(derive_key("pw", &[0u8; 16], &bad).is_err(), "{bad:?}");
+            assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        }
+        let mut sealed = seal(b"hello frost", "pass", &test_params()).unwrap();
+        sealed[9..13].copy_from_slice(&u32::MAX.to_le_bytes()); // m_cost in the v1 header
+        assert!(open(&sealed, "pass").is_err());
+        assert!(derive_key("pw", &[0u8; 16], &KdfParams::default()).is_ok());
     }
 
     #[test]

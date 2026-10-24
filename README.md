@@ -46,10 +46,11 @@ authorize any spend.
   the poll's published ballot, answer, and the vote is delivered as a shielded
   memo (Vote Cast Memo v1) to the poll's reception address through the same FROST
   signing path. Vote weight is set by the poll's balance snapshot, not the wallet.
-- **ZcashNames (ZNS)** — send to a human-readable `name.zcash` in the recipient
-  field: it is resolved to a unified address via the public ZNS indexer and shown
-  for you to confirm before signing (the resolver is external, never an
-  authorization).
+- **ZcashNames (ZNS)** — on testnet, send to a human-readable `name.zcash` in
+  the recipient field: it is resolved to a unified address via the public ZNS
+  indexer and shown for you to confirm before signing (the resolver is external,
+  never an authorization). Off on mainnet until a production indexer exists; the
+  only mainnet one is a test service.
 - **Server hosting** — run the `frostd` coordination server embedded
   (auto-generated, pinned self-signed TLS), and expose it to off-LAN peers either
   through a built-in **Cloudflare tunnel** (public HTTPS URL, no port-forwarding)
@@ -99,9 +100,17 @@ Supports both frost-tools ciphersuites: **Ed25519** (generic signing) and
   kept; unlocking falls back to it if the current file is damaged.
 - All ceremony messages are **end-to-end encrypted** (Noise, via frost-client);
   `frostd` is an untrusted relay.
-- Self-signed server certificates are **pinned explicitly** (trust-on-first-use
-  with fingerprint display), never blanket-accepted. A Cloudflare tunnel presents
-  a publicly valid certificate, so peers using its URL skip cert trust.
+- Self-signed server certificates are **pinned exactly** (trust-on-first-use
+  with fingerprint display): the app accepts that one certificate and nothing
+  else for the server, not even one a public CA issued for the same address. A
+  Cloudflare tunnel or Tailscale address presents a publicly valid certificate,
+  so peers using it skip cert trust.
+- **Safety codes** let people confirm they hold each other's real keys: each
+  key has a 30-digit code (an iterated hash, as Signal's safety numbers), you
+  read yours aloud, and the other person checks it and marks you verified.
+  Invites show which members are verified.
+- Key-derivation settings read from a keystore or backup file are bounded, so a
+  tampered file can't make an unlock exhaust memory or hang.
 - Signers **verify the transaction itself** before approving. The coordinator
   attaches the unsigned transaction (PCZT). Each signer's app checks:
   - the message to sign is that transaction's sighash

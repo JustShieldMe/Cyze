@@ -32,14 +32,21 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::CoreError;
 
-/// The public ZNS indexer JSON-RPC endpoint for a network.
-pub fn endpoint(mainnet: bool) -> &'static str {
+/// The public ZNS indexer JSON-RPC endpoint for a network, if there is one
+/// to rely on. Mainnet has none yet: the only mainnet indexer is a test
+/// service (`zns-mainnet-test`), and a resolver decides where money goes, so
+/// mainnet lookups stay off until a production one exists.
+pub fn endpoint(mainnet: bool) -> Option<&'static str> {
     if mainnet {
-        "https://light.zcash.me/zns-mainnet-test"
+        None
     } else {
-        "https://light.zcash.me/zns-testnet"
+        Some("https://light.zcash.me/zns-testnet")
     }
 }
+
+/// Why a lookup can't run on mainnet, for the user.
+pub const MAINNET_UNAVAILABLE: &str =
+    "ZcashNames lookups are off on mainnet until there's a production directory. Paste the address instead.";
 
 /// A resolved ZNS registration. Extra fields returned by the indexer (txid,
 /// height, nonce, signature, pubkey, …) are ignored — the wallet needs the name,
@@ -149,8 +156,9 @@ pub async fn resolve_name(input: &str, mainnet: bool) -> Result<Option<ResolveRe
         .build()
         .map_err(|e| CoreError::Connection(format!("ZNS client: {e}")))?;
 
+    let url = endpoint(mainnet).ok_or_else(|| CoreError::Config(MAINNET_UNAVAILABLE.into()))?;
     let response = client
-        .post(endpoint(mainnet))
+        .post(url)
         .json(&request)
         .send()
         .await
@@ -182,9 +190,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn endpoints_differ_by_network() {
-        assert!(endpoint(true).contains("mainnet"));
-        assert!(endpoint(false).contains("testnet"));
+    fn mainnet_lookups_are_off_until_a_production_indexer_exists() {
+        assert_eq!(endpoint(true), None);
+        assert!(endpoint(false).unwrap().contains("testnet"));
+    }
+
+    #[tokio::test]
+    async fn a_mainnet_lookup_fails_without_contacting_anyone() {
+        let err = resolve_name("alice.zcash", true).await.unwrap_err();
+        assert!(err.to_string().contains("off on mainnet"), "{err}");
     }
 
     #[test]

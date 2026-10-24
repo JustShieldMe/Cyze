@@ -43,7 +43,7 @@ export function checkRecipient(address: string, network: WalletNetwork): { trans
 }
 
 export const ADDRESS_PLACEHOLDER: Record<WalletNetwork, string> = {
-  main: "u1… address, t-address, or name.zcash",
-  test: "utest1… or tm… address",
+  main: "u1… address or t-address",
+  test: "utest1… or tm… address, or name.zcash",
   regtest: "uregtest1… or tm… address",
 };

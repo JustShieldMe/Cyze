@@ -15,6 +15,7 @@ pub mod invite;
 pub mod keystore;
 pub mod neterr;
 pub mod redact;
+pub mod safety;
 pub mod sealed;
 pub mod signing;
 pub mod tls;

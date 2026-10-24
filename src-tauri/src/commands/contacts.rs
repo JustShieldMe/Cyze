@@ -13,11 +13,17 @@ pub struct ContactDto {
     pub alias: Option<String>,
     /// The shareable `zffrost1...` string.
     pub text: String,
+    /// The key's safety code, for comparing with the person out loud
+    /// (`frost_app_core::safety`).
+    pub safety_code: String,
+    /// The user compared the safety code with this contact.
+    pub verified: bool,
 }
 
 #[tauri::command]
 pub async fn list_contacts(state: State<'_, AppState>) -> AppResult<Vec<ContactDto>> {
-    let aliases = state.load_private().await?.contact_aliases;
+    let private = state.load_private().await?;
+    let (aliases, verified) = (private.contact_aliases.clone(), private.verified_contacts.clone());
     state
         .with_config(|config| {
             config
@@ -29,6 +35,8 @@ pub async fn list_contacts(state: State<'_, AppState>) -> AppResult<Vec<ContactD
                         name: c.name.clone(),
                         alias: aliases.get(&pubkey).cloned(),
                         text: frost_app_core::config::contact_to_text(&c.name, &c.pubkey)?,
+                        safety_code: frost_app_core::safety::safety_code(&c.pubkey.0),
+                        verified: verified.contains(&pubkey),
                         pubkey,
                     })
                 })
@@ -97,6 +105,8 @@ pub async fn add_contact(
     Ok(ContactDto {
         name: contact.name.clone(),
         alias,
+        safety_code: frost_app_core::safety::safety_code(&contact.pubkey.0),
+        verified: false,
         pubkey,
         text,
     })
@@ -116,7 +126,12 @@ pub async fn remove_contact(state: State<'_, AppState>, pubkey: String) -> AppRe
         })
         .await?;
     // Drop any alias for the removed contact.
-    state.update_private(|p| p.contact_aliases.remove(&pubkey)).await?;
+    state
+        .update_private(|p| {
+            p.contact_aliases.remove(&pubkey);
+            p.verified_contacts.remove(&pubkey);
+        })
+        .await?;
     Ok(())
 }
 
@@ -138,11 +153,33 @@ pub async fn export_my_contact(state: State<'_, AppState>, name: String) -> AppR
             Ok(ContactDto {
                 name,
                 alias: None,
+                safety_code: frost_app_core::safety::safety_code(&pubkey.0),
+                verified: false,
                 pubkey: hex::encode(&pubkey.0),
                 text: contact
                     .as_text()
                     .map_err(|e| AppError::new("config", e.to_string()))?,
             })
+        })
+        .await
+}
+
+/// Record whether the user compared a contact's safety code with them.
+#[tauri::command]
+pub async fn set_contact_verified(state: State<'_, AppState>, pubkey: String, verified: bool) -> AppResult<()> {
+    let known = state
+        .with_config(|c| Ok(c.contact.values().any(|x| hex::encode(&x.pubkey.0) == pubkey)))
+        .await?;
+    if !known {
+        return Err(AppError::new("config", "contact not found"));
+    }
+    state
+        .update_private(|p| {
+            if verified {
+                p.verified_contacts.insert(pubkey);
+            } else {
+                p.verified_contacts.remove(&pubkey);
+            }
         })
         .await
 }

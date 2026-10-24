@@ -11,6 +11,9 @@ frost-ed25519 = { workspace = true }
 frost-rerandomized = { workspace = true }
 reddsa = { workspace = true }
 reqwest = { workspace = true }
+# Exact-certificate pinning for self-signed frostd servers (transport.rs);
+# the version and ring provider reqwest already uses.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
