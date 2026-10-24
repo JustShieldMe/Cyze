@@ -125,6 +125,11 @@ pub async fn start_dkg<R: tauri::Runtime>(app: AppHandle<R>, args: StartDkgArgs)
                     .await;
                 match saved {
                     Ok(()) => {
+                        if suite == Suite::RedPallas {
+                            crate::commands::wallet::record_new_group_birthday(&state, &group_id).await;
+                            // It may be the only wallet, which the service then syncs.
+                            state.sync_service.wake(false);
+                        }
                         let _ = task_app.emit(
                             "dkg:complete",
                             serde_json::json!({ "ceremony_id": ceremony_id, "group_id": group_id }),

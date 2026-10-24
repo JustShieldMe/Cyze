@@ -82,16 +82,6 @@ interface CeremoniesStore {
   /** txid → signer comm pubkeys; persisted so on-chain rows can show signers
    *  even after the pending ceremony entry has been cleared. */
   txSigners: Record<string, string[]>;
-  /** Bumped whenever a ceremony lands funds on-chain (a send we coordinated, or
-   *  a signing session we took part in). The wallet screen watches this and runs
-   *  a sync, so a signer who just approved a transaction sees it appear instead
-   *  of a stale balance that contradicts what they just did.
-   *
-   *  It is a *signal*, not the sync itself: the wallet screen owns the only
-   *  sync, so a second writer can never race the first (SQLite permits one). */
-  walletRefreshTick: number;
-  /** Ask the wallet screen to re-sync at the next opportunity. */
-  requestWalletRefresh: () => void;
   setActiveDkg: (id: string | null, label?: string) => void;
   setActiveSigning: (id: string | null) => void;
   /** Register a freshly-started send so it persists and can be reattached. */
@@ -112,9 +102,6 @@ export const useCeremonies = create<CeremoniesStore>()(
       activeSigningId: null,
       activeSendByGroup: {},
       txSigners: {},
-      walletRefreshTick: 0,
-      requestWalletRefresh: () =>
-        set((s) => ({ walletRefreshTick: s.walletRefreshTick + 1 })),
       setActiveDkg: (id, label) =>
         set((s) => {
           if (!id) return { activeDkgId: null };

@@ -42,7 +42,7 @@ pub async fn create_keystore(state: State<'_, AppState>, passphrase: String) -> 
     config.communication_key = Some(CommunicationKey { privkey, pubkey });
     let toml = frost_app_core::config::serialize_config(&config)?;
     let (phrase, file) = state.keystore().create(toml.as_bytes(), &passphrase)?;
-    *state.unlocked.write().await = Some(crate::state::UnlockedState { config, file });
+    state.set_unlocked(Some(crate::state::UnlockedState { config, file })).await;
     state.touch_activity();
     Ok(phrase.to_string())
 }
@@ -68,7 +68,7 @@ pub async fn import_upstream_config(
     })?);
     let config = frost_app_core::config::parse_config(&toml_str)?;
     let (phrase, file) = state.keystore().create(toml_str.as_bytes(), &passphrase)?;
-    *state.unlocked.write().await = Some(crate::state::UnlockedState { config, file });
+    state.set_unlocked(Some(crate::state::UnlockedState { config, file })).await;
     state.touch_activity();
     Ok(phrase.to_string())
 }
@@ -84,7 +84,7 @@ pub async fn unlock_keystore(state: State<'_, AppState>, passphrase: String) -> 
     if state.keystore().is_legacy() {
         let _ = state.keystore().save_file(&file, plaintext.as_slice());
     }
-    *state.unlocked.write().await = Some(crate::state::UnlockedState { config, file });
+    state.set_unlocked(Some(crate::state::UnlockedState { config, file })).await;
     state.touch_activity();
     Ok(())
 }
@@ -104,7 +104,7 @@ pub async fn recover_keystore(
     let toml_str = std::str::from_utf8(&plaintext)
         .map_err(|e| AppError::new("malformed_keystore", e.to_string()))?;
     let config = frost_app_core::config::parse_config(toml_str)?;
-    *state.unlocked.write().await = Some(crate::state::UnlockedState { config, file });
+    state.set_unlocked(Some(crate::state::UnlockedState { config, file })).await;
     state.touch_activity();
     Ok(())
 }
@@ -115,7 +115,7 @@ pub async fn lock_keystore(state: State<'_, AppState>) -> AppResult<()> {
     for (_, handle) in state.ceremonies.lock().await.drain() {
         handle.cancel.cancel();
     }
-    *state.unlocked.write().await = None;
+    state.set_unlocked(None).await;
     Ok(())
 }
 

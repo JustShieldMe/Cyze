@@ -74,6 +74,19 @@ pub struct Settings {
     /// scans the blocks that funded the group, so the balance reads zero.
     #[serde(default)]
     pub wallet_birthdays: HashMap<String, u64>,
+    /// First block to scan for a group's wallet on one network, keyed by
+    /// [`wallet_session_key`]. Recorded when the group is created (the chain tip
+    /// at key generation) and when its account is imported. Supersedes
+    /// `wallet_birthdays`, which is per group only: a height recorded on one
+    /// network is meaningless on another, and a testnet height (~4M) would hide
+    /// every mainnet note.
+    #[serde(default)]
+    pub network_birthdays: HashMap<String, u64>,
+    /// When each group was created on this device (unix seconds). If the chain
+    /// tip couldn't be read at that moment, the wallet estimates its birthday
+    /// from this.
+    #[serde(default)]
+    pub group_created_at: HashMap<String, u64>,
     /// Blocks downloaded and scanned per sync batch. `None` uses the core
     /// default; larger values reduce per-batch overhead on slow links at the
     /// cost of memory. Clamped by the core to a sane range.
@@ -147,11 +160,11 @@ pub struct AppState {
     /// Cancellation token for the in-flight wallet sync of each group, so a
     /// "Sync Now" can abandon a stalled sync and restart it cleanly.
     pub sync_cancels: Mutex<HashMap<String, CancellationToken>>,
-    /// App-wide "one wallet syncs at a time" gate. Trial decryption is CPU-bound
-    /// and saturates every core, so two groups syncing at once only thrash. Every
-    /// `wallet_sync` holds this for its whole run; combined with cancelling the
-    /// previous group's sync on an active-wallet switch, it guarantees the app's
-    /// processing stays focused on a single wallet.
+    /// App-wide "one wallet syncs at a time" gate. Scanning is CPU-bound, so two
+    /// groups syncing at once only thrash. Every sync
+    /// (`commands::wallet::sync_once`) holds this for its whole run; combined
+    /// with cancelling the previous group's sync on an active-wallet switch, it
+    /// keeps the app's processing focused on a single wallet.
     ///
     /// This global gate also subsumes the earlier per-group sync lock: since only
     /// one sync ever runs, a restarting sync can no longer race a cancelled one's
@@ -168,6 +181,12 @@ pub struct AppState {
     pub subtree_roots_fetched: Mutex<HashMap<String, std::time::Instant>>,
     /// Epoch-millis of the last user activity, used to drive the idle auto-lock.
     pub last_activity: AtomicI64,
+    /// Broadcasts whether the keystore is unlocked, so background work (the
+    /// wallet sync service) can start on unlock and stop on lock. Updated only
+    /// through [`AppState::set_unlocked`].
+    unlocked_tx: tokio::sync::watch::Sender<bool>,
+    /// Background wallet sync: wake-ups and the latest status per group.
+    pub sync_service: crate::sync_service::SyncService,
 }
 
 /// How long a sync may go without re-fetching subtree roots. A pool gains one
@@ -211,7 +230,22 @@ impl AppState {
             lightwalletd: Mutex::new(None),
             subtree_roots_fetched: Mutex::new(HashMap::new()),
             last_activity: AtomicI64::new(now_millis()),
+            unlocked_tx: tokio::sync::watch::channel(false).0,
+            sync_service: crate::sync_service::SyncService::default(),
         }
+    }
+
+    /// Replace the unlocked keystore contents (`None` locks) and tell anything
+    /// watching. Every lock and unlock must go through here.
+    pub async fn set_unlocked(&self, value: Option<UnlockedState>) {
+        let unlocked = value.is_some();
+        *self.unlocked.write().await = value;
+        self.unlocked_tx.send_replace(unlocked);
+    }
+
+    /// Follow lock state changes (`true` = unlocked).
+    pub fn watch_unlocked(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.unlocked_tx.subscribe()
     }
 
     /// Record user activity now, deferring the idle auto-lock.
