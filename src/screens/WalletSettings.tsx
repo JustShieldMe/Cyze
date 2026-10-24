@@ -1,7 +1,11 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  getSettings,
   getWalletConfig,
+  setUseTor,
+  torStatus,
+  TorStatus,
   lightwalletdInfo,
   setWalletConfig,
   detectLocalDevnet,
@@ -14,6 +18,7 @@ import {
 } from "../ipc/commands";
 import { REGTEST_UPGRADES, devnetCanSend, upgradeLabel } from "../network";
 import { useAdvancedMode } from "../lib/advanced";
+import { useTauriEvent } from "../ipc/events";
 
 /** Known lightwalletd endpoints per network (user can also type their own). */
 const PRESETS: Record<WalletNetwork, { label: string; url: string }[]> = {
@@ -292,6 +297,57 @@ export default function WalletSettings() {
         {testErr && <div className="error" style={{ marginTop: 10 }}>{testErr}</div>}
       </div>
 
+      {!isDevnet && <TorCard />}
+    </div>
+  );
+}
+
+/** Settings → Wallet → Privacy: send the wallet's traffic through Tor. */
+function TorCard() {
+  const queryClient = useQueryClient();
+  const settings = useQuery({ queryKey: ["settings"], queryFn: getSettings });
+  const status = useQuery({
+    queryKey: ["tor-status"],
+    queryFn: torStatus,
+    refetchInterval: (q) => (q.state.data?.state === "starting" ? 1000 : false),
+  });
+  useTauriEvent<TorStatus>("tor:status", (s) => queryClient.setQueryData(["tor-status"], s));
+  const toggle = useMutation({
+    mutationFn: (on: boolean) => setUseTor(on),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings"] });
+      queryClient.invalidateQueries({ queryKey: ["tor-status"] });
+    },
+  });
+  const on = !!settings.data?.use_tor;
+  const s = status.data;
+  return (
+    <div className="card" style={{ marginTop: 18 }}>
+      <h3 style={{ marginTop: 0 }}>Privacy</h3>
+      <label className="row" style={{ gap: 8, alignItems: "center", margin: 0 }}>
+        <input
+          type="checkbox"
+          style={{ width: "auto", margin: 0 }}
+          checked={on}
+          disabled={toggle.isPending || settings.isLoading}
+          onChange={(e) => toggle.mutate(e.target.checked)}
+        />
+        <strong>Connect through Tor</strong>
+      </label>
+      <p className="dim" style={{ marginBottom: 0 }}>
+        The sync server, and anyone watching your network, can't tie your wallet's activity or the payments you send
+        to your IP address. Syncing is slower. Connecting to your group's server isn't affected.
+      </p>
+      {on && s?.state === "starting" && <p className="dim">Connecting to Tor… The wallet waits for it.</p>}
+      {on && s?.state === "ready" && <p className="ok">Connected through Tor.</p>}
+      {on && s?.state === "failed" && (
+        <div className="callout warn" style={{ marginTop: 10, alignItems: "center" }}>
+          <span style={{ flex: 1 }}>Tor didn't start: {s.error}. The wallet won't connect until it does, or you turn it off.</span>
+          <button onClick={() => toggle.mutate(true)} disabled={toggle.isPending}>
+            Try again
+          </button>
+        </div>
+      )}
     </div>
   );
 }

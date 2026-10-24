@@ -93,7 +93,8 @@ pub(crate) async fn pick_server(state: &AppState, again: bool) -> bool {
         return false;
     }
     let net = configured_network(&state.load_settings());
-    let timeout = std::time::Duration::from_secs(5);
+    // Each probe through Tor builds a circuit first.
+    let timeout = std::time::Duration::from_secs(if wallet::tor::is_on() { 30 } else { 5 });
     let Some(best) = wallet::fastest_lightwalletd(net, net.known_lightwalletd(), timeout).await else {
         tracing::warn!("none of the known sync servers answered");
         return false;
@@ -901,6 +902,13 @@ pub async fn resolve_zns_name(
     state: State<'_, AppState>,
     name: String,
 ) -> AppResult<Option<frost_app_core::zns::ResolveResult>> {
+    // Lookups go to the indexer over a plain HTTPS client, not through Tor.
+    if wallet::tor::is_on() {
+        return Err(AppError::new(
+            "config",
+            "name lookups don't go through Tor, so they're off while Tor is on. Paste the address instead",
+        ));
+    }
     let mainnet = match configured_network(&state.load_settings()) {
         WalletNetwork::Main => true,
         WalletNetwork::Test => false,

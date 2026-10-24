@@ -62,12 +62,15 @@ pub fn run() {
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(run_auto_lock_monitor(handle));
             sync_service::spawn(app.handle().clone());
+            commands::tor::start_if_enabled(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::keystore::keystore_status,
             commands::about::third_party_notices,
             commands::notify::notify,
+            commands::tor::tor_status,
+            commands::tor::set_use_tor,
             commands::backup::backup_status,
             commands::backup::export_backup,
             commands::backup::restore_backup,

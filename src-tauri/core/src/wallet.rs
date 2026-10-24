@@ -18,6 +18,7 @@ use zcash_protocol::local_consensus::LocalNetwork;
 
 use crate::error::CoreError;
 
+pub mod tor;
 pub mod verify;
 
 /// Which Zcash network the wallet operates on.
@@ -377,6 +378,15 @@ pub fn validate_endpoint_security(url: &str) -> Result<(), CoreError> {
 async fn connect(url: &str) -> Result<CompactTxStreamerClient<Channel>, CoreError> {
     validate_endpoint_security(url)?;
     let url = normalize_endpoint(url);
+    if let Some(tor) = tor::route(&url)? {
+        let uri = url
+            .parse::<tonic::transport::Uri>()
+            .map_err(|e| CoreError::Connection(format!("invalid lightwalletd URL: {e}")))?;
+        return tor
+            .connect_to_lightwalletd(uri, false)
+            .await
+            .map_err(|e| CoreError::Connection(format!("connecting to {url} through Tor: {e}")));
+    }
     let mut endpoint = Channel::from_shared(url.clone())
         .map_err(|e| CoreError::Connection(format!("invalid lightwalletd URL: {e}")))?
         // Syncing streams compact blocks for minutes at a time. Without

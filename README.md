@@ -87,6 +87,12 @@ Supports both frost-tools ciphersuites: **Ed25519** (generic signing) and
   Knowing the group's id (its Orchard `ak`) is then not enough to see its
   payments. Groups with a member using the upstream command-line tools (an
   advanced option) still derive their viewing key from `ak`.
+- **Optional Tor for wallet traffic.** With Tor on (Settings → Wallet), every
+  connection to a sync server, including broadcasting a payment, goes through
+  an embedded Tor client (Arti, through the wallet libraries). Nothing falls
+  back to a direct connection: while Tor starts, or if it fails, those
+  connections fail instead. A local devnet is still reached directly, and
+  coordination traffic (frostd) is not routed through Tor.
 - **Older groups can go private.** A group created before private viewing
   keys can have its members run the same agreement later, over a frostd
   session that holds exactly the group's members (each app refuses any other).

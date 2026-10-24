@@ -77,6 +77,7 @@ const defaults: Record<string, Handler> = {
   save_ui_state: () => null,
   record_activity: () => null,
   notify: () => null,
+  tor_status: () => ({ state: "off", error: null }),
 };
 
 /** Install the fake backend, with `overrides` replacing default commands. */

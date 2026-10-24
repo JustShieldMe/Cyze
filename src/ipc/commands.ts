@@ -46,7 +46,17 @@ export interface Settings {
   active_group_id: string | null;
   /** Advanced options shown (null/false = hidden, the default). */
   advanced_mode: boolean | null;
+  /** Wallet traffic goes through Tor. */
+  use_tor?: boolean | null;
 }
+
+export interface TorStatus {
+  state: "off" | "starting" | "ready" | "failed";
+  error: string | null;
+}
+export const torStatus = () => invoke<TorStatus>("tor_status");
+/** Turn Tor on or off for wallet traffic (remembered). */
+export const setUseTor = (enabled: boolean) => invoke<void>("set_use_tor", { enabled });
 
 export interface SidecarStatus {
   running: boolean;

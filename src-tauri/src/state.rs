@@ -59,6 +59,10 @@ pub struct Settings {
     /// lightwalletd endpoint for the selected network.
     #[serde(default)]
     pub lightwalletd_url: Option<String>,
+    /// Route wallet traffic (syncing, sending) through Tor
+    /// (`frost_app_core::wallet::tor`).
+    #[serde(default)]
+    pub use_tor: Option<bool>,
     /// Idle minutes before the keystore auto-locks. `None` uses the default
     /// (10 min); `Some(0)` disables auto-lock entirely.
     #[serde(default)]

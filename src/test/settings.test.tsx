@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { fireEvent } from "@testing-library/react";
+import { fireEvent, waitFor } from "@testing-library/react";
 import { fakeBackend, renderApp } from "./fake";
 
 test("every Settings tab opens", async () => {
@@ -11,6 +11,7 @@ test("every Settings tab opens", async () => {
     tunnel_status: () => ({ running: false, public_url: null, port: null }),
     tailscale_status: () => ({ installed: false, available: false, serving: false, public_url: null, port: null, dns_name: null, detail: "" }),
     "plugin:app|version": () => "0.3.0-rc.1",
+    set_use_tor: () => null,
   });
   const ui = await renderApp("/settings");
   await ui.findByText("I'm organizing");
@@ -20,6 +21,9 @@ test("every Settings tab opens", async () => {
   // No server chosen: the app shows which one it picked.
   await ui.findByText(/Using eu.zec.rocks, which answered in 48 ms/);
   expect((ui.getByRole("combobox") as HTMLSelectElement).value).toBe("auto");
+  // Tor for wallet traffic is one switch away.
+  fireEvent.click(ui.getByRole("checkbox", { name: "Connect through Tor" }));
+  await waitFor(() => expect(backend.calls("set_use_tor")).toEqual([{ enabled: true }]));
 
   fireEvent.click(ui.getByRole("link", { name: "Security" }));
   await ui.findByText("Key backup");
