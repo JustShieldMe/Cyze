@@ -1,0 +1,64 @@
+# cargo-about configuration: the licenses Cyze accepts in what it ships, used
+# by scripts/third-party-notices.sh to write the notices bundled with the app.
+# https://embarkstudios.github.io/cargo-about/
+#
+# Keep in step with the [licenses] policy in deny.toml, which CI enforces.
+
+accepted = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-1-Clause",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "CC0-1.0",
+    "Unlicense",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
+    # aws-lc-sys, in the bundled frostd: BSD-style, and requires this
+    # acknowledgement, which the notices carry.
+    "OpenSSL",
+    # File-level copyleft: the unmodified source of these crates is public on
+    # crates.io, which the notices point to.
+    "MPL-2.0",
+]
+# Build scripts and test-only crates aren't shipped.
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+# Built-in fixes for crates whose license files cargo-about can't classify
+# on its own.
+workarounds = ["ring", "rustls", "chrono", "gtk", "tonic"]
+
+# frost-client and frostd (ZcashFoundation/frost-tools) are dual
+# MIT/Apache-2.0 per their repository, but their Cargo.toml has no license
+# field.
+[frost-client.clarify]
+license = "MIT OR Apache-2.0"
+
+[[frost-client.clarify.git]]
+path = "LICENSE-MIT"
+license = "MIT"
+checksum = "33ed51083108997c32f55a37ded014405aaadc4700c67eac99cf4d6bc6b0253a"
+
+[[frost-client.clarify.git]]
+path = "LICENSE-APACHE"
+license = "Apache-2.0"
+checksum = "c189818d014a1cb1b8be186707f71994b45ba791a6e6b5cd819d57a53ac6106b"
+
+[frostd.clarify]
+license = "MIT OR Apache-2.0"
+
+[[frostd.clarify.git]]
+path = "LICENSE-MIT"
+license = "MIT"
+checksum = "33ed51083108997c32f55a37ded014405aaadc4700c67eac99cf4d6bc6b0253a"
+
+[[frostd.clarify.git]]
+path = "LICENSE-APACHE"
+license = "Apache-2.0"
+checksum = "c189818d014a1cb1b8be186707f71994b45ba791a6e6b5cd819d57a53ac6106b"

@@ -32,7 +32,7 @@ import JoinGroup from "./screens/JoinGroup";
 import NewSigningSession from "./screens/NewSigningSession";
 import Inbox from "./screens/Inbox";
 import Wallet from "./screens/Wallet";
-import Settings, { AdvancedSettings, SecuritySettings } from "./screens/Settings";
+import Settings, { AboutSettings, AdvancedSettings, SecuritySettings } from "./screens/Settings";
 
 /** A red dot with a white "!", shown against a nav entry that needs the user to
  *  do something: a signing session waiting in their inbox, or a DKG ceremony in
@@ -193,6 +193,7 @@ const router = createBrowserRouter([
           { path: "wallet", element: <Wallet /> },
           { path: "security", element: <SecuritySettings /> },
           { path: "advanced", element: <AdvancedSettings /> },
+          { path: "about", element: <AboutSettings /> },
         ],
       },
       // Older paths.

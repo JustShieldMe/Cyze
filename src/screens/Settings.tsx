@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, NavLink, Outlet } from "react-router-dom";
-import { changePassphrase, AppError } from "../ipc/commands";
+import { getVersion } from "@tauri-apps/api/app";
+import { changePassphrase, thirdPartyNotices, AppError } from "../ipc/commands";
 import { BackupCard } from "../components/Backup";
 import { useAdvancedMode } from "../lib/advanced";
 import { AdvancedCard, LogsCard } from "./Wallet";
@@ -11,6 +12,7 @@ const TABS = [
   { to: "/settings/wallet", label: "Wallet" },
   { to: "/settings/security", label: "Security" },
   { to: "/settings/advanced", label: "Advanced" },
+  { to: "/settings/about", label: "About" },
 ];
 
 /** `/settings`: one place for everything that isn't day-to-day use. */
@@ -68,6 +70,32 @@ function ChangePassphrase() {
       >
         {change.isPending ? "Changing…" : "Change passphrase"}
       </button>
+    </div>
+  );
+}
+
+export function AboutSettings() {
+  const version = useQuery({ queryKey: ["app-version"], queryFn: getVersion, staleTime: Infinity });
+  const [show, setShow] = useState(false);
+  const notices = useQuery({ queryKey: ["third-party-notices"], queryFn: thirdPartyNotices, enabled: show, staleTime: Infinity });
+  return (
+    <div className="card">
+      <h3 style={{ marginTop: 0 }}>Cyze {version.data ?? ""}</h3>
+      <p className="dim">
+        Threshold signing for shared Zcash wallets. Open source under the MIT license. Beta software that hasn't been
+        independently audited yet: use small amounts.
+      </p>
+      <h3>Open-source licenses</h3>
+      <p className="dim">Cyze is built on open-source software. Here it is, with the license each part comes under.</p>
+      {!show ? (
+        <button className="secondary" onClick={() => setShow(true)}>
+          Show licenses
+        </button>
+      ) : notices.error ? (
+        <div className="error">{(notices.error as unknown as AppError).message ?? String(notices.error)}</div>
+      ) : (
+        <pre className="notices">{notices.data ?? "Loading…"}</pre>
+      )}
     </div>
   );
 }

@@ -1,0 +1,6 @@
+Cyze: third-party notices
+
+Release builds replace this file with the full list of the open-source
+software Cyze is built on and its licenses, written by
+scripts/third-party-notices.sh. This copy is a placeholder for development
+builds.

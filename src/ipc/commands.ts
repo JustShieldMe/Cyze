@@ -530,6 +530,9 @@ export const cancelViewingKeySession = (groupId: string) =>
 export const walletPrepareMove = (groupId: string) =>
   invoke<DraftTransaction>("wallet_prepare_move", { groupId });
 
+/** The open-source software Cyze is built on, with its licenses. */
+export const thirdPartyNotices = () => invoke<string>("third_party_notices");
+
 /** Encrypted UI state (ceremony history). Readable only while unlocked. */
 export const loadUiState = (key: string) => invoke<string | null>("load_ui_state", { key });
 /** Save encrypted UI state; `null` deletes it. */
