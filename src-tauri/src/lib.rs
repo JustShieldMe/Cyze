@@ -2,6 +2,7 @@ pub mod commands;
 pub mod devnet;
 pub mod error;
 pub mod logbuf;
+pub mod private;
 pub mod sidecar;
 pub mod state;
 pub mod sync_service;
@@ -67,6 +68,8 @@ pub fn run() {
             commands::backup::backup_status,
             commands::backup::export_backup,
             commands::backup::restore_backup,
+            commands::ui_state::load_ui_state,
+            commands::ui_state::save_ui_state,
             commands::keystore::record_activity,
             commands::keystore::create_keystore,
             commands::keystore::import_upstream_config,

@@ -56,10 +56,11 @@ async fn groups_fingerprint(state: &AppState) -> AppResult<(String, bool)> {
 #[tauri::command]
 pub async fn backup_status(state: State<'_, AppState>) -> AppResult<BackupStatus> {
     let (fingerprint, has_groups) = groups_fingerprint(&state).await?;
-    let settings = state.load_settings();
+    let last_backup_at = state.load_settings().last_backup_at;
+    let backed_up = state.load_private().await?.backup_fingerprint;
     Ok(BackupStatus {
-        last_backup_at: settings.last_backup_at,
-        up_to_date: settings.last_backup_at.is_some() && settings.backup_fingerprint.as_deref() == Some(&fingerprint),
+        last_backup_at,
+        up_to_date: last_backup_at.is_some() && backed_up.as_deref() == Some(&fingerprint),
         has_groups,
     })
 }
@@ -81,11 +82,11 @@ fn date(unix: u64) -> String {
 
 /// Write a backup of the unlocked keystore to `path` and record it.
 pub async fn export_backup_to(state: &AppState, path: &Path) -> AppResult<BackupStatus> {
-    let settings = state.load_settings();
+    let private = state.load_private().await?;
     let meta = serde_json::to_vec(&BackupMeta {
-        network_birthdays: settings.network_birthdays.clone(),
-        wallet_birthdays: settings.wallet_birthdays.clone(),
-        group_created_at: settings.group_created_at.clone(),
+        network_birthdays: private.network_birthdays,
+        wallet_birthdays: private.wallet_birthdays,
+        group_created_at: private.group_created_at,
     })
     .map_err(|e| AppError::new("backup", e.to_string()))?;
     let encrypted = state.keystore().read_encrypted()?;
@@ -98,9 +99,9 @@ pub async fn export_backup_to(state: &AppState, path: &Path) -> AppResult<Backup
     frost_app_core::keystore::write_atomic(path, &file)?;
 
     let (fingerprint, has_groups) = groups_fingerprint(state).await?;
+    state.update_private(|p| p.backup_fingerprint = Some(fingerprint)).await?;
     let mut settings = state.load_settings();
     settings.last_backup_at = Some(now);
-    settings.backup_fingerprint = Some(fingerprint);
     state.save_settings(&settings)?;
     Ok(BackupStatus { last_backup_at: Some(now), up_to_date: true, has_groups })
 }
@@ -117,7 +118,7 @@ pub async fn restore_backup_from(state: &AppState, path: &Path) -> AppResult<()>
 }
 
 /// After an unlock: if a restored backup's metadata is waiting, decrypt it with
-/// the now-unlocked keystore and merge it into settings (never overwriting
+/// the now-unlocked keystore and merge it into the private settings (never overwriting
 /// what this device already recorded). Best effort: failing here only loses
 /// the recorded wallet birthdays, so it is logged rather than surfaced.
 pub(crate) async fn apply_pending_restore(state: &AppState) {
@@ -136,17 +137,20 @@ pub(crate) async fn apply_pending_restore(state: &AppState) {
         serde_json::from_slice::<BackupMeta>(&plain).map_err(|e| AppError::new("backup", e.to_string()))
     }) {
         Ok(meta) => {
-            let mut settings = state.load_settings();
-            for (k, v) in meta.network_birthdays {
-                settings.network_birthdays.entry(k).or_insert(v);
-            }
-            for (k, v) in meta.wallet_birthdays {
-                settings.wallet_birthdays.entry(k).or_insert(v);
-            }
-            for (k, v) in meta.group_created_at {
-                settings.group_created_at.entry(k).or_insert(v);
-            }
-            if let Err(e) = state.save_settings(&settings) {
+            let merged = state
+                .update_private(|p| {
+                    for (k, v) in meta.network_birthdays {
+                        p.network_birthdays.entry(k).or_insert(v);
+                    }
+                    for (k, v) in meta.wallet_birthdays {
+                        p.wallet_birthdays.entry(k).or_insert(v);
+                    }
+                    for (k, v) in meta.group_created_at {
+                        p.group_created_at.entry(k).or_insert(v);
+                    }
+                })
+                .await;
+            if let Err(e) = merged {
                 tracing::warn!("restore: couldn't save the backup's wallet metadata: {}", e.message);
                 return;
             }

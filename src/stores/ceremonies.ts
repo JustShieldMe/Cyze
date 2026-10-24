@@ -1,5 +1,7 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist } from "zustand/middleware";
+import { encryptedStorage } from "./encryptedStorage";
+import { useKeystore } from "./keystore";
 
 export type CeremonyKind = "dkg" | "signing" | "send";
 
@@ -98,14 +100,25 @@ interface CeremoniesStore {
   clear: (ceremonyId: string) => void;
 }
 
+const storage = encryptedStorage();
+
+type Persisted = Pick<
+  CeremoniesStore,
+  "ceremonies" | "activeDkgId" | "activeSigningId" | "activeSendByGroup" | "txSigners"
+>;
+
+const empty: Persisted = {
+  ceremonies: {},
+  activeDkgId: null,
+  activeSigningId: null,
+  activeSendByGroup: {},
+  txSigners: {},
+};
+
 export const useCeremonies = create<CeremoniesStore>()(
   persist(
     (set) => ({
-      ceremonies: {},
-      activeDkgId: null,
-      activeSigningId: null,
-      activeSendByGroup: {},
-      txSigners: {},
+      ...empty,
       joinedSessions: {},
       recordJoin: (sessionId, ceremonyId) =>
         set((s) => ({ joinedSessions: { ...s.joinedSessions, [sessionId]: ceremonyId } })),
@@ -256,16 +269,41 @@ export const useCeremonies = create<CeremoniesStore>()(
     }),
     {
       name: "frost-ceremonies",
-      partialize: (s) => ({
+      storage: createJSONStorage(() => storage),
+      // Loaded after unlock (below), since the history is encrypted.
+      skipHydration: true,
+      partialize: (s): Persisted => ({
         ceremonies: s.ceremonies,
         activeDkgId: s.activeDkgId,
         activeSigningId: s.activeSigningId,
         activeSendByGroup: s.activeSendByGroup,
         txSigners: s.txSigners,
       }),
+      // Keep anything that arrived between unlock and loading the history.
+      merge: (saved, current) => {
+        const s = (saved ?? {}) as Partial<Persisted>;
+        return {
+          ...current,
+          ...s,
+          ceremonies: { ...s.ceremonies, ...current.ceremonies },
+          activeSendByGroup: { ...s.activeSendByGroup, ...current.activeSendByGroup },
+          txSigners: { ...s.txSigners, ...current.txSigners },
+        };
+      },
     }
   )
 );
+
+// Load the history on unlock; forget it on lock, without touching what's saved.
+useKeystore.subscribe((s, prev) => {
+  if (s.unlocked === prev.unlocked) return;
+  if (s.unlocked) {
+    void useCeremonies.persist.rehydrate();
+  } else {
+    storage.lock();
+    useCeremonies.setState({ ...empty, joinedSessions: {} });
+  }
+});
 
 /** True when a DKG ceremony is running (tracked active id, not yet done). */
 export function selectDkgInProgress(s: CeremoniesStore): boolean {

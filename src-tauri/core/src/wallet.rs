@@ -411,9 +411,11 @@ pub async fn lightwalletd_info(url: &str) -> Result<LightwalletdInfo, CoreError>
 // Per-group wallet: sqlite-backed account, sync, and balance.
 //
 // Each FROST group is one view-only Orchard account, stored in its own sqlite
-// wallet under `<data_dir>/wallets/<group_id>/`. The group's UFVK (derived from
-// its `ak`) is imported as a watch-only account; sync trial-decrypts compact
-// blocks locally; balance is read from the wallet db.
+// wallet under `<data_dir>/wallets/<wallet_id>/`. The caller picks `wallet_id`;
+// the app uses an opaque id rather than the group id, which is enough to view
+// the wallet. The group's UFVK (derived from its `ak`) is imported as a
+// watch-only account; sync trial-decrypts compact blocks locally; balance is
+// read from the wallet db.
 // ---------------------------------------------------------------------------
 
 use std::path::{Path, PathBuf};
@@ -459,12 +461,12 @@ type GroupDb = WalletDb<rusqlite::Connection, WalletParams, SystemClock, WalletR
 const WALLET_DB: &str = "wallet-v2.sqlite";
 
 /// The wallet database for a group on a given network. Scoped by network
-/// (`.../<group_id>/<network>/...`) so testnet and mainnet each keep their own
+/// (`.../<wallet_id>/<network>/...`) so testnet and mainnet each keep their own
 /// db and balance and never share state.
-fn wallet_db_path(data_dir: &Path, group_id: &str, network: WalletNetwork) -> PathBuf {
+fn wallet_db_path(data_dir: &Path, wallet_id: &str, network: WalletNetwork) -> PathBuf {
     data_dir
         .join("wallets")
-        .join(group_id)
+        .join(wallet_id)
         .join(network.dir_name())
         .join(WALLET_DB)
 }
@@ -477,18 +479,20 @@ fn remove_legacy_wallet(dir: &Path) {
     let _ = std::fs::remove_dir_all(dir.join("blocks"));
 }
 
+const PENDING_TX_LABEL: &[u8] = b"cyze-pending-tx-v1";
+
 /// Path of the on-disk record for a fully-signed transaction awaiting broadcast.
 /// Keeping the signed PCZT lets a failed broadcast be retried without repeating
 /// the whole FROST signing ceremony. Network-scoped like [`wallet_db_path`].
 fn pending_tx_path(
     data_dir: &Path,
-    group_id: &str,
+    wallet_id: &str,
     network: WalletNetwork,
     ceremony_id: &str,
 ) -> PathBuf {
     data_dir
         .join("wallets")
-        .join(group_id)
+        .join(wallet_id)
         .join(network.dir_name())
         .join("pending")
         .join(format!("{ceremony_id}.pczt.hex"))
@@ -497,17 +501,20 @@ fn pending_tx_path(
 /// Persist a signed-but-not-broadcast PCZT so it can be re-broadcast later.
 pub fn save_pending_tx(
     data_dir: &Path,
-    group_id: &str,
+    wallet_id: &str,
     network: WalletNetwork,
     ceremony_id: &str,
     signed_pczt_hex: &str,
+    key: &[u8; 32],
 ) -> Result<PathBuf, CoreError> {
-    let path = pending_tx_path(data_dir, group_id, network, ceremony_id);
+    let path = pending_tx_path(data_dir, wallet_id, network, ceremony_id);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
         let _ = crate::keystore::restrict_dir_to_owner(parent);
     }
-    std::fs::write(&path, signed_pczt_hex.as_bytes())?;
+    // Encrypted: the PCZT names the recipient and amount for signers to verify.
+    let sealed = crate::sealed::seal(key, PENDING_TX_LABEL, signed_pczt_hex.as_bytes())?;
+    crate::keystore::write_atomic(&path, &sealed)?;
     let _ = crate::keystore::restrict_to_owner(&path);
     Ok(path)
 }
@@ -515,20 +522,28 @@ pub fn save_pending_tx(
 /// Load a previously-saved signed PCZT for re-broadcast.
 pub fn load_pending_tx(
     data_dir: &Path,
-    group_id: &str,
+    wallet_id: &str,
     network: WalletNetwork,
     ceremony_id: &str,
+    key: &[u8; 32],
 ) -> Result<String, CoreError> {
-    let path = pending_tx_path(data_dir, group_id, network, ceremony_id);
-    let hex = std::fs::read_to_string(&path).map_err(|e| {
+    let path = pending_tx_path(data_dir, wallet_id, network, ceremony_id);
+    let bytes = std::fs::read(&path).map_err(|e| {
         CoreError::Config(format!("no pending transaction for {ceremony_id}: {e}"))
     })?;
+    let plain = match crate::sealed::open(key, PENDING_TX_LABEL, &bytes) {
+        Ok(plain) => plain.to_vec(),
+        // Saved by an earlier version, unencrypted.
+        Err(_) if bytes.iter().all(|b| b.is_ascii_hexdigit() || b.is_ascii_whitespace()) => bytes,
+        Err(e) => return Err(e),
+    };
+    let hex = String::from_utf8(plain).map_err(|e| CoreError::Config(format!("pending transaction: {e}")))?;
     Ok(hex.trim().to_string())
 }
 
 /// Remove a pending transaction record once it has been broadcast.
-pub fn clear_pending_tx(data_dir: &Path, group_id: &str, network: WalletNetwork, ceremony_id: &str) {
-    let path = pending_tx_path(data_dir, group_id, network, ceremony_id);
+pub fn clear_pending_tx(data_dir: &Path, wallet_id: &str, network: WalletNetwork, ceremony_id: &str) {
+    let path = pending_tx_path(data_dir, wallet_id, network, ceremony_id);
     let _ = std::fs::remove_file(path);
 }
 
@@ -613,11 +628,11 @@ fn open_readonly_connection(
 /// here advances during a sync that would otherwise look frozen.
 pub fn sync_progress(
     data_dir: &Path,
-    group_id: &str,
+    wallet_id: &str,
     network: WalletNetwork,
     db_key: &[u8],
 ) -> Result<(u64, u64), CoreError> {
-    let db_path = wallet_db_path(data_dir, group_id, network);
+    let db_path = wallet_db_path(data_dir, wallet_id, network);
     if !db_path.exists() {
         return Ok((0, 0));
     }
@@ -736,12 +751,12 @@ pub struct WalletStatus {
 /// Read a group's wallet status from its local db (no network).
 pub fn group_status(
     data_dir: &Path,
-    group_id: &str,
+    wallet_id: &str,
     network: WalletNetwork,
     ufvk: &str,
     db_key: &[u8],
 ) -> Result<WalletStatus, CoreError> {
-    let db_path = wallet_db_path(data_dir, group_id, network);
+    let db_path = wallet_db_path(data_dir, wallet_id, network);
     let address = ufvk_default_address(network, ufvk).ok();
     if !db_path.exists() {
         return Ok(WalletStatus {
@@ -922,7 +937,7 @@ fn resolve_scan_from(requested: Option<u64>, nu5: u64, tip: u64) -> u64 {
 /// birthday above the tip has no treestate to anchor to.
 pub async fn init_group_account(
     data_dir: &Path,
-    group_id: &str,
+    wallet_id: &str,
     network: WalletNetwork,
     ufvk_str: &str,
     lightwalletd_url: &str,
@@ -931,8 +946,8 @@ pub async fn init_group_account(
 ) -> Result<u64, CoreError> {
     use zcash_protocol::consensus::{NetworkUpgrade, Parameters};
 
-    let tag = crate::redact::log_tag(group_id);
-    let db_path = wallet_db_path(data_dir, group_id, network);
+    let tag = crate::redact::log_tag(wallet_id);
+    let db_path = wallet_db_path(data_dir, wallet_id, network);
     let mut db = open_db(&db_path, network, db_key)?;
     if !db
         .get_account_ids()
@@ -1001,7 +1016,7 @@ pub async fn init_group_account(
     let birthday = AccountBirthday::from_treestate(treestate, None)
         .map_err(|_| CoreError::Crypto("could not derive account birthday from treestate".into()))?;
 
-    db.import_account_ufvk(group_id, &ufvk, &birthday, AccountPurpose::ViewOnly, None)
+    db.import_account_ufvk(wallet_id, &ufvk, &birthday, AccountPurpose::ViewOnly, None)
         .map_err(|e| CoreError::Crypto(format!("import account: {e}")))?;
     tracing::info!(group = %tag, scan_from, "wallet setup: view-only account imported; will scan from this height");
     Ok(scan_from)
@@ -1080,7 +1095,7 @@ fn elapsed_ms(since: std::time::Instant) -> u64 {
 /// network to the scanner (no on-disk block cache).
 pub async fn sync_group(
     data_dir: &Path,
-    group_id: &str,
+    wallet_id: &str,
     network: WalletNetwork,
     lightwalletd: &Lightwalletd,
     db_key: &[u8],
@@ -1092,7 +1107,7 @@ pub async fn sync_group(
         .batch_size
         .unwrap_or(DEFAULT_SYNC_BATCH_SIZE)
         .clamp(MIN_SYNC_BATCH_SIZE, MAX_SYNC_BATCH_SIZE);
-    let db_path = wallet_db_path(data_dir, group_id, network);
+    let db_path = wallet_db_path(data_dir, wallet_id, network);
     let mut db = open_db(&db_path, network, db_key)?;
 
     let mut client = lightwalletd.client.clone();
@@ -1559,11 +1574,11 @@ fn rewind_on_reorg(db: &mut GroupDb, at_height: BlockHeight, target: BlockHeight
 /// read from its database. `None` if there is no wallet yet.
 pub fn wallet_start_height(
     data_dir: &Path,
-    group_id: &str,
+    wallet_id: &str,
     network: WalletNetwork,
     db_key: &[u8],
 ) -> Result<Option<u64>, CoreError> {
-    let db_path = wallet_db_path(data_dir, group_id, network);
+    let db_path = wallet_db_path(data_dir, wallet_id, network);
     if !db_path.exists() {
         return Ok(None);
     }
@@ -1585,8 +1600,8 @@ pub fn wallet_start_height(
 /// Delete a group's wallet database on a network (with its WAL/SHM files) so
 /// the next setup rebuilds it. Pending signed transactions are kept. The wallet
 /// is a cache of the chain: nothing is lost but scanning time.
-pub fn delete_wallet_db(data_dir: &Path, group_id: &str, network: WalletNetwork) -> Result<(), CoreError> {
-    let db = wallet_db_path(data_dir, group_id, network);
+pub fn delete_wallet_db(data_dir: &Path, wallet_id: &str, network: WalletNetwork) -> Result<(), CoreError> {
+    let db = wallet_db_path(data_dir, wallet_id, network);
     for path in [db.clone(), PathBuf::from(format!("{}-wal", db.display())), PathBuf::from(format!("{}-shm", db.display()))] {
         match std::fs::remove_file(&path) {
             Ok(()) => {}
@@ -1821,7 +1836,7 @@ pub struct DraftTransaction {
 #[allow(clippy::too_many_arguments)]
 pub async fn prepare_send(
     data_dir: &Path,
-    group_id: &str,
+    wallet_id: &str,
     network: WalletNetwork,
     recipient: &str,
     amount_zatoshis: u64,
@@ -1843,7 +1858,7 @@ pub async fn prepare_send(
         }
     }
     let params = network.params();
-    let db_path = wallet_db_path(data_dir, group_id, network);
+    let db_path = wallet_db_path(data_dir, wallet_id, network);
     let mut db = open_db(&db_path, network, db_key)?;
 
     // Anchor the expiry to the live chain tip, not whatever sync last recorded.
@@ -1991,7 +2006,7 @@ pub async fn prepare_send(
 #[allow(clippy::too_many_arguments)]
 pub async fn prepare_vote(
     data_dir: &Path,
-    group_id: &str,
+    wallet_id: &str,
     network: WalletNetwork,
     reception_address: &str,
     ballot_definition: &[u8],
@@ -2009,7 +2024,7 @@ pub async fn prepare_vote(
 
     prepare_send(
         data_dir,
-        group_id,
+        wallet_id,
         network,
         reception_address,
         amount_zatoshis,
@@ -2406,11 +2421,11 @@ pub struct TxRecord {
 /// one address across payments.
 pub fn count_received_notes(
     data_dir: &Path,
-    group_id: &str,
+    wallet_id: &str,
     network: WalletNetwork,
     db_key: &[u8],
 ) -> Result<u64, CoreError> {
-    let db_path = wallet_db_path(data_dir, group_id, network);
+    let db_path = wallet_db_path(data_dir, wallet_id, network);
     if !db_path.exists() {
         return Ok(0);
     }
@@ -2452,11 +2467,11 @@ pub struct NoteRecord {
 /// count is also the number of FROST signing rounds a full-balance send needs.
 pub fn wallet_notes(
     data_dir: &Path,
-    group_id: &str,
+    wallet_id: &str,
     network: WalletNetwork,
     db_key: &[u8],
 ) -> Result<Vec<NoteRecord>, CoreError> {
-    let db_path = wallet_db_path(data_dir, group_id, network);
+    let db_path = wallet_db_path(data_dir, wallet_id, network);
     if !db_path.exists() {
         return Ok(vec![]);
     }
@@ -2553,11 +2568,11 @@ pub fn wallet_notes(
 
 pub fn wallet_history(
     data_dir: &Path,
-    group_id: &str,
+    wallet_id: &str,
     network: WalletNetwork,
     db_key: &[u8],
 ) -> Result<Vec<TxRecord>, CoreError> {
-    let db_path = wallet_db_path(data_dir, group_id, network);
+    let db_path = wallet_db_path(data_dir, wallet_id, network);
     if !db_path.exists() {
         return Ok(vec![]);
     }
@@ -2769,6 +2784,19 @@ pub fn ufvk_default_address(network: WalletNetwork, ufvk: &str) -> Result<String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pending_transactions_are_encrypted_and_older_plaintext_ones_still_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let (key, other) = ([7u8; 32], [8u8; 32]);
+        let path = save_pending_tx(dir.path(), "w1", WalletNetwork::Main, "c1", "deadbeef", &key).unwrap();
+        assert!(!std::fs::read(&path).unwrap().windows(8).any(|w| w == b"deadbeef"));
+        assert_eq!(load_pending_tx(dir.path(), "w1", WalletNetwork::Main, "c1", &key).unwrap(), "deadbeef");
+        assert!(load_pending_tx(dir.path(), "w1", WalletNetwork::Main, "c1", &other).is_err());
+
+        std::fs::write(pending_tx_path(dir.path(), "w1", WalletNetwork::Main, "c2"), "cafe01\n").unwrap();
+        assert_eq!(load_pending_tx(dir.path(), "w1", WalletNetwork::Main, "c2", &key).unwrap(), "cafe01");
+    }
 
     #[test]
     fn sends_need_a_wallet_scanned_near_the_tip() {

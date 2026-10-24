@@ -17,9 +17,6 @@
 //! The JSON envelope around them carries nothing secret.
 
 use base64::Engine as _;
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{XChaCha20Poly1305, XNonce};
-use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
@@ -34,7 +31,6 @@ const VERSION: u32 = 1;
 /// `KeystoreFile::derive_subkey` label for the metadata key.
 const META_KEY_INFO: &[u8] = b"backup-meta-v1";
 const META_AAD: &[u8] = b"cyze-backup-meta-v1";
-const NONCE_LEN: usize = 24;
 const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::STANDARD;
 
 #[derive(Serialize, Deserialize)]
@@ -69,15 +65,7 @@ pub fn create(
     if !is_keystore(keystore_file) {
         return Err(CoreError::MalformedKeystore("not a Cyze keystore".into()));
     }
-    let key = unlocked.derive_subkey(META_KEY_INFO);
-    let mut nonce = [0u8; NONCE_LEN];
-    rand::thread_rng().fill_bytes(&mut nonce);
-    let ciphertext = XChaCha20Poly1305::new_from_slice(key.as_ref())
-        .map_err(|e| CoreError::Crypto(e.to_string()))?
-        .encrypt(XNonce::from_slice(&nonce), Payload { msg: meta, aad: META_AAD })
-        .map_err(|e| CoreError::Crypto(e.to_string()))?;
-    let mut sealed = nonce.to_vec();
-    sealed.extend_from_slice(&ciphertext);
+    let sealed = crate::sealed::seal(&unlocked.derive_subkey(META_KEY_INFO), META_AAD, meta)?;
     let envelope = Envelope {
         format: FORMAT.into(),
         version: VERSION,
@@ -127,15 +115,7 @@ pub fn parse(bytes: &[u8]) -> Result<Backup, CoreError> {
 
 /// Decrypt a backup's metadata with the keystore it was restored with.
 pub fn open_meta(unlocked: &KeystoreFile, sealed: &[u8]) -> Result<Zeroizing<Vec<u8>>, CoreError> {
-    if sealed.len() < NONCE_LEN {
-        return Err(CoreError::Config("backup metadata is damaged".into()));
-    }
-    let (nonce, ciphertext) = sealed.split_at(NONCE_LEN);
-    let key = unlocked.derive_subkey(META_KEY_INFO);
-    XChaCha20Poly1305::new_from_slice(key.as_ref())
-        .map_err(|e| CoreError::Crypto(e.to_string()))?
-        .decrypt(XNonce::from_slice(nonce), Payload { msg: ciphertext, aad: META_AAD })
-        .map(Zeroizing::new)
+    crate::sealed::open(&unlocked.derive_subkey(META_KEY_INFO), META_AAD, sealed)
         .map_err(|_| CoreError::Config("backup metadata doesn't belong to this keystore".into()))
 }
 

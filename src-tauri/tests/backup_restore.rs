@@ -18,10 +18,13 @@ async fn a_backup_restores_identity_and_wallet_birthdays_on_a_new_device() {
     let phrase = commands::keystore::create_keystore(state.clone(), "original-passphrase".into()).await.unwrap();
     let identity = commands::keystore::get_identity(state.clone()).await.unwrap();
     // Recorded by key generation and wallet setup on the original device.
-    let mut settings = state.load_settings();
-    settings.network_birthdays.insert("mainnet/abc".into(), 3_527_461);
-    settings.group_created_at.insert("abc".into(), 1_792_731_000);
-    state.save_settings(&settings).unwrap();
+    state
+        .update_private(|p| {
+            p.network_birthdays.insert("mainnet/abc".into(), 3_527_461);
+            p.group_created_at.insert("abc".into(), 1_792_731_000);
+        })
+        .await
+        .unwrap();
 
     assert!(commands::backup::backup_status(state.clone()).await.unwrap().last_backup_at.is_none());
     let dir = tempfile::tempdir().unwrap();
@@ -39,9 +42,9 @@ async fn a_backup_restores_identity_and_wallet_birthdays_on_a_new_device() {
     commands::keystore::unlock_keystore(restored.clone(), "original-passphrase".into()).await.unwrap();
     let id = commands::keystore::get_identity(restored.clone()).await.unwrap();
     assert_eq!(id.pubkey, identity.pubkey, "same member identity");
-    let settings = restored.load_settings();
-    assert_eq!(settings.network_birthdays.get("mainnet/abc"), Some(&3_527_461));
-    assert_eq!(settings.group_created_at.get("abc"), Some(&1_792_731_000));
+    let private = restored.load_private().await.unwrap();
+    assert_eq!(private.network_birthdays.get("mainnet/abc"), Some(&3_527_461));
+    assert_eq!(private.group_created_at.get("abc"), Some(&1_792_731_000));
 
     // Another device, recovered with the recovery code (passphrase forgotten).
     let device = make_user();
@@ -51,5 +54,5 @@ async fn a_backup_restores_identity_and_wallet_birthdays_on_a_new_device() {
         .await
         .unwrap();
     assert_eq!(commands::keystore::get_identity(recovered.clone()).await.unwrap().pubkey, identity.pubkey);
-    assert_eq!(recovered.load_settings().network_birthdays.get("mainnet/abc"), Some(&3_527_461));
+    assert_eq!(recovered.load_private().await.unwrap().network_birthdays.get("mainnet/abc"), Some(&3_527_461));
 }

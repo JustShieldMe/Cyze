@@ -5,4 +5,5 @@ pub mod groups;
 pub mod keystore;
 pub mod server;
 pub mod signing;
+pub mod ui_state;
 pub mod wallet;

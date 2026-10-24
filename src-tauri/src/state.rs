@@ -40,8 +40,9 @@ pub struct Settings {
     /// PEM certs trusted for specific external servers, keyed by `host:port`.
     #[serde(default)]
     pub trusted_certs: HashMap<String, String>,
-    /// Local nicknames/aliases for contacts, keyed by hex comm pubkey.
-    #[serde(default)]
+    /// Legacy: moved to the encrypted private settings (`private.rs`). Read once
+    /// on unlock to migrate, and no longer written here.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub contact_aliases: HashMap<String, String>,
     /// Zcash network for wallet features: "main" (default), "test", or
     /// "regtest" (a local devnet).
@@ -62,30 +63,21 @@ pub struct Settings {
     /// (10 min); `Some(0)` disables auto-lock entirely.
     #[serde(default)]
     pub auto_lock_minutes: Option<u64>,
-    /// Rotating receive-address state per group (keyed by group id). Tracks the
-    /// diversifier index currently handed out and the received-note count when
-    /// it was issued, so the address rotates once it has plausibly been used.
-    #[serde(default)]
+    /// Legacy: moved to the encrypted private settings (`private.rs`). Read once
+    /// on unlock to migrate, and no longer written here.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub receive_state: HashMap<String, ReceiveState>,
-    /// First block scanned for each group's wallet (keyed by group id). Recorded
-    /// here rather than only inside the wallet database, which lives under
-    /// `wallets/` and is deleted whenever the wallet is rebuilt. Without it a
-    /// rebuilt wallet re-imports its account at the current chain tip and never
-    /// scans the blocks that funded the group, so the balance reads zero.
-    #[serde(default)]
+    /// Legacy: moved to the encrypted private settings (`private.rs`). Read once
+    /// on unlock to migrate, and no longer written here.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub wallet_birthdays: HashMap<String, u64>,
-    /// First block to scan for a group's wallet on one network, keyed by
-    /// [`wallet_session_key`]. Recorded when the group is created (the chain tip
-    /// at key generation) and when its account is imported. Supersedes
-    /// `wallet_birthdays`, which is per group only: a height recorded on one
-    /// network is meaningless on another, and a testnet height (~4M) would hide
-    /// every mainnet note.
-    #[serde(default)]
+    /// Legacy: moved to the encrypted private settings (`private.rs`). Read once
+    /// on unlock to migrate, and no longer written here.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub network_birthdays: HashMap<String, u64>,
-    /// When each group was created on this device (unix seconds). If the chain
-    /// tip couldn't be read at that moment, the wallet estimates its birthday
-    /// from this.
-    #[serde(default)]
+    /// Legacy: moved to the encrypted private settings (`private.rs`). Read once
+    /// on unlock to migrate, and no longer written here.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub group_created_at: HashMap<String, u64>,
     /// Blocks downloaded and scanned per sync batch. `None` uses the core
     /// default; larger values reduce per-batch overhead on slow links at the
@@ -104,11 +96,9 @@ pub struct Settings {
     /// they aren't prompted again unless they revisit it.
     #[serde(default)]
     pub session_configured: Option<bool>,
-    /// The single **active wallet**: the group whose wallet the app currently
-    /// works on. Wallet actions (sync, balance, send) are scoped to this one, and
-    /// only this group syncs — switching cancels the previous group's sync. `None`
-    /// until the user first selects one. Persisted so the choice survives restart.
-    #[serde(default)]
+    /// Legacy: moved to the encrypted private settings (`private.rs`). Read once
+    /// on unlock to migrate, and no longer written here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_group_id: Option<String>,
     /// Show developer and expert options: test networks and the local devnet,
     /// the diagnostics log, the Ed25519 ciphersuite, raw-message signing, and
@@ -119,10 +109,9 @@ pub struct Settings {
     /// When the keystore was last backed up (unix seconds).
     #[serde(default)]
     pub last_backup_at: Option<u64>,
-    /// SHA-256 over the group ids the last backup contained, so the app can
-    /// tell when a newer group isn't in any backup yet. A digest rather than
-    /// the ids: a group id is enough to view its wallet.
-    #[serde(default)]
+    /// Legacy: moved to the encrypted private settings (`private.rs`). Read once
+    /// on unlock to migrate, and no longer written here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backup_fingerprint: Option<String>,
 }
 
@@ -217,6 +206,8 @@ pub struct AppState {
     /// send signs each note in its own round; once one round of a verified
     /// transaction is approved, its other rounds are approved automatically.
     pub approved_sighashes: Mutex<HashMap<String, std::time::Instant>>,
+    /// Serializes read-modify-write cycles of the private settings.
+    pub(crate) private_lock: Mutex<()>,
 }
 
 /// How long a sync may go without re-fetching subtree roots. A pool gains one
@@ -263,6 +254,7 @@ impl AppState {
             unlocked_tx: tokio::sync::watch::channel(false).0,
             sync_service: crate::sync_service::SyncService::default(),
             approved_sighashes: Mutex::new(HashMap::new()),
+            private_lock: Mutex::new(()),
         }
     }
 
@@ -271,6 +263,13 @@ impl AppState {
     pub async fn set_unlocked(&self, value: Option<UnlockedState>) {
         let unlocked = value.is_some();
         *self.unlocked.write().await = value;
+        if unlocked {
+            // Bring this device's data up to date before the sync service or
+            // the UI reads it: metadata from a restored backup, and per-group
+            // settings an older version kept in plaintext.
+            crate::commands::backup::apply_pending_restore(self).await;
+            crate::private::migrate_plaintext(self).await;
+        }
         self.unlocked_tx.send_replace(unlocked);
     }
 
@@ -356,5 +355,12 @@ impl AppState {
         let unlocked = guard.as_ref().ok_or_else(AppError::locked)?;
         let info = format!("wallet-db:{group_id}");
         Ok(unlocked.file.derive_subkey(info.as_bytes()))
+    }
+
+    /// Key for a group's signed transactions awaiting broadcast.
+    pub async fn pending_tx_key(&self, group_id: &str) -> AppResult<zeroize::Zeroizing<[u8; 32]>> {
+        let guard = self.unlocked.read().await;
+        let unlocked = guard.as_ref().ok_or_else(AppError::locked)?;
+        Ok(unlocked.file.derive_subkey(format!("pending-tx-v1:{group_id}").as_bytes()))
     }
 }

@@ -478,3 +478,9 @@ export const respondToSigning = (ceremonyId: string, approve: boolean) =>
   invoke<void>("respond_to_signing", { ceremonyId, approve });
 export const listPendingSessions = (serverUrl: string | null) =>
   invoke<PendingSession[]>("list_pending_sessions", { serverUrl });
+
+/** Encrypted UI state (ceremony history). Readable only while unlocked. */
+export const loadUiState = (key: string) => invoke<string | null>("load_ui_state", { key });
+/** Save encrypted UI state; `null` deletes it. */
+export const saveUiState = (key: string, value: string | null) =>
+  invoke<void>("save_ui_state", { key, value });
