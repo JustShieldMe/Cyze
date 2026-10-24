@@ -97,6 +97,12 @@ wallet = [
 
 [dev-dependencies]
 tempfile = "3"
+tracing-subscriber = { workspace = true }
+
+# Times a real wallet sync against lightwalletd; see the file header for usage.
+[[example]]
+name = "sync_bench"
+required-features = ["wallet"]
 
 [lints.rust]
 # `zcash_unstable = "nu7"` is the zcash crates' opt-in for the next upgrade; the

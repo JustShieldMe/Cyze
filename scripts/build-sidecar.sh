@@ -2,7 +2,7 @@
 # Put BOTH sidecars where Tauri expects them, for this host's target triple:
 #
 #   frostd      — built from frost-tools at the pinned rev (scripts/PINNED_REV)
-#   cloudflared — downloaded from Cloudflare's releases (Apache-2.0)
+#   cloudflared — the pinned Cloudflare release, checksum-verified (Apache-2.0)
 #
 # tauri.conf.json lists both in `externalBin`, so the app will not build unless
 # both are present. A missing one surfaces late and cryptically, as:
@@ -41,37 +41,19 @@ fi
 )
 echo "sidecar ready: ${FROSTD_DEST#"$REPO_ROOT/"}"
 
-# --- cloudflared: download the prebuilt binary ------------------------------
+# --- cloudflared: download the pinned, checksummed binary -------------------
 # Bundled so the optional public-tunnel feature needs no install or PATH entry.
-# Cloudflare ships one asset per OS/arch; macOS is a .tgz, the rest are raw.
+# The release and its hashes are pinned in scripts/CLOUDFLARED_VERSION and
+# scripts/cloudflared.sha256; see scripts/fetch-cloudflared.sh.
 CF_DEST="$BIN_DIR/cloudflared-$TARGET_TRIPLE$EXT"
+CF_VERSION="$(tr -d '[:space:]' < "$SCRIPT_DIR/CLOUDFLARED_VERSION")"
+CF_STAMP="$BIN_DIR/.cloudflared-$TARGET_TRIPLE.version"
 
-if [ -x "$CF_DEST" ] && [ -z "${FORCE_CLOUDFLARED:-}" ]; then
-  echo "sidecar ready: ${CF_DEST#"$REPO_ROOT/"} (cached; set FORCE_CLOUDFLARED=1 to refetch)"
+if [ -x "$CF_DEST" ] && [ "$(cat "$CF_STAMP" 2>/dev/null)" = "$CF_VERSION" ] && [ -z "${FORCE_CLOUDFLARED:-}" ]; then
+  echo "sidecar ready: ${CF_DEST#"$REPO_ROOT/"} (cloudflared $CF_VERSION, cached; set FORCE_CLOUDFLARED=1 to refetch)"
 else
-  case "$TARGET_TRIPLE" in
-    x86_64-unknown-linux-gnu)   ASSET=cloudflared-linux-amd64       ;;
-    aarch64-unknown-linux-gnu)  ASSET=cloudflared-linux-arm64       ;;
-    x86_64-pc-windows-msvc)     ASSET=cloudflared-windows-amd64.exe ;;
-    aarch64-apple-darwin)       ASSET=cloudflared-darwin-arm64.tgz  ;;
-    x86_64-apple-darwin)        ASSET=cloudflared-darwin-amd64.tgz  ;;
-    *)
-      echo "error: no cloudflared asset known for '$TARGET_TRIPLE'." >&2
-      echo "Download one manually to $CF_DEST — see docs/RELEASE.md." >&2
-      exit 1
-      ;;
-  esac
-
-  TMP="$(mktemp -d)"
-  trap 'rm -rf "$TMP"' EXIT
-  URL="https://github.com/cloudflare/cloudflared/releases/latest/download/$ASSET"
-  echo "fetching $ASSET…"
-  curl -fL "$URL" -o "$TMP/cf-download"
-  case "$ASSET" in
-    *.tgz) tar -xzf "$TMP/cf-download" -C "$TMP"; cp "$TMP/cloudflared" "$CF_DEST" ;;
-    *)     cp "$TMP/cf-download" "$CF_DEST" ;;
-  esac
-  chmod +x "$CF_DEST" || true
+  "$SCRIPT_DIR/fetch-cloudflared.sh" "$TARGET_TRIPLE" "$CF_DEST"
+  echo "$CF_VERSION" > "$CF_STAMP"
   echo "sidecar ready: ${CF_DEST#"$REPO_ROOT/"}"
 fi
 

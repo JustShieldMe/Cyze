@@ -20,6 +20,14 @@ pub async fn set_server_url(state: State<'_, AppState>, url: String) -> AppResul
     state.save_settings(&settings)
 }
 
+/// Turn advanced options on or off (see `Settings::advanced_mode`).
+#[tauri::command]
+pub async fn set_advanced_mode(state: State<'_, AppState>, enabled: bool) -> AppResult<()> {
+    let mut settings = state.load_settings();
+    settings.advanced_mode = Some(enabled);
+    state.save_settings(&settings)
+}
+
 /// Save the first-run/session configuration: the active role and, for a
 /// coordinator, how the server is exposed. Marks the session as configured so
 /// the first-run prompt is not shown again.

@@ -545,14 +545,18 @@ mod tests {
 
     const MSG: &[u8] = b"orchard sighash";
 
-    /// A fresh 2-of-3 RedPallas group plus the two signers' round-1 state.
-    fn setup() -> (
+    /// Everything a test needs to sign: the group's public keys, every member's
+    /// key package, the chosen signers, their round-1 nonces, and the package.
+    type Setup = (
         PublicKeyPackage<C>,
         BTreeMap<Identifier<C>, KeyPackage<C>>,
         Vec<Identifier<C>>,
         BTreeMap<Identifier<C>, frost_core::round1::SigningNonces<C>>,
         SigningPackage<C>,
-    ) {
+    );
+
+    /// A fresh 2-of-3 RedPallas group plus the two signers' round-1 state.
+    fn setup() -> Setup {
         let (shares, pubkeys) =
             generate_with_dealer::<C, _>(3, 2, IdentifierList::Default, &mut OsRng).unwrap();
         let key_packages: BTreeMap<_, _> = shares

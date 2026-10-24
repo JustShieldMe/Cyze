@@ -1,7 +1,8 @@
 name: CI
 
-# Fast breakage check on every push/PR: frontend typecheck + build, and a
-# Rust workspace check. Cross-platform bundling lives in release.yml.
+# Every push/PR: frontend typecheck + build, a production-dependency audit,
+# clippy (warnings are errors), the Rust test suite, and a RustSec advisory
+# check. Cross-platform bundling lives in release.yml.
 on:
   push:
     branches: ["main", "spike/**"]
@@ -20,6 +21,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
@@ -38,15 +41,34 @@ jobs:
       - name: Typecheck + frontend build
         run: npm run build
 
+      # Only production dependencies ship in the app; dev tooling (vite etc.)
+      # runs on developer machines. High severity fails the build; moderate
+      # findings are triaged by hand.
+      - name: Audit production npm dependencies
+        run: npm audit --omit=dev --audit-level=high
+
       # Tauri's build.rs verifies the externalBin resource exists, even for
-      # `cargo check`. CI only type-checks (never bundles), so a stub file at the
-      # host triple's path is enough — no need to build the real frostd sidecar.
+      # `cargo check`. CI never bundles, so a stub file at the host triple's path
+      # is enough. The frostd end-to-end tests skip themselves when they find
+      # the empty stub instead of a real binary.
       - name: Stub sidecars for the resource check
         run: |
           mkdir -p src-tauri/binaries
           touch src-tauri/binaries/frostd-x86_64-unknown-linux-gnu
           touch src-tauri/binaries/cloudflared-x86_64-unknown-linux-gnu
 
-      - name: Rust workspace check
+      - name: Clippy
         working-directory: src-tauri
-        run: cargo check --workspace
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Tests
+        working-directory: src-tauri
+        run: cargo test --workspace
+
+      # Known vulnerabilities and yanked crates fail the build; see
+      # src-tauri/deny.toml for the policy.
+      - name: RustSec advisories
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: src-tauri/Cargo.toml
+          command: check advisories

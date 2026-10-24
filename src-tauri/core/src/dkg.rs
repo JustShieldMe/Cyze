@@ -375,6 +375,7 @@ async fn run_rounds<C: Ciphersuite + MaybeIntoEvenY + 'static>(
 /// Feeding them all into the state machine at once would advance it past
 /// the state the caller needs to read intermediate results from (e.g. the
 /// round 1 packages required by `dkg::part2`).
+#[allow(clippy::too_many_arguments)]
 async fn poll_until<C: Ciphersuite>(
     client: &FrostdClient,
     session_id: Uuid,

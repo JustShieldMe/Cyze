@@ -12,6 +12,7 @@ pub mod error;
 pub mod events;
 pub mod keystore;
 pub mod neterr;
+pub mod redact;
 pub mod signing;
 pub mod tls;
 pub mod transport;

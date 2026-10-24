@@ -135,6 +135,8 @@ impl WalletNetwork {
     /// Parse the settings spelling. A regtest network parsed this way assumes
     /// the default upgrade level; callers that know the node's level construct
     /// `WalletNetwork::Regtest(level)` directly.
+    // Not `FromStr`: this never fails (unknown spellings mean testnet).
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
         match s {
             "main" => WalletNetwork::Main,
@@ -339,6 +341,34 @@ async fn connect(url: &str) -> Result<CompactTxStreamerClient<Channel>, CoreErro
         .await
         .map_err(|e| crate::neterr::connection_error("connecting to lightwalletd", &url, &e))?;
     Ok(CompactTxStreamerClient::new(channel))
+}
+
+/// A lightwalletd connection that outlives a single sync.
+///
+/// Once caught up, the wallet re-syncs every few seconds, and connecting fresh
+/// each time paid a TCP + TLS handshake per cycle. Keep one of these and pass it
+/// to [`sync_group`] instead. Clones are cheap and share the one HTTP/2
+/// connection; if it drops, the next request fails and the caller should
+/// reconnect.
+#[derive(Clone)]
+pub struct Lightwalletd {
+    url: String,
+    client: CompactTxStreamerClient<Channel>,
+}
+
+impl Lightwalletd {
+    /// Connect to `url`, under the same endpoint rules as every wallet call.
+    pub async fn connect(url: &str) -> Result<Self, CoreError> {
+        Ok(Self {
+            url: url.trim().to_string(),
+            client: connect(url).await?,
+        })
+    }
+
+    /// The endpoint this connection was made to.
+    pub fn url(&self) -> &str {
+        &self.url
+    }
 }
 
 /// Fetch chain info from a lightwalletd endpoint — used to verify reachability
@@ -905,6 +935,7 @@ pub async fn init_group_account(
 ) -> Result<u64, CoreError> {
     use zcash_protocol::consensus::{NetworkUpgrade, Parameters};
 
+    let tag = crate::redact::log_tag(group_id);
     let (db_path, _) = wallet_paths(data_dir, group_id, network);
     let mut db = open_db(&db_path, network, db_key)?;
     if !db
@@ -912,7 +943,7 @@ pub async fn init_group_account(
         .map_err(|e| CoreError::Crypto(format!("wallet accounts: {e}")))?
         .is_empty()
     {
-        tracing::debug!(group = %group_id, "wallet setup: account already imported; nothing to do");
+        tracing::debug!(group = %tag, "wallet setup: account already imported; nothing to do");
         return Ok(0); // already imported
     }
 
@@ -926,7 +957,7 @@ pub async fn init_group_account(
     // wallet setup spinning forever with no error and no log line.
     let rpc_timeout = std::time::Duration::from_secs(30);
 
-    tracing::info!(group = %group_id, url = %lightwalletd_url, "wallet setup: connecting to lightwalletd");
+    tracing::info!(group = %tag, url = %lightwalletd_url, "wallet setup: connecting to lightwalletd");
     let mut client = connect(lightwalletd_url).await?;
     let tip = tokio::time::timeout(rpc_timeout, client.get_latest_block(ChainSpec {}))
         .await
@@ -938,7 +969,7 @@ pub async fn init_group_account(
         .map_err(|e| CoreError::Connection(format!("get_latest_block: {e}")))?
         .into_inner()
         .height;
-    tracing::info!(group = %group_id, tip, "wallet setup: connected; got chain tip");
+    tracing::info!(group = %tag, tip, "wallet setup: connected; got chain tip");
 
     let nu5 = params
         .activation_height(NetworkUpgrade::Nu5)
@@ -955,7 +986,7 @@ pub async fn init_group_account(
     // request the frontier as of the block *before* the first one to scan.
     // Fetching the treestate at `scan_from` itself would skip that block — and
     // with it the transaction that funded the group.
-    tracing::info!(group = %group_id, scan_from, "wallet setup: fetching tree state for the account birthday");
+    tracing::info!(group = %tag, scan_from, "wallet setup: fetching tree state for the account birthday");
     let treestate = tokio::time::timeout(
         rpc_timeout,
         client.get_tree_state(BlockId {
@@ -976,7 +1007,7 @@ pub async fn init_group_account(
 
     db.import_account_ufvk(group_id, &ufvk, &birthday, AccountPurpose::ViewOnly, None)
         .map_err(|e| CoreError::Crypto(format!("import account: {e}")))?;
-    tracing::info!(group = %group_id, scan_from, "wallet setup: view-only account imported; will scan from this height");
+    tracing::info!(group = %tag, scan_from, "wallet setup: view-only account imported; will scan from this height");
     Ok(scan_from)
 }
 
@@ -1000,6 +1031,49 @@ pub struct SyncOptions {
     /// Blocks to download and scan per batch; `None` uses
     /// [`DEFAULT_SYNC_BATCH_SIZE`], clamped into `[MIN, MAX]_SYNC_BATCH_SIZE`.
     pub batch_size: Option<u32>,
+    /// Skip fetching the note-commitment subtree roots. A pool gains a new root
+    /// only every 2^16 notes, so a caller that fetched them earlier in the
+    /// session can skip the three RPC streams and db writes on each re-sync.
+    /// `false` (the default) fetches them, as upstream `sync::run` does.
+    pub skip_subtree_roots: bool,
+}
+
+/// Where a sync spent its time. Whichever of `download_ms` and `scan_ms` is
+/// larger is the bottleneck. The wait figures show how well the two legs
+/// overlapped.
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+pub struct SyncStats {
+    /// Historic-range batches scanned (the verify pass is not counted).
+    pub batches: u32,
+    /// Blocks scanned across those batches.
+    pub blocks: u64,
+    /// Fetching and storing subtree roots; 0 when skipped.
+    pub subtree_roots_ms: u64,
+    /// Downloading blocks and their chain-state anchors.
+    pub download_ms: u64,
+    /// Scanning: trial decryption plus the per-batch db commit.
+    pub scan_ms: u64,
+    /// The scanner sat idle waiting for the next download (network-bound).
+    pub scan_wait_ms: u64,
+    /// The downloader sat idle because the scanner was behind (CPU-bound).
+    pub download_wait_ms: u64,
+    /// Wall-clock time for the whole sync.
+    pub total_ms: u64,
+}
+
+impl SyncStats {
+    /// Blocks scanned per second of wall-clock time.
+    pub fn blocks_per_sec(&self) -> f64 {
+        if self.total_ms == 0 {
+            0.0
+        } else {
+            self.blocks as f64 * 1000.0 / self.total_ms as f64
+        }
+    }
+}
+
+fn elapsed_ms(since: std::time::Instant) -> u64 {
+    since.elapsed().as_millis() as u64
 }
 
 /// Sync the group's wallet: download and trial-decrypt compact blocks from
@@ -1012,11 +1086,12 @@ pub async fn sync_group(
     data_dir: &Path,
     group_id: &str,
     network: WalletNetwork,
-    lightwalletd_url: &str,
+    lightwalletd: &Lightwalletd,
     db_key: &[u8],
     opts: SyncOptions,
     cancel: &tokio_util::sync::CancellationToken,
-) -> Result<(), CoreError> {
+) -> Result<SyncStats, CoreError> {
+    let started = std::time::Instant::now();
     let batch_size = opts
         .batch_size
         .unwrap_or(DEFAULT_SYNC_BATCH_SIZE)
@@ -1024,8 +1099,9 @@ pub async fn sync_group(
     let (db_path, _) = wallet_paths(data_dir, group_id, network);
     let mut db = open_db(&db_path, network, db_key)?;
 
-    let mut client = connect(lightwalletd_url).await?;
+    let mut client = lightwalletd.client.clone();
     let params = network.params();
+    let mut stats = SyncStats::default();
     // The driver scans in transactional batches, so dropping the future between
     // batches leaves the db consistent (just short of the tip). That makes it
     // safe to race against a cancellation token: "Sync Now" trips the token to
@@ -1034,11 +1110,35 @@ pub async fn sync_group(
     let result = tokio::select! {
         biased;
         _ = cancel.cancelled() => Err(CoreError::Cancelled),
-        res = run_pipelined(&mut client, &params, &mut db, batch_size) => res,
+        res = run_pipelined(&mut client, &params, &mut db, batch_size, opts.skip_subtree_roots, &mut stats) => res,
     };
+    stats.total_ms = elapsed_ms(started);
+    if result.is_ok() {
+        let summary = format!(
+            "sync finished: {} blocks in {} batches, {} ms ({:.0} blocks/s); \
+             subtree roots {} ms, download {} ms, scan {} ms, scanner waited {} ms \
+             on the network, downloader waited {} ms on the scanner",
+            stats.blocks,
+            stats.batches,
+            stats.total_ms,
+            stats.blocks_per_sec(),
+            stats.subtree_roots_ms,
+            stats.download_ms,
+            stats.scan_ms,
+            stats.scan_wait_ms,
+            stats.download_wait_ms,
+        );
+        // An up-to-date wallet re-syncs every few seconds; only a sync that
+        // actually scanned something is worth an info line.
+        if stats.blocks > 0 {
+            tracing::info!("{summary}");
+        } else {
+            tracing::debug!("{summary}");
+        }
+    }
     // Turn known, actionable failures into a message that says what to do, while
     // keeping the raw server error appended for diagnosis.
-    result.map_err(annotate_sync_error)
+    result.map(|()| stats).map_err(annotate_sync_error)
 }
 
 /// Rewrite a raw sync failure into an actionable message when it matches a known
@@ -1161,26 +1261,61 @@ fn split_scan_range(range: ScanRange, batch_size: u32) -> Vec<ScanRange> {
 /// is ported faithfully from the upstream `sync.rs`; only the download/scan
 /// overlap in step 7 is new. Produces the same wallet state as the stock driver.
 ///
-/// Note: the transparent-UTXO refresh in upstream `running` is gated on the
-/// `transparent-inputs` feature, which our `zcash_client_backend` build does not
-/// enable (group accounts are Orchard-only view keys), so the stock driver we run
-/// today does not perform it either. Omitting it here keeps the two byte-identical.
+/// Note: upstream `running` also refreshes transparent UTXOs when the
+/// `transparent-inputs` feature is on. It is on in our build (the `pczt` feature
+/// enables it), but a group account is an Orchard-only view key with no
+/// transparent receivers, so that refresh would have nothing to fetch. Omitting
+/// it costs nothing and saves a round trip per sync.
 async fn run_pipelined(
     client: &mut CompactTxStreamerClient<Channel>,
     params: &WalletParams,
     db: &mut GroupDb,
     batch_size: u32,
+    skip_subtree_roots: bool,
+    stats: &mut SyncStats,
 ) -> Result<(), CoreError> {
     // 1) & 2) Download note-commitment subtree roots and hand them to the db, so
-    //    the trees are initialized without replaying all history. One-time; no
-    //    pipelining benefit, so it stays serial.
-    update_subtree_roots_pipelined(client, db).await?;
+    //    the trees are initialized without replaying all history. No pipelining
+    //    benefit, so it stays serial; callers that fetched them earlier in the
+    //    session skip it.
+    if !skip_subtree_roots {
+        let t = std::time::Instant::now();
+        update_subtree_roots_pipelined(client, db).await?;
+        stats.subtree_roots_ms = elapsed_ms(t);
+    }
 
     // Re-run the per-session loop until the wallet's view of the chain tip is
     // valid (mirrors `while running(..).await? {}` upstream).
-    while running_pipelined(client, params, db, batch_size).await? {}
+    while running_pipelined(client, params, db, batch_size, stats).await? {}
 
     Ok(())
+}
+
+/// Run synchronous, CPU-heavy work (scanning) from async code without stalling
+/// the runtime.
+///
+/// Calling `scan_cached_blocks` directly on a Tokio worker undermines the
+/// pipeline. When the scanner's `recv` frees a channel slot, it wakes the
+/// waiting downloader on *this* worker, into a LIFO slot other workers cannot
+/// steal. The download therefore can't resume until this worker is free again,
+/// so download and scan stop overlapping. `block_in_place` first hands this
+/// worker's queue to another thread, so the downloader keeps going. A
+/// current-thread runtime (unit tests) has nothing to hand off and just runs
+/// the closure.
+fn run_blocking<T>(f: impl FnOnce() -> T) -> T {
+    use tokio::runtime::{Handle, RuntimeFlavor};
+    match Handle::try_current() {
+        Ok(h) if h.runtime_flavor() == RuntimeFlavor::MultiThread => tokio::task::block_in_place(f),
+        _ => f(),
+    }
+}
+
+/// Downloader-side timings, shared with the spawned producer task (which may be
+/// aborted, so it records as it goes rather than returning a value).
+#[derive(Default)]
+struct ProducerTimes {
+    download_ms: std::sync::atomic::AtomicU64,
+    send_wait_ms: std::sync::atomic::AtomicU64,
 }
 
 /// One pass of the pipelined sync loop. Returns `true` when the suggested scan
@@ -1191,6 +1326,7 @@ async fn running_pipelined(
     params: &WalletParams,
     db: &mut GroupDb,
     batch_size: u32,
+    stats: &mut SyncStats,
 ) -> Result<bool, CoreError> {
     // 3) & 4) Refresh the chain tip so `suggest_scan_ranges` reflects new blocks.
     update_chain_tip_pipelined(client, db).await?;
@@ -1209,7 +1345,7 @@ async fn running_pipelined(
                 let chain_state =
                     download_chain_state_pipelined(client, sr.block_range().start - 1).await?;
                 let src = MemBlockSource(blocks);
-                if scan_batch(params, &src, db, &chain_state, &sr)? {
+                if run_blocking(|| scan_batch(params, &src, db, &chain_state, &sr))? {
                     // Ranges changed; re-request and re-check for a Verify range.
                     continue;
                 }
@@ -1239,7 +1375,10 @@ async fn running_pipelined(
     // connection, so this adds no new socket.
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Result<PrefetchedBatch, CoreError>>(2);
     let mut producer_client = client.clone();
+    let times = std::sync::Arc::new(ProducerTimes::default());
+    let producer_times = times.clone();
     let producer = tokio::spawn(async move {
+        use std::sync::atomic::Ordering::Relaxed;
         for sr in batches {
             let dl_start = std::time::Instant::now();
             let blocks = match download_blocks_pipelined(&mut producer_client, &sr).await {
@@ -1267,23 +1406,30 @@ async fn running_pipelined(
                     return;
                 }
             };
+            producer_times.download_ms.fetch_add(elapsed_ms(dl_start), Relaxed);
             // If the consumer has hung up (ranges changed, or an error broke the
-            // loop) stop downloading.
+            // loop) stop downloading. Time spent blocked here is time the
+            // scanner was the bottleneck.
+            let send_start = std::time::Instant::now();
             if tx.send(Ok((sr, blocks, chain_state))).await.is_err() {
                 return;
             }
+            producer_times.send_wait_ms.fetch_add(elapsed_ms(send_start), Relaxed);
         }
     });
 
     // Consumer: scan each prefetched batch in order. `scan_batch` is CPU-bound
-    // and synchronous; on a multi-threaded runtime the producer keeps downloading
-    // the next batches on other worker threads while this one scans, which is the
-    // whole point. Scanning is transactional per batch, so bailing out early (or
-    // being dropped on cancellation) leaves the db consistent at a batch boundary.
+    // and synchronous; `run_blocking` keeps it from pinning the producer, so the
+    // next batches download while this one scans, which is the whole point.
+    // Scanning is transactional per batch, so bailing out early (or being
+    // dropped on cancellation) leaves the db consistent at a batch boundary.
     let mut result = Ok(false);
     let scan_run_start = std::time::Instant::now();
     let mut scanned_blocks: u64 = 0;
-    while let Some(item) = rx.recv().await {
+    loop {
+        let wait_start = std::time::Instant::now();
+        let Some(item) = rx.recv().await else { break };
+        stats.scan_wait_ms += elapsed_ms(wait_start);
         let (sr, blocks, chain_state) = match item {
             Ok(v) => v,
             Err(e) => {
@@ -1294,13 +1440,16 @@ async fn running_pipelined(
         let n = blocks.len() as u64;
         let src = MemBlockSource(blocks);
         let scan_start = std::time::Instant::now();
-        let outcome = scan_batch(params, &src, db, &chain_state, &sr);
+        let outcome = run_blocking(|| scan_batch(params, &src, db, &chain_state, &sr));
+        stats.scan_ms += elapsed_ms(scan_start);
+        stats.batches += 1;
+        stats.blocks += n;
         // Per-batch scan cost and cumulative throughput. This is the CPU-bound leg
         // (trial decryption + note-commitment tree updates); logging it here makes
         // the download-vs-scan split visible when diagnosing slow syncs.
         scanned_blocks += n;
         let secs = scan_run_start.elapsed().as_secs_f64();
-        tracing::info!(
+        tracing::debug!(
             "pipelined scan: {} blocks for {} in {} ms ({:.0} blocks/s cumulative over {} blocks)",
             n,
             sr,
@@ -1326,6 +1475,11 @@ async fn running_pipelined(
     // Stop the producer: either it already finished, or we broke early and it
     // should abandon any in-flight download.
     producer.abort();
+    {
+        use std::sync::atomic::Ordering::Relaxed;
+        stats.download_ms += times.download_ms.load(Relaxed);
+        stats.download_wait_ms += times.send_wait_ms.load(Relaxed);
+    }
     result
 }
 
@@ -1601,6 +1755,7 @@ pub struct DraftTransaction {
 /// and the node rejects the tx ("must not be mined at a block height greater
 /// than its expiry"). The signing ceremony must still complete within the
 /// ~40-block expiry window (≈50 min on testnet) of the build.
+#[allow(clippy::too_many_arguments)]
 pub async fn prepare_send(
     data_dir: &Path,
     group_id: &str,
@@ -1629,6 +1784,11 @@ pub async fn prepare_send(
         .height;
     db.update_chain_tip(BlockHeight::from_u32(tip_height as u32))
         .map_err(|e| CoreError::Crypto(format!("update chain tip: {e}")))?;
+    let scanned = db
+        .get_wallet_summary(ConfirmationsPolicy::default())
+        .map_err(|e| CoreError::Crypto(format!("wallet summary: {e}")))?
+        .map_or(0, |s| u64::from(s.fully_scanned_height()));
+    ensure_caught_up(scanned, tip_height)?;
 
     let account_id = *db
         .get_account_ids()
@@ -1786,6 +1946,25 @@ pub async fn prepare_vote(
         db_key,
     )
     .await
+}
+
+/// How many blocks the wallet's scan may trail the live chain tip and still
+/// build a transaction. Auto-sync keeps an open wallet within a block of the
+/// tip; this leaves room for blocks mined since the last scan.
+pub const SEND_MAX_SCAN_LAG: u64 = 3;
+
+/// Refuse to build from a wallet that hasn't scanned up to the chain tip.
+///
+/// Any member can coordinate a send, so a note this wallet still lists as
+/// unspent may have been spent in a block it hasn't scanned yet. Building on it
+/// would run a whole signing ceremony for a transaction the network rejects as a
+/// double spend.
+fn ensure_caught_up(scanned: u64, tip: u64) -> Result<(), CoreError> {
+    let behind = tip.saturating_sub(scanned);
+    if behind > SEND_MAX_SCAN_LAG {
+        return Err(CoreError::NotSynced { behind });
+    }
+    Ok(())
 }
 
 /// Collect every spend the group must FROST-sign, across both the Orchard and
@@ -2295,7 +2474,7 @@ pub fn wallet_notes(
         }
     }
     // Largest notes first, across both pools.
-    notes.sort_by(|a, b| b.value_zatoshis.cmp(&a.value_zatoshis));
+    notes.sort_by_key(|n| std::cmp::Reverse(n.value_zatoshis));
     Ok(notes)
 }
 
@@ -2517,6 +2696,28 @@ pub fn ufvk_default_address(network: WalletNetwork, ufvk: &str) -> Result<String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sends_need_a_wallet_scanned_near_the_tip() {
+        assert!(ensure_caught_up(1_000, 1_000).is_ok());
+        assert!(ensure_caught_up(1_000 - SEND_MAX_SCAN_LAG, 1_000).is_ok());
+        let err = ensure_caught_up(1_000 - SEND_MAX_SCAN_LAG - 1, 1_000).unwrap_err();
+        assert!(matches!(err, CoreError::NotSynced { behind: 4 }), "{err}");
+        // A db whose recorded tip is ahead of the server's is not "behind".
+        assert!(ensure_caught_up(1_010, 1_000).is_ok());
+    }
+
+    #[test]
+    fn run_blocking_works_on_both_runtime_flavors() {
+        // Outside any runtime, and on a current-thread runtime: runs inline.
+        assert_eq!(run_blocking(|| 7), 7);
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        assert_eq!(rt.block_on(async { run_blocking(|| 7) }), 7);
+        // On a worker of the multi-threaded runtime: via block_in_place.
+        let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).build().unwrap();
+        let v = rt.block_on(async { tokio::spawn(async { run_blocking(|| 7) }).await.unwrap() });
+        assert_eq!(v, 7);
+    }
 
     #[test]
     fn network_params_and_defaults() {

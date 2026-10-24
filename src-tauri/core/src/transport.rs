@@ -103,7 +103,7 @@ impl FrostdClient {
     ) -> Result<(), CoreError> {
         let challenge = self.challenge().await?.challenge;
         let signature: [u8; 64] = comm_privkey
-            .sign(challenge.as_bytes(), &mut rand::thread_rng())
+            .sign(challenge.as_bytes(), rand::thread_rng())
             .map_err(|e| CoreError::Crypto(e.to_string()))?;
         let output: api::LoginOutput = self
             .call(

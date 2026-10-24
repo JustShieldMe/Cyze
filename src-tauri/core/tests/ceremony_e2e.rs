@@ -42,7 +42,10 @@ fn frostd_path() -> Option<std::path::PathBuf> {
         .join("..")
         .join("binaries")
         .join(format!("frostd-{triple}"));
-    path.exists().then_some(path)
+    // CI places an empty stub here so Tauri's build script is satisfied; that
+    // is not a server we can run.
+    let is_real_binary = std::fs::metadata(&path).is_ok_and(|m| m.len() > 0);
+    is_real_binary.then_some(path)
 }
 
 fn free_port() -> u16 {

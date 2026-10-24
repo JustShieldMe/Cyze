@@ -31,7 +31,10 @@ fn frostd_path() -> Option<std::path::PathBuf> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("binaries")
         .join("frostd-x86_64-unknown-linux-gnu");
-    path.exists().then_some(path)
+    // CI places an empty stub here so Tauri's build script is satisfied; that
+    // is not a server we can run.
+    let is_real_binary = std::fs::metadata(&path).is_ok_and(|m| m.len() > 0);
+    is_real_binary.then_some(path)
 }
 
 async fn start_server() -> Option<TestServer> {

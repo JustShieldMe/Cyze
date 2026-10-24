@@ -35,6 +35,7 @@ impl From<CoreError> for AppError {
             CoreError::Connection(_) => "connection",
             CoreError::Ceremony(_) => "ceremony",
             CoreError::Cancelled => "cancelled",
+            CoreError::NotSynced { .. } => "not_synced",
             CoreError::Crypto(_) => "crypto",
             CoreError::Tls(_) => "tls",
             CoreError::Io(_) => "io",

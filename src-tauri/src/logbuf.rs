@@ -9,11 +9,16 @@
 //! The buffer is bounded ([`MAX_LINES`]) and lives only for the process: it is
 //! not persisted to disk (logs can contain addresses/amounts, and a wallet
 //! should not silently write those to a log file). Restarting the app clears it.
+//!
+//! Every line passes through [`redact_secrets`] before it reaches the buffer or
+//! stdout, so a group id or viewing key logged by mistake never ends up in a
+//! copied bug report or the system journal.
 
 use std::collections::VecDeque;
 use std::io;
 use std::sync::{Arc, Mutex, OnceLock};
 
+use frost_app_core::redact::redact_secrets;
 use tracing_subscriber::fmt::writer::MakeWriter;
 
 /// Maximum number of log lines retained in memory. Older lines are dropped as
@@ -24,12 +29,15 @@ const MAX_LINES: usize = 3000;
 #[derive(Clone)]
 pub struct LogBuffer {
     lines: Arc<Mutex<VecDeque<String>>>,
+    /// Also print each (redacted) event to stdout, for terminal runs.
+    echo_stdout: bool,
 }
 
 impl LogBuffer {
     fn new() -> Self {
         Self {
             lines: Arc::new(Mutex::new(VecDeque::with_capacity(MAX_LINES))),
+            echo_stdout: false,
         }
     }
 
@@ -64,7 +72,10 @@ static LOG_BUFFER: OnceLock<LogBuffer> = OnceLock::new();
 
 /// Access the global log buffer, creating it on first use.
 pub fn global() -> &'static LogBuffer {
-    LOG_BUFFER.get_or_init(LogBuffer::new)
+    LOG_BUFFER.get_or_init(|| LogBuffer {
+        echo_stdout: true,
+        ..LogBuffer::new()
+    })
 }
 
 /// A short-lived writer for one `tracing` event. `fmt` formats the whole event
@@ -91,7 +102,11 @@ impl Drop for LineWriter {
         if self.pending.is_empty() {
             return;
         }
-        let text = String::from_utf8_lossy(&self.pending);
+        let raw = String::from_utf8_lossy(&self.pending);
+        let text = redact_secrets(&raw);
+        if self.buf.echo_stdout {
+            let _ = io::Write::write_all(&mut io::stdout().lock(), text.as_bytes());
+        }
         for line in text.split('\n') {
             let line = line.trim_end_matches('\r');
             if !line.is_empty() {
@@ -116,20 +131,18 @@ impl<'a> MakeWriter<'a> for LogBuffer {
 /// buffer, honouring `RUST_LOG` when set; otherwise our crates log at `debug`
 /// (so sync timing is captured) and dependencies stay at `info`.
 pub fn init_logging() {
-    use tracing_subscriber::fmt::writer::MakeWriterExt;
     use tracing_subscriber::EnvFilter;
 
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("info,frost_app=debug,frost_app_core=debug"));
 
-    // Tee: the same formatted event goes to stdout and the in-app buffer.
-    let writer = std::io::stdout.and(global().clone());
-
+    // The global buffer echoes each redacted event to stdout itself, so stdout
+    // never sees an unredacted line.
     let _ = tracing_subscriber::fmt()
         .with_ansi(false)
         .with_target(false)
         .with_env_filter(filter)
-        .with_writer(writer)
+        .with_writer(global().clone())
         .try_init();
 }
 
@@ -164,5 +177,16 @@ mod tests {
             w.write_all(b"second\nthird\n").unwrap();
         }
         assert_eq!(buf.snapshot(), vec!["first line", "second", "third"]);
+    }
+
+    #[test]
+    fn line_writer_redacts_secrets() {
+        let buf = LogBuffer::new();
+        let ak = "d5a1c1b0e2f3a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c2d3";
+        {
+            let mut w = buf.make_writer();
+            writeln!(w, "wallet setup: group={ak}").unwrap();
+        }
+        assert_eq!(buf.snapshot(), vec!["wallet setup: group=[redacted]"]);
     }
 }
