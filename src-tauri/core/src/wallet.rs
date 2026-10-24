@@ -183,6 +183,15 @@ impl WalletNetwork {
         }
     }
 
+    /// The coin's ticker on this network, as the interface shows it.
+    pub fn ticker(self) -> &'static str {
+        match self {
+            WalletNetwork::Main => "ZEC",
+            WalletNetwork::Test => "TAZ",
+            WalletNetwork::Regtest(_) => "rZEC",
+        }
+    }
+
     /// A sensible default lightwalletd endpoint for this network. For regtest
     /// this is lightwalletd's conventional local port; a devnet that picks its
     /// own port (thus-spoke-zakura) is found with devnet detection instead.
@@ -1922,7 +1931,18 @@ pub async fn prepare_send(
         None, // lock_inputs
         None, // proposed_version: derive V5/V6 from the target height
     )
-    .map_err(|e| CoreError::Ceremony(format!("propose transfer: {e:?}")))?;
+    .map_err(|e| match e {
+        zcash_client_backend::data_api::error::Error::InsufficientFunds { available, required } => {
+            CoreError::Ceremony(format!(
+                "not enough spendable funds: {} {} can be spent now, and this payment needs {} with its fee. \
+                 Funds received recently need 10 confirmations first",
+                zec(available.into()),
+                network.ticker(),
+                zec(required.into()),
+            ))
+        }
+        e => CoreError::Ceremony(format!("couldn't build the payment ({e:?})")),
+    })?;
 
     let memo = if is_unshield { None } else { memo.filter(|s| !s.is_empty()) };
     draft_from_proposal(&mut db, network, account_id, &proposal, recipient, amount_zatoshis, is_unshield, memo)
@@ -1968,7 +1988,7 @@ pub async fn prepare_sweep(
         m if m.contains("InsufficientFunds") => {
             CoreError::Ceremony("there's too little at this address to cover the network fee".into())
         }
-        m => CoreError::Ceremony(format!("propose transfer: {m}")),
+        m => CoreError::Ceremony(format!("couldn't build the transfer ({m})")),
     })?;
     let amount = proposal
         .steps()
@@ -2173,6 +2193,12 @@ fn ensure_caught_up(scanned: u64, tip: u64) -> Result<(), CoreError> {
         return Err(CoreError::NotSynced { behind });
     }
     Ok(())
+}
+
+/// An amount in zatoshis as a decimal amount of the coin, trailing zeros trimmed.
+fn zec(zatoshis: u64) -> String {
+    let whole = format!("{}.{:08}", zatoshis / 100_000_000, zatoshis % 100_000_000);
+    whole.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
 /// Whether a wallet scanned to `scanned` is close enough to `tip` to build a
@@ -2922,6 +2948,14 @@ mod tests {
 
         std::fs::write(pending_tx_path(dir.path(), "w1", WalletNetwork::Main, "c2"), "cafe01\n").unwrap();
         assert_eq!(load_pending_tx(dir.path(), "w1", WalletNetwork::Main, "c2", &key).unwrap(), "cafe01");
+    }
+
+    #[test]
+    fn amounts_read_as_decimal_coins() {
+        assert_eq!(zec(150_000_000), "1.5");
+        assert_eq!(zec(100_000_000), "1");
+        assert_eq!(zec(10_000), "0.0001");
+        assert_eq!(zec(0), "0");
     }
 
     #[test]

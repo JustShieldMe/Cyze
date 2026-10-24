@@ -16,15 +16,17 @@ pub enum CoreError {
     MalformedKeystore(String),
     #[error("unsupported keystore version {0}")]
     UnsupportedKeystoreVersion(u8),
-    #[error("config error: {0}")]
+    /// Shown to the user as is, so it should read as a sentence on its own.
+    #[error("{0}")]
     Config(String),
     #[error("server error: {0}")]
     Server(String),
     #[error("connection error: {0}")]
     Connection(String),
-    #[error("ceremony failed: {0}")]
+    /// Shown to the user as is, so it should read as a sentence on its own.
+    #[error("{0}")]
     Ceremony(String),
-    #[error("ceremony was cancelled")]
+    #[error("cancelled")]
     Cancelled,
     #[error(
         "the wallet is still catching up ({behind} blocks behind the chain tip). Try again \

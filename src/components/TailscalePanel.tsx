@@ -123,7 +123,7 @@ export default function TailscalePanel({
               ✓ {s.detail}
             </p>
           )}
-          <label style={{ marginTop: 8 }}>Tailnet URL — share with participants</label>
+          <label style={{ marginTop: 8 }}>Tailnet URL — share with members</label>
           <div className="mono">{url}</div>
           <div className="row" style={{ gap: 8, marginTop: 8 }}>
             <CopyButton text={url} label="Copy URL" />

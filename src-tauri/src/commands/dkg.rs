@@ -48,7 +48,7 @@ pub(crate) async fn begin_dkg<R: tauri::Runtime>(app: &AppHandle<R>, args: Start
         None => state
             .load_settings()
             .server_url
-            .ok_or_else(|| AppError::new("config", "no server configured"))?,
+            .ok_or_else(|| AppError::new("config", "no server is set up for your groups to meet on. Choose one under Settings → Connection"))?,
     };
     let server_url = server_url
         .trim_start_matches("https://")

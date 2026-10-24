@@ -14,7 +14,9 @@ export const SEND_MAX_SCAN_LAG = 3;
  *  " — " (as `annotate_sync_error` does for known, actionable failures), show the
  *  actionable headline prominently and keep the raw text below it, dimmed, so the
  *  user sees what to do first without losing the log detail for debugging. */
-export function SyncErrorView({ text }: { text: string }) {
+export function SyncErrorView({ text: raw }: { text: string }) {
+  // Backend errors read as sentences but start lowercase.
+  const text = raw.charAt(0).toUpperCase() + raw.slice(1);
   const sep = text.indexOf(" — ");
   if (sep === -1) {
     return <div className="error">{text}</div>;

@@ -246,7 +246,7 @@ export function GroupWallet({ group, network }: { group: GroupSummary; network: 
         {livePool === "ironwood" && s.orchard.spendable_zatoshis > SELF_SEND_FEE_BUFFER && !sendInProgress && (
           <div className="callout" style={{ marginTop: 12, alignItems: "center" }}>
             <span style={{ flex: 1 }}>
-              {zec(s.orchard.spendable_zatoshis)} {unit(network)} is in the old shielded pool. Move it so it stays spendable.
+              {zec(s.orchard.spendable_zatoshis)} {unit(network)} is in an older format. Move it so it stays spendable.
             </span>
             <button onClick={() => selfSend.mutate("migration")} disabled={selfSend.isPending}>
               {selfSend.isPending ? "Preparing…" : "Move funds"}
@@ -551,7 +551,7 @@ function ReviewSend({
     <div className="card panel">
       <h3 style={{ marginTop: 0 }}>{title}</h3>
       {kind === "migration" && (
-        <p className="dim">Sends the old pool's funds back to this wallet, into the current pool.</p>
+        <p className="dim">Sends these funds back to this wallet in the current format.</p>
       )}
       {kind === "consolidation" && <p className="dim">Sends the funds back to this wallet as one note.</p>}
       {kind === "move" && (

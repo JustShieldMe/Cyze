@@ -56,6 +56,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(AppState::new())
         .setup(|app| {
             let handle = app.handle().clone();
@@ -66,6 +67,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::keystore::keystore_status,
             commands::about::third_party_notices,
+            commands::notify::notify,
             commands::backup::backup_status,
             commands::backup::export_backup,
             commands::backup::restore_backup,

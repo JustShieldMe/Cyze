@@ -41,15 +41,15 @@ export function GroupKeys({ group, masked = false }: { group: GroupSummary; mask
         <>
           <KeyRow label="Unified address" value={keys.data.address} masked={masked} />
           <KeyRow
-            label="Unified full viewing key (UFVK)"
+            label="Viewing key"
             value={keys.data.ufvk}
             masked={masked}
           />
           <div className="callout" style={{ marginTop: 10 }}>
             <span>
-              Every member derives this same address from the group's key. Funds
-              sent here are spendable only by a threshold of the group. The UFVK
-              grants <em>viewing</em> access — share it only within the group.
+              Funds sent here can be spent only when enough members approve. The
+              viewing key shows the wallet's balance and payments to whoever has
+              it: keep it within the group.
             </span>
           </div>
         </>
@@ -321,7 +321,7 @@ export function GroupCard({
       <GroupKeys group={group} masked={!keysVisible} />
 
       <div style={{ marginTop: 12 }}>
-        <label>Participants</label>
+        <label>Members</label>
         <table className="participants">
           <tbody>
             {Object.values(group.participants).map((pubkey) => {
