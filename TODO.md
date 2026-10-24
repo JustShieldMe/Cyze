@@ -143,6 +143,36 @@ current build depends on them.
       That de-risks the one genuinely novel part (threshold signing into their
       prover) cheaply. Own branch, own PR; larger effort than any current item.
 
+      **Spike findings (2026-10-24):**
+      - **The crates fit.** `zcash_voting =5.2.0-rc.2` and `pir-client =0.9.0`
+        build in Cyze's tree. They're on the same Zakura 4.0 family
+        (`zakura-wallet-lib ^0.1.0-rc9.2` resolves to our rc9.3), with one copy
+        of the wallet libraries. 5.1.x is on Zakura 2.x and doesn't fit.
+      - **The FROST hand-off is the Keystone path.**
+        `DelegationPipeline::keystone_request(bundle)` returns a
+        `KeystoneSigningRequest` with the redacted governance PCZT, its ZIP-244
+        sighash, `rk` and the action index (α is in the PCZT). The group signs
+        with the existing re-randomized ceremony, and the signature goes back
+        as `KeystoneSignatureSource::Provided { sig, sighash }`. The SDK
+        verifies and stores it, so a restart doesn't need another signature.
+        One ceremony per bundle. TX1 is never broadcast.
+      - **Encrypted wallets work:** `WalletDbOpener` is a trait, so Cyze
+        supplies one that opens its SQLCipher database with the key.
+      - **Co-signers need a new check:** "this signature delegates the group's
+        voting weight (N ZEC) for round R", recomputing the sighash from the
+        redacted PCZT and checking `rk`. The payment verifier would refuse it
+        or describe it wrongly.
+      - **After delegation, votes are signed by a voting hotkey**, not the group
+        key, so casting is one device's job; the hotkey's secret belongs in the
+        keystore's `[cyze]` table.
+      - **Infrastructure:** the docs' `valargroup.github.io` config URLs are
+        stale (404). The configs live at
+        `https://voting.valargroup.org/{prod,stage}/dynamic-voting-config.json`:
+        prod lists three vote servers and three PIR endpoints, stage has its
+        own. No round was active on prod or stage when checked
+        (`/shielded-vote/v1/rounds/active` → `round: null`), so an end-to-end
+        test waits for one, with a group holding notes unspent at its snapshot.
+
 ## Wallet (Zcash)
 
 - [ ] **Auto-sync polish** — auto-sync runs every 10s (see `GroupWallet` in
