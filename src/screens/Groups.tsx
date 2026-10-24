@@ -4,6 +4,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   getIdentity,
   groupOrchardKeys,
+  viewingKeyStatus,
   listContacts,
   listGroups,
   removeGroup,
@@ -36,7 +37,7 @@ export function GroupKeys({ group, masked = false }: { group: GroupSummary; mask
     <div style={{ marginTop: 10 }}>
       {/* The group id is the group's public verifying key. CLI users need it to
        *  join this group's sessions, so surface it as a labeled, copyable row. */}
-      <KeyRow label="Public Key (ak) / Group ID" value={group.id} masked={masked} />
+      <KeyRow label="Group ID (its public key)" value={group.id} masked={masked} />
       {orchard && keys.data && (
         <>
           <KeyRow label="Unified address" value={keys.data.address} masked={masked} />
@@ -297,47 +298,55 @@ export function GroupCard({
   onRemove: (id: string) => void;
   onRenamed: () => void;
 }) {
-  const [keysVisible, setKeysVisible] = useState(true);
+  const wallet = isOrchard(group);
+  const privacy = useQuery({
+    queryKey: ["viewing-key", group.id],
+    queryFn: () => viewingKeyStatus(group.id),
+    enabled: wallet,
+  });
   return (
     <div className="card">
       <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
         <GroupNameEditor group={group} onRenamed={onRenamed} />
-        <div className="row" style={{ gap: 8, alignItems: "center" }}>
-          <button
-            className="secondary"
-            style={{ padding: "2px 10px", fontSize: 12 }}
-            onClick={() => setKeysVisible((v) => !v)}
-            title={keysVisible ? "Hide keys and addresses" : "Show keys and addresses"}
-          >
-            {keysVisible ? "Hide" : "Show"}
-          </button>
-          <span className="badge blue" style={{ flexShrink: 0 }}>{group.ciphersuite}</span>
-        </div>
+        <span className="badge blue" style={{ flexShrink: 0 }}>
+          {wallet ? "Zcash wallet" : "Signing group (Ed25519)"}
+        </span>
       </div>
-      <p>
-        {group.threshold}-of-{group.num_participants} threshold
+      <p style={{ marginBottom: 4 }}>
+        {group.threshold} of {group.num_participants} members must approve each {wallet ? "payment" : "signature"}.
       </p>
+      {wallet && privacy.data && (
+        <p className="dim" style={{ marginTop: 0 }}>
+          {privacy.data.private
+            ? "Its balance and payments are visible only to its members."
+            : "Anyone who knows its group ID can see its balance and payments. Make it private from its wallet on Home."}
+        </p>
+      )}
+      {wallet && (
+        <Link to={`/groups/${group.id}/wallet`}>
+          <button>Open wallet</button>
+        </Link>
+      )}
 
-      <GroupKeys group={group} masked={!keysVisible} />
-
-      <div style={{ marginTop: 12 }}>
-        <label>Members</label>
-        <table className="participants">
-          <tbody>
-            {Object.values(group.participants).map((pubkey) => {
-              const p = resolveParticipant(pubkey, identity, contacts);
-              return (
-                <tr key={pubkey}>
-                  <td className={p.isSelf ? "ok" : undefined}>{p.label}</td>
-                  <td className="dim mono-cell">
-                    {keysVisible ? p.pubkey : "•".repeat(16)}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+      <h4 style={{ marginBottom: 6 }}>Members</h4>
+      <div className="member-list">
+        {Object.values(group.participants).map((pubkey) => {
+          const p = resolveParticipant(pubkey, identity, contacts);
+          const verified = contacts?.find((c) => c.pubkey === pubkey)?.verified;
+          return (
+            <div className="member" key={pubkey}>
+              <span style={p.isSelf ? { color: "var(--ok)" } : undefined}>{p.label}</span>
+              {verified && <span className="badge green">verified</span>}
+              <span className="dim code-inline" title={pubkey}>{p.shortPubkey}</span>
+            </div>
+          );
+        })}
       </div>
+
+      <details className="key-details">
+        <summary>Keys and addresses</summary>
+        <GroupKeys group={group} />
+      </details>
 
       <ShareRepairGuide group={group} />
 
@@ -446,11 +455,9 @@ export function GroupDetail() {
 
   return (
     <div>
-      {group.ciphersuite.includes("Pallas") && (
-        <div className="row" style={{ justifyContent: "flex-end", marginBottom: 8 }}>
-          <Link to={`/groups/${group.id}/wallet`}>Open wallet →</Link>
-        </div>
-      )}
+      <p style={{ marginTop: 0 }}>
+        <Link to="/groups">← Groups</Link>
+      </p>
       <GroupCard
         group={group}
         identity={identity.data}

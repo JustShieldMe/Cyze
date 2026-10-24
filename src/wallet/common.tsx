@@ -40,20 +40,21 @@ export function KeyRow({ label, value, masked = false }: { label: string; value:
   return (
     <div style={{ marginTop: 8 }}>
       <label>{label}</label>
-      <div className="mono" style={{ letterSpacing: masked ? 2 : undefined }}>{display}</div>
-      {!masked && (
-        <button
-          className="secondary"
-          style={{ marginTop: 6 }}
-          onClick={async () => {
-            await navigator.clipboard.writeText(value);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1500);
-          }}
-        >
-          {copied ? "Copied!" : "Copy"}
-        </button>
-      )}
+      <div className="key-row">
+        <div className="mono" style={{ letterSpacing: masked ? 2 : undefined }}>{display}</div>
+        {!masked && (
+          <button
+            className="secondary"
+            onClick={async () => {
+              await navigator.clipboard.writeText(value);
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1500);
+            }}
+          >
+            {copied ? "Copied" : "Copy"}
+          </button>
+        )}
+      </div>
     </div>
   );
 }

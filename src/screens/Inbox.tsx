@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
+  getIdentity,
   joinSigningSession,
+  listContacts,
   listGroups,
   listPendingSessions,
   signingRequests,
@@ -10,6 +12,7 @@ import {
 } from "../ipc/commands";
 import { useCeremonies } from "../stores/ceremonies";
 import { asNetwork, networkLabel, unit } from "../network";
+import { resolveParticipant } from "../lib/participants";
 
 /** Signer-side ceremony phases, as a human would say them. */
 const SIGNER_PHASES: Record<string, string> = {
@@ -168,6 +171,8 @@ function VerifiedSummary({
 
 export default function Inbox() {
   const groups = useQuery({ queryKey: ["groups"], queryFn: listGroups });
+  const identity = useQuery({ queryKey: ["identity"], queryFn: getIdentity });
+  const contacts = useQuery({ queryKey: ["contacts"], queryFn: listContacts });
   const sessions = useQuery({
     queryKey: ["pending-sessions"],
     queryFn: () => listPendingSessions(null),
@@ -221,15 +226,26 @@ export default function Inbox() {
           const refused = detail.refused as string | undefined;
           const autoApproved = detail.auto_approved === true;
           const messageHex = detail.message_hex as string | undefined;
+          const from = resolveParticipant(s.coordinator_pubkey, identity.data, contacts.data).label;
+          const group =
+            s.matching_groups.length === 1 ? groups.data?.find((g) => g.id === s.matching_groups[0]) : undefined;
           return (
             <div className="card" key={s.session_id}>
-              <div className="row" style={{ justifyContent: "space-between" }}>
-                <h3 style={{ margin: 0 }}>Request from {s.coordinator ?? "(unknown contact)"}</h3>
-                <span className="badge">{s.session_id.slice(0, 8)}…</span>
-              </div>
+              <h3 style={{ margin: 0 }}>
+                {from} asks to approve
+                {group
+                  ? group.ciphersuite.includes("Pallas")
+                    ? ` a payment from ${group.description || "a group"}`
+                    : ` a signature for ${group.description || "a group"}`
+                  : ""}
+              </h3>
 
               {!ceremony &&
-                (s.matching_groups.length ? (
+                (s.matching_groups.length === 1 ? (
+                  <div className="row" style={{ marginTop: 10 }}>
+                    <button onClick={() => join(s.session_id, s.matching_groups[0])}>Review request</button>
+                  </div>
+                ) : s.matching_groups.length ? (
                   s.matching_groups.map((gid) => {
                     const g = groups.data?.find((x) => x.id === gid);
                     return (
@@ -290,7 +306,7 @@ export default function Inbox() {
               ) : null}
 
               {ceremony?.done && !ceremony.failed && (
-                <p className="ok">Approved. {s.coordinator ?? "The sender"}'s app sends the payment once enough members approve.</p>
+                <p className="ok">Approved. {from}'s app sends the payment once enough members approve.</p>
               )}
               {ceremony?.failed && !refused && <p className="error">{ceremony.error}</p>}
             </div>

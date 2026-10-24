@@ -759,6 +759,7 @@ button.link-button {
   background: none; border: none; padding: 0; color: var(--accent); font-size: 12px; cursor: pointer;
 }
 button.link-button:hover { text-decoration: underline; filter: none; }
+button.link-button.danger-link { color: var(--danger); }
 .card.panel { background: var(--bg-card); }
 .safety-check { background: var(--bg-elevated); border-radius: 8px; padding: 12px 14px; margin: 4px 0 8px; }
 .safety-code { font-size: 18px; letter-spacing: 0.08em; color: var(--accent); margin-bottom: 8px; }
@@ -775,4 +776,46 @@ button.link-button:hover { text-decoration: underline; filter: none; }
   border-radius: 8px;
   background: var(--bg, #0b0f14);
   border: 1px solid var(--border, #1f2a37);
+}
+
+/* Activity: a whole row opens its details. */
+.tx-row {
+  cursor: pointer;
+}
+.tx-row:hover td {
+  background: var(--bg-elevated);
+}
+
+/* A copyable value with its button beside it. */
+.key-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.key-row .mono {
+  flex: 1;
+  min-width: 0;
+}
+.key-row button {
+  flex-shrink: 0;
+}
+
+/* Group details: members, then keys tucked away. */
+.member-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.member {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.key-details {
+  margin-top: 16px;
+}
+.key-details summary {
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: 13px;
 }
