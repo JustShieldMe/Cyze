@@ -13,10 +13,10 @@ import { asNetwork, networkLabel, unit } from "../network";
 
 /** Signer-side ceremony phases, as a human would say them. */
 const SIGNER_PHASES: Record<string, string> = {
-  connecting: "Connecting to the coordinator's server",
-  connected: "Connection established",
-  commitments_sent: "Joined. Waiting for the coordinator to send the transaction",
-  share_sent: "Signature share sent",
+  connecting: "Connecting…",
+  connected: "Connected",
+  commitments_sent: "Joined. Waiting for the transaction to check",
+  share_sent: "Approval sent",
 };
 
 function hexToUtf8(hex: string): string {
@@ -240,7 +240,7 @@ export default function Inbox() {
                     );
                   })
                 ) : (
-                  <p className="dim">The coordinator isn't in any of your groups.</p>
+                  <p className="dim">Whoever sent this isn't in any of your groups.</p>
                 ))}
 
               {ceremony && !awaiting && !ceremony.done && (
@@ -254,7 +254,7 @@ export default function Inbox() {
                   <span>
                     <strong>Refused automatically. Nothing was signed.</strong>
                     <br />
-                    {refused}
+                    {refused.replace(/^refused to sign: /, "").replace(/^./, (c) => c.toUpperCase())}
                   </span>
                 </div>
               ) : awaiting && ceremonyId && autoApproved ? (
@@ -290,7 +290,7 @@ export default function Inbox() {
               ) : null}
 
               {ceremony?.done && !ceremony.failed && (
-                <p className="ok">Signed. The coordinator completes the transaction.</p>
+                <p className="ok">Approved. {s.coordinator ?? "The sender"}'s app sends the payment once enough members approve.</p>
               )}
               {ceremony?.failed && !refused && <p className="error">{ceremony.error}</p>}
             </div>

@@ -57,7 +57,12 @@ pub(crate) async fn group_context(
         .or(local_sidecar_url)
         .or_else(|| state.load_settings().server_url)
         .or(ephemeral_group_url)
-        .ok_or_else(|| AppError::new("config", "no server configured for this group"))?;
+        .ok_or_else(|| {
+            AppError::new(
+                "config",
+                "no server is set up for this group to meet on. Choose one under Settings → Connection",
+            )
+        })?;
     let server_url = server_url
         .trim_start_matches("https://")
         .trim_end_matches('/')
@@ -446,7 +451,7 @@ pub async fn list_pending_sessions(
 ) -> AppResult<Vec<PendingSession>> {
     let server_url = server_url
         .or_else(|| state.load_settings().server_url)
-        .ok_or_else(|| AppError::new("config", "no server configured"))?;
+        .ok_or_else(|| AppError::new("config", "no server is set up for your groups to meet on. Choose one under Settings → Connection"))?;
     let server_url = server_url
         .trim_start_matches("https://")
         .trim_end_matches('/')
