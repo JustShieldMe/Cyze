@@ -65,10 +65,10 @@ jobs:
         working-directory: src-tauri
         run: cargo test --workspace
 
-      # Known vulnerabilities and yanked crates fail the build; see
-      # src-tauri/deny.toml for the policy.
-      - name: RustSec advisories
+      # Known vulnerabilities, yanked crates and licenses outside the policy
+      # fail the build; see src-tauri/deny.toml.
+      - name: RustSec advisories and licenses
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
           manifest-path: src-tauri/Cargo.toml
-          command: check advisories
+          command: check advisories licenses

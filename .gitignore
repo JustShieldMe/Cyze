@@ -10,3 +10,5 @@ design-handoff/**/*
 FEATURES.md
 WALKTHROUGH.md
 UAT.html
+# CycloneDX SBOMs (generated for releases; see .github/workflows/release.yml)
+*.cdx.json
