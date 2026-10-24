@@ -342,7 +342,7 @@ async fn run_rounds<C: Ciphersuite + MaybeIntoEvenY + 'static>(
     let viewing_seed = if params.agree_viewing_key && C::ID == PallasBlake2b512::ID {
         let _ = events.send(DkgEvent::ViewingKey).await;
         let mut round = SessionIo { client, session_id, cipher: &mut cipher, cancel, pending: &mut pending };
-        Some(agree_viewing_seed(&mut round, &pubkeys, &params.comm_pubkey, identifier, &group_key).await?)
+        Some(agree_viewing_seed(&mut round, &pubkeys, &params.comm_pubkey, identifier, &group_key, &mut |_| {}).await?)
     } else {
         None
     };
@@ -379,14 +379,15 @@ async fn run_rounds<C: Ciphersuite + MaybeIntoEvenY + 'static>(
     Ok(DkgOutput { group_id, group, viewing_seed })
 }
 
-/// The encrypted session key generation runs over, for the rounds after it.
-struct SessionIo<'a> {
-    client: &'a FrostdClient,
-    session_id: Uuid,
-    cipher: &'a mut Cipher,
-    cancel: &'a CancellationToken,
+/// An encrypted session between all of a group's members: key generation's,
+/// for the rounds after it, or one that agrees on a new viewing key.
+pub(crate) struct SessionIo<'a> {
+    pub client: &'a FrostdClient,
+    pub session_id: Uuid,
+    pub cipher: &'a mut Cipher,
+    pub cancel: &'a CancellationToken,
     /// Decrypted messages not consumed yet.
-    pending: &'a mut VecDeque<api::Msg>,
+    pub pending: &'a mut VecDeque<api::Msg>,
 }
 
 impl SessionIo<'_> {
@@ -465,12 +466,15 @@ impl ViewingKeyInbox {
 /// ([`crate::viewing::combine`]), so no single member chooses it. Members then
 /// exchange digests of their seed and abort on any mismatch, which is what a
 /// member sending different contributions to different people would cause.
-async fn agree_viewing_seed<C: Ciphersuite>(
+/// `waiting` hears which members haven't sent their contribution yet, after
+/// each check of the server.
+pub(crate) async fn agree_viewing_seed<C: Ciphersuite>(
     io: &mut SessionIo<'_>,
     pubkeys: &HashMap<PublicKey, Identifier<C>>,
     me: &PublicKey,
     my_identifier: Identifier<C>,
     group_key: &[u8],
+    waiting: &mut (dyn FnMut(&[PublicKey]) + Send),
 ) -> Result<crate::viewing::ViewingSeed, CoreError> {
     use rand::RngCore;
     use zeroize::Zeroizing;
@@ -488,6 +492,9 @@ async fn agree_viewing_seed<C: Ciphersuite>(
         if inbox.contributions.len() == others.len() {
             break;
         }
+        let missing: Vec<PublicKey> =
+            others.iter().filter(|p| !inbox.contributions.contains_key(*p)).cloned().collect();
+        waiting(&missing);
         io.receive_more().await?;
     }
 
@@ -510,8 +517,8 @@ async fn agree_viewing_seed<C: Ciphersuite>(
     }
     if inbox.confirms.values().any(|d| *d != digest) {
         return Err(CoreError::Ceremony(
-            "the members ended up with different viewing keys, so the group wasn't created. Try again; if it \
-             keeps happening, a member's app may be tampering with the setup."
+            "the members ended up with different viewing keys, so none was saved. Try again; if it keeps \
+             happening, a member's app may be tampering with the setup."
                 .into(),
         ));
     }

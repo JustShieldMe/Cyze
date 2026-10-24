@@ -74,11 +74,13 @@ fn keystore_extras_round_trip_and_upstream_ignores_them() {
     assert_eq!(*config::serialize_keystore(&cfg, &extras).unwrap(), *config::serialize_config(&cfg).unwrap());
 
     extras.viewing_seeds.insert("ab".repeat(32), "07".repeat(32));
+    extras.old_viewing_keys.insert("ab".repeat(32));
     let text = config::serialize_keystore(&cfg, &extras).unwrap();
     let (cfg2, extras2) = config::parse_keystore(&text).unwrap();
     assert_eq!(extras2, extras);
     assert_eq!(extras2.viewing_seed(&"ab".repeat(32)).unwrap(), Some([7u8; 32]));
     assert_eq!(extras2.viewing_seed("other").unwrap(), None);
+    assert!(extras2.has_old_viewing_key(&"ab".repeat(32)));
     assert_eq!(cfg2.communication_key.unwrap().pubkey, cfg.communication_key.as_ref().unwrap().pubkey);
     // frost-client reads the same text and ignores the [cyze] table.
     assert!(config::parse_config(&text).is_ok());
