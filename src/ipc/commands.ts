@@ -530,6 +530,14 @@ export const cancelViewingKeySession = (groupId: string) =>
 export const walletPrepareMove = (groupId: string) =>
   invoke<DraftTransaction>("wallet_prepare_move", { groupId });
 
+/** Show a system notification. Keep the text generic: it can appear on a
+ *  lock screen. */
+export const notify = (title: string, body: string) => invoke<void>("notify", { title, body });
+/** Notify only when the app isn't in front; otherwise the screen says it. */
+export const notifyIfAway = (body: string) => {
+  if (!document.hasFocus()) void notify("Cyze", body).catch(() => {});
+};
+
 /** The open-source software Cyze is built on, with its licenses. */
 export const thirdPartyNotices = () => invoke<string>("third_party_notices");
 

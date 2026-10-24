@@ -17,6 +17,7 @@ import {
   joinSigningSession,
   joinViewingKeySession,
   listPendingSessions,
+  notifyIfAway,
   signingRequests,
 } from "./ipc/commands";
 import CeremonyListener from "./CeremonyListener";
@@ -69,6 +70,17 @@ function Layout() {
     retry: false,
   });
   const pendingCount = signingRequests(pendingSessions.data).length;
+
+  // A request that arrives while the app is in the background gets a system
+  // notification, once: a signer who doesn't notice stalls the payment.
+  const notified = useRef(new Set<string>());
+  useEffect(() => {
+    const fresh = signingRequests(pendingSessions.data).filter((s) => !notified.current.has(s.session_id));
+    fresh.forEach((s) => notified.current.add(s.session_id));
+    if (fresh.length) {
+      notifyIfAway(fresh.length === 1 ? "A payment is waiting for your approval." : `${fresh.length} payments are waiting for your approval.`);
+    }
+  }, [pendingSessions.data]);
 
   // Join new signing requests in the background, so they arrive verified and
   // ready to review instead of waiting for the user to open each one. Joining

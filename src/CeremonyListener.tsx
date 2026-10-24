@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useTauriEvent } from "./ipc/events";
-import { SyncStatus, walletSyncNow } from "./ipc/commands";
+import { notifyIfAway, SyncStatus, walletSyncNow } from "./ipc/commands";
 import { useCeremonies, CeremonyEventPayload } from "./stores/ceremonies";
 
 /**
@@ -55,6 +55,7 @@ export default function CeremonyListener() {
   useTauriEvent<CeremonyEventPayload>("dkg:progress", (p) => onProgress("dkg", p));
   useTauriEvent<CeremonyEventPayload>("dkg:complete", (p) => {
     onComplete("dkg", p);
+    notifyIfAway("Your new group is ready.");
     queryClient.invalidateQueries({ queryKey: ["groups"] });
     // A new group isn't in any backup yet.
     queryClient.invalidateQueries({ queryKey: ["backup-status"] });
@@ -78,8 +79,12 @@ export default function CeremonyListener() {
   useTauriEvent<CeremonyEventPayload>("send:complete", (p) => {
     onComplete("send", p);
     refreshWallet();
+    notifyIfAway("Your payment was approved and sent.");
   });
-  useTauriEvent<CeremonyEventPayload>("send:failed", (p) => onFailed("send", p));
+  useTauriEvent<CeremonyEventPayload>("send:failed", (p) => {
+    onFailed("send", p);
+    notifyIfAway("Your payment couldn't be sent. Open Cyze to see why.");
+  });
 
   return null;
 }

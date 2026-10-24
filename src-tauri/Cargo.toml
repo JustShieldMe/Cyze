@@ -23,6 +23,9 @@ tauri-plugin-shell = "2"
 # Native save/open dialogs, opened from Rust for key backups (commands/backup.rs).
 # 2.7.x: 2.8 requires Tauri 2.12, a framework upgrade of its own.
 tauri-plugin-dialog = "~2.7.3"
+# System notifications for approval requests, sent from Rust (commands/notify.rs).
+# 2.4.x for the same reason: 2.5 requires Tauri 2.12.
+tauri-plugin-notification = "~2.4.0"
 serde = { workspace = true }
 serde_json = { workspace = true }
 hex = { workspace = true }
