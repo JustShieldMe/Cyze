@@ -152,6 +152,12 @@ pub async fn pair(server: &TestServer) -> Pair {
 
 /// Run a 2-of-2 DKG (Alice initiates, Bob joins) and return the group id.
 pub async fn dkg(pair: &Pair, suite: frost_app_core::ciphersuite::Suite) -> String {
+    dkg_with(pair, suite, true).await
+}
+
+/// [`dkg`], choosing whether the members agree on a private viewing key. A
+/// group without one is what versions before 0.3 created.
+pub async fn dkg_with(pair: &Pair, suite: frost_app_core::ciphersuite::Suite, agree_viewing_key: bool) -> String {
     let args = |participants: Vec<String>| commands::dkg::StartDkgArgs {
         suite,
         description: "test group".into(),
@@ -159,7 +165,7 @@ pub async fn dkg(pair: &Pair, suite: frost_app_core::ciphersuite::Suite) -> Stri
         participants,
         server_url: Some(pair.server_url.clone()),
         session_id: None,
-        agree_viewing_key: true,
+        agree_viewing_key,
     };
     commands::dkg::start_dkg(pair.alice.app.handle().clone(), args(vec![pair.bob_pubkey.clone()]))
         .await
@@ -169,4 +175,42 @@ pub async fn dkg(pair: &Pair, suite: frost_app_core::ciphersuite::Suite) -> Stri
     let group_id = wait_for_group(&pair.alice.app.state::<AppState>()).await;
     wait_for_group(&pair.bob.app.state::<AppState>()).await;
     group_id
+}
+
+/// Have Bob's app join the viewing-key session Alice started, the way the UI's
+/// auto-join does, once it shows up in his poll.
+pub async fn bob_joins_viewing_key_session(pair: &Pair, group_id: &str) {
+    let bob = pair.bob.app.state::<AppState>();
+    for _ in 0..60 {
+        let sessions = commands::signing::list_pending_sessions(bob.clone(), None).await.unwrap();
+        if let Some(s) = sessions.iter().find(|s| s.kind == "viewing_key") {
+            assert_eq!(s.matching_groups, vec![group_id.to_string()]);
+            commands::viewing::join_viewing_key_session(
+                pair.bob.app.handle().clone(),
+                group_id.to_string(),
+                s.session_id,
+                Some(s.coordinator_pubkey.clone()),
+            )
+            .await
+            .unwrap();
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    panic!("Alice's viewing-key session never reached Bob");
+}
+
+/// Wait until a member's app has saved the group's new, private viewing key.
+pub async fn wait_until_private(state: &tauri::State<'_, AppState>, group_id: &str) {
+    for _ in 0..120 {
+        let status = commands::viewing::viewing_key_status(state.clone(), group_id.to_string()).await.unwrap();
+        if let Some(p) = status.progress.as_ref().filter(|p| p.state == "failed") {
+            panic!("agreeing on a viewing key failed: {:?}", p.error);
+        }
+        if status.private && status.old_address.is_some() && status.progress.is_none() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    panic!("the group's viewing key never became private");
 }

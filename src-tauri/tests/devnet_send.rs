@@ -127,6 +127,7 @@ async fn a_two_of_two_send_is_verified_signed_and_mined() {
             amount_zatoshis: 50_000_000,
             signers: vec![p.alice_pubkey.clone(), p.bob_pubkey.clone()],
             memo: Some("cyze end-to-end".into()),
+            from_old_address: false,
         },
     )
     .await

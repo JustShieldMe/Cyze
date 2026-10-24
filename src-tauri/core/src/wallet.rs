@@ -461,7 +461,8 @@ use zcash_client_backend::data_api::chain::{
 };
 use zcash_client_backend::data_api::scanning::{ScanPriority, ScanRange};
 use zcash_client_backend::data_api::wallet::{
-    create_pczt_from_proposal, propose_standard_transfer_to_address, ConfirmationsPolicy,
+    create_pczt_from_proposal, propose_send_max_transfer, propose_standard_transfer_to_address,
+    ConfirmationsPolicy,
 };
 use zcash_client_backend::data_api::{
     AccountBirthday, AccountPurpose, WalletCommitmentTrees, WalletRead, WalletWrite,
@@ -1880,61 +1881,9 @@ pub async fn prepare_send(
     use zcash_protocol::value::Zatoshis;
     use zcash_protocol::ShieldedPool;
 
-    if let WalletNetwork::Regtest(level) = network {
-        if level < RegtestUpgrade::Nu6_3 {
-            return Err(CoreError::Ceremony(format!(
-                "sending on a local devnet needs NU6.3 (Ironwood), and this devnet runs {}. \
-                 Cyze builds only NU6.3 transactions; syncing and receiving work at any level",
-                level.as_str()
-            )));
-        }
-    }
     let params = network.params();
-    let db_path = wallet_db_path(data_dir, wallet_id, network);
-    let mut db = open_db(&db_path, network, db_key)?;
-
-    // Anchor the expiry to the live chain tip, not whatever sync last recorded.
-    let mut client = connect(lightwalletd_url).await?;
-    let tip_height = client
-        .get_latest_block(ChainSpec {})
-        .await
-        .map_err(|e| CoreError::Connection(format!("get_latest_block: {e}")))?
-        .into_inner()
-        .height;
-    db.update_chain_tip(BlockHeight::from_u32(tip_height as u32))
-        .map_err(|e| CoreError::Crypto(format!("update chain tip: {e}")))?;
-    let scanned = db
-        .get_wallet_summary(ConfirmationsPolicy::default())
-        .map_err(|e| CoreError::Crypto(format!("wallet summary: {e}")))?
-        .map_or(0, |s| u64::from(s.fully_scanned_height()));
-    ensure_caught_up(scanned, tip_height)?;
-
-    let account_id = *db
-        .get_account_ids()
-        .map_err(|e| CoreError::Crypto(format!("wallet accounts: {e}")))?
-        .first()
-        .ok_or_else(|| CoreError::Crypto("wallet not initialized".into()))?;
-
-    let r = recipient.trim();
-    let to = Address::decode(&params, r).ok_or_else(|| {
-        // Give a network-mismatch hint when the address prefix clearly belongs
-        // to the other network — saves a confusing round-trip for the user.
-        let looks_regtest = r.starts_with("uregtest") || r.starts_with("zregtestsapling");
-        let looks_test = r.starts_with("utest") || r.starts_with("ztestsapling");
-        let looks_main = (r.starts_with("u1") || r.starts_with("zs1") || r.starts_with("t1"))
-            && !looks_test
-            && !looks_regtest;
-        let hint = match network {
-            WalletNetwork::Main if looks_test => " — this looks like a testnet address but you are on mainnet",
-            WalletNetwork::Main if looks_regtest => " — this looks like a devnet (regtest) address but you are on mainnet",
-            WalletNetwork::Test if looks_main => " — this looks like a mainnet address but you are on testnet",
-            WalletNetwork::Test if looks_regtest => " — this looks like a devnet (regtest) address but you are on testnet",
-            WalletNetwork::Regtest(_) if looks_main => " — this looks like a mainnet address but you are on the local devnet",
-            WalletNetwork::Regtest(_) if looks_test => " — this looks like a testnet address but you are on the local devnet",
-            _ => "",
-        };
-        CoreError::Crypto(format!("invalid recipient address{hint}"))
-    })?;
+    let (mut db, account_id) = open_for_send(data_dir, wallet_id, network, lightwalletd_url, db_key).await?;
+    let to = decode_recipient(network, recipient)?;
     // A transparent recipient means this is an unshield (Orchard → transparent).
     let is_unshield = matches!(to, Address::Transparent(_));
     let amount =
@@ -1975,14 +1924,154 @@ pub async fn prepare_send(
     )
     .map_err(|e| CoreError::Ceremony(format!("propose transfer: {e:?}")))?;
 
-    let fee = u64::from(proposal.steps().last().balance().fee_required());
+    let memo = if is_unshield { None } else { memo.filter(|s| !s.is_empty()) };
+    draft_from_proposal(&mut db, network, account_id, &proposal, recipient, amount_zatoshis, is_unshield, memo)
+}
 
-    let pczt = create_pczt_from_proposal::<_, _, std::convert::Infallible, _, std::convert::Infallible, _>(
+/// Build an unsigned transaction that moves everything spendable in a wallet
+/// to `recipient` and leaves nothing behind as change: how a group that made
+/// its viewing key private empties its old address. The fee comes out of the
+/// amount moved. Notes still waiting for confirmations stay, for a later move.
+pub async fn prepare_sweep(
+    data_dir: &Path,
+    wallet_id: &str,
+    network: WalletNetwork,
+    recipient: &str,
+    lightwalletd_url: &str,
+    db_key: &[u8],
+) -> Result<DraftTransaction, CoreError> {
+    use zcash_client_backend::data_api::wallet::input_selection::LockedInputPolicy;
+    use zcash_client_backend::data_api::MaxSpendMode;
+    use zcash_keys::address::Address;
+    use zcash_protocol::ShieldedPool;
+
+    let params = network.params();
+    let (mut db, account_id) = open_for_send(data_dir, wallet_id, network, lightwalletd_url, db_key).await?;
+    let to = decode_recipient(network, recipient)?;
+    if matches!(to, Address::Transparent(_)) {
+        return Err(CoreError::Ceremony("funds can only be moved to a shielded address".into()));
+    }
+    let proposal = propose_send_max_transfer::<_, _, _, std::convert::Infallible>(
         &mut db,
         &params,
         account_id,
+        &[ShieldedPool::Orchard, ShieldedPool::Ironwood],
+        &StandardFeeRule::Zip317,
+        to.to_zcash_address(&params),
+        None, // memo
+        MaxSpendMode::MaxSpendable,
+        ConfirmationsPolicy::default(),
+        &LockedInputPolicy::Exclude,
+        None, // lock_inputs
+    )
+    .map_err(|e| match format!("{e:?}") {
+        m if m.contains("InsufficientFunds") => {
+            CoreError::Ceremony("there's too little at this address to cover the network fee".into())
+        }
+        m => CoreError::Ceremony(format!("propose transfer: {m}")),
+    })?;
+    let amount = proposal
+        .steps()
+        .last()
+        .transaction_request()
+        .total()
+        .ok()
+        .flatten()
+        .map_or(0, u64::from);
+    draft_from_proposal(&mut db, network, account_id, &proposal, recipient, amount, false, None)
+}
+
+/// Open a wallet to build a transaction: its chain tip refreshed from
+/// lightwalletd, so the expiry is anchored to the live tip rather than whatever
+/// sync last recorded, and scanned close enough to that tip to spend from.
+async fn open_for_send(
+    data_dir: &Path,
+    wallet_id: &str,
+    network: WalletNetwork,
+    lightwalletd_url: &str,
+    db_key: &[u8],
+) -> Result<(GroupDb, <GroupDb as WalletRead>::AccountId), CoreError> {
+    if let WalletNetwork::Regtest(level) = network {
+        if level < RegtestUpgrade::Nu6_3 {
+            return Err(CoreError::Ceremony(format!(
+                "sending on a local devnet needs NU6.3 (Ironwood), and this devnet runs {}. \
+                 Cyze builds only NU6.3 transactions; syncing and receiving work at any level",
+                level.as_str()
+            )));
+        }
+    }
+    let db_path = wallet_db_path(data_dir, wallet_id, network);
+    let mut db = open_db(&db_path, network, db_key)?;
+
+    let mut client = connect(lightwalletd_url).await?;
+    let tip_height = client
+        .get_latest_block(ChainSpec {})
+        .await
+        .map_err(|e| CoreError::Connection(format!("get_latest_block: {e}")))?
+        .into_inner()
+        .height;
+    db.update_chain_tip(BlockHeight::from_u32(tip_height as u32))
+        .map_err(|e| CoreError::Crypto(format!("update chain tip: {e}")))?;
+    let scanned = db
+        .get_wallet_summary(ConfirmationsPolicy::default())
+        .map_err(|e| CoreError::Crypto(format!("wallet summary: {e}")))?
+        .map_or(0, |s| u64::from(s.fully_scanned_height()));
+    ensure_caught_up(scanned, tip_height)?;
+
+    let account_id = *db
+        .get_account_ids()
+        .map_err(|e| CoreError::Crypto(format!("wallet accounts: {e}")))?
+        .first()
+        .ok_or_else(|| CoreError::Crypto("wallet not initialized".into()))?;
+    Ok((db, account_id))
+}
+
+/// Parse a recipient address for `network`, explaining a mismatch when the
+/// address clearly belongs to another network.
+fn decode_recipient(network: WalletNetwork, recipient: &str) -> Result<zcash_keys::address::Address, CoreError> {
+    let r = recipient.trim();
+    zcash_keys::address::Address::decode(&network.params(), r).ok_or_else(|| {
+        // Give a network-mismatch hint when the address prefix clearly belongs
+        // to the other network — saves a confusing round-trip for the user.
+        let looks_regtest = r.starts_with("uregtest") || r.starts_with("zregtestsapling");
+        let looks_test = r.starts_with("utest") || r.starts_with("ztestsapling");
+        let looks_main = (r.starts_with("u1") || r.starts_with("zs1") || r.starts_with("t1"))
+            && !looks_test
+            && !looks_regtest;
+        let hint = match network {
+            WalletNetwork::Main if looks_test => " — this looks like a testnet address but you are on mainnet",
+            WalletNetwork::Main if looks_regtest => " — this looks like a devnet (regtest) address but you are on mainnet",
+            WalletNetwork::Test if looks_main => " — this looks like a mainnet address but you are on testnet",
+            WalletNetwork::Test if looks_regtest => " — this looks like a devnet (regtest) address but you are on testnet",
+            WalletNetwork::Regtest(_) if looks_main => " — this looks like a mainnet address but you are on the local devnet",
+            WalletNetwork::Regtest(_) if looks_test => " — this looks like a testnet address but you are on the local devnet",
+            _ => "",
+        };
+        CoreError::Crypto(format!("invalid recipient address{hint}"))
+    })
+}
+
+/// Turn a proposal into the draft the group signs: the PCZT, its sighash, and
+/// the α of each spend to sign.
+#[allow(clippy::too_many_arguments)]
+fn draft_from_proposal(
+    db: &mut GroupDb,
+    network: WalletNetwork,
+    account_id: <GroupDb as WalletRead>::AccountId,
+    proposal: &zcash_client_backend::proposal::Proposal<StandardFeeRule, zcash_client_sqlite::ReceivedNoteId>,
+    recipient: &str,
+    amount_zatoshis: u64,
+    is_unshield: bool,
+    memo: Option<String>,
+) -> Result<DraftTransaction, CoreError> {
+    let fee = u64::from(proposal.steps().last().balance().fee_required());
+
+    let pczt = create_pczt_from_proposal::<_, _, std::convert::Infallible, _, std::convert::Infallible, _>(
+        db,
+        &network.params(),
+        account_id,
         OvkPolicy::Sender,
-        &proposal,
+        proposal,
         None, // expiry_height: use the proposal's default expiry
         // Orchard-bundle padding; the Ironwood bundle derives its own from the
         // proposal so it matches the action count the fee was computed from.
@@ -2015,7 +2104,7 @@ pub async fn prepare_send(
         amount_zatoshis,
         recipient: recipient.to_string(),
         is_unshield,
-        memo: if is_unshield { None } else { memo.filter(|s| !s.is_empty()) },
+        memo,
     })
 }
 
@@ -2084,6 +2173,12 @@ fn ensure_caught_up(scanned: u64, tip: u64) -> Result<(), CoreError> {
         return Err(CoreError::NotSynced { behind });
     }
     Ok(())
+}
+
+/// Whether a wallet scanned to `scanned` is close enough to `tip` to build a
+/// transaction from (see [`ensure_caught_up`]).
+pub fn is_caught_up(scanned: u64, tip: u64) -> bool {
+    ensure_caught_up(scanned, tip).is_ok()
 }
 
 /// Collect every spend the group must FROST-sign, across both the Orchard and

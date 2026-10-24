@@ -7,4 +7,5 @@ pub mod keystore;
 pub mod server;
 pub mod signing;
 pub mod ui_state;
+pub mod viewing;
 pub mod wallet;

@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
-use crate::state::{AppState, CeremonyHandle, Settings};
+use crate::state::{AppState, CeremonyHandle, Settings, WalletKind};
 
 /// The wallet network the app is configured for. For a local devnet this
 /// includes its upgrade level: the user's override if set, otherwise the level
@@ -48,7 +48,7 @@ pub struct WalletConfig {
 
 /// Resolve the effective wallet config, filling in the network's default
 /// lightwalletd endpoint when none is saved.
-fn resolve_config(state: &AppState) -> WalletConfig {
+pub(crate) fn resolve_config(state: &AppState) -> WalletConfig {
     let s = state.load_settings();
     // Mainnet is the default: it is where the wallet is actually used, and the
     // mainnet guardrails (badge, confirmation modal, address checks) make the
@@ -251,11 +251,28 @@ pub(crate) fn record_regtest_level(state: &AppState, info: &LightwalletdInfo) ->
 }
 
 /// Resolve the wallet context for a RedPallas group: (network, lightwalletd
-/// URL, derived UFVK string).
+/// URL, derived UFVK string) of its current wallet.
 pub(crate) async fn group_wallet_ctx(
     state: &AppState,
     group_id: &str,
 ) -> AppResult<(WalletNetwork, String, String)> {
+    let ctx = wallet_ctx(state, group_id, WalletKind::Current).await?;
+    Ok((ctx.network, ctx.url, ctx.ufvk))
+}
+
+/// One of a group's wallets: what it watches and where it lives.
+pub(crate) struct WalletCtx {
+    pub network: WalletNetwork,
+    pub url: String,
+    pub ufvk: String,
+    /// Its folder under `wallets/` (opaque; see `AppState::wallet_dir_id_of`).
+    pub dir: String,
+    /// What its start height and subtree-root refresh are recorded under.
+    pub key: String,
+}
+
+/// Resolve one of a RedPallas group's wallets (see [`WalletKind`]).
+pub(crate) async fn wallet_ctx(state: &AppState, group_id: &str, kind: WalletKind) -> AppResult<WalletCtx> {
     let ciphersuite = state
         .with_config(|config| {
             config
@@ -273,10 +290,25 @@ pub(crate) async fn group_wallet_ctx(
     }
     let cfg = resolve_config(state);
     let network = configured_network(&state.load_settings());
-    // The group id is the hex of its verifying key (the Orchard ak).
-    let seed = state.viewing_seed(group_id).await?;
+    let has_old = state.has_old_viewing_key(group_id).await?;
+    if kind == WalletKind::Old && !has_old {
+        return Err(AppError::new("config", "this group has no old address"));
+    }
+    // The group id is the hex of its verifying key (the Orchard ak). The old
+    // wallet watches the key derived from it alone.
+    let seed = match kind {
+        WalletKind::Current => state.viewing_seed(group_id).await?,
+        WalletKind::Old => None,
+    };
     let ufvk = frost_app_core::zcash::derive_orchard_keys_hex(group_id, seed.as_deref(), network.network_type())?.ufvk;
-    Ok((network, cfg.lightwalletd_url, ufvk))
+    let base = crate::state::wallet_session_key(group_id, network.dir_name());
+    Ok(WalletCtx {
+        network,
+        url: cfg.lightwalletd_url,
+        ufvk,
+        dir: state.wallet_dir_id_of(group_id, kind).await?,
+        key: if kind == WalletKind::Current && has_old { format!("{base}/private") } else { base },
+    })
 }
 
 /// Wallet balance + sync status for a group (reads the local db; no network).
@@ -330,9 +362,18 @@ pub(crate) async fn init_account(
     group_id: &str,
     birthday_height: Option<u64>,
 ) -> AppResult<u64> {
-    let (network, url, ufvk) = group_wallet_ctx(state, group_id).await?;
+    init_account_of(state, group_id, WalletKind::Current, birthday_height).await
+}
+
+/// [`init_account`] for one of a group's wallets.
+pub(crate) async fn init_account_of(
+    state: &AppState,
+    group_id: &str,
+    kind: WalletKind,
+    birthday_height: Option<u64>,
+) -> AppResult<u64> {
+    let WalletCtx { network, url, ufvk, dir: wid, key } = wallet_ctx(state, group_id, kind).await?;
     let db_key = state.wallet_db_key(group_id).await?;
-    let key = crate::state::wallet_session_key(group_id, network.dir_name());
 
     // A devnet always scans its whole (tiny) chain (see
     // `default_birthday_height`) and is reset often, so it neither reuses a
@@ -359,7 +400,6 @@ pub(crate) async fn init_account(
     };
     let requested = birthday_height.or(recorded).or(estimated);
 
-    let wid = state.wallet_dir_id(group_id).await?;
     let scan_from = wallet::init_group_account(
         &state.data_dir,
         &wid,
@@ -394,13 +434,11 @@ const REORG_REBUILD_MARGIN: u64 = 1_000;
 /// Recover from a reorg below a wallet's start (`CoreError::Reorg`): delete
 /// its database and move its recorded start height back, so the next setup
 /// rescans from before the fork. Nothing is lost: the funds are on-chain.
-pub(crate) async fn rebuild_after_reorg(state: &AppState, group_id: &str) -> AppResult<()> {
-    let (network, _url, _ufvk) = group_wallet_ctx(state, group_id).await?;
-    let key = crate::state::wallet_session_key(group_id, network.dir_name());
+pub(crate) async fn rebuild_after_reorg(state: &AppState, group_id: &str, kind: WalletKind) -> AppResult<()> {
+    let WalletCtx { network, dir: wid, key, .. } = wallet_ctx(state, group_id, kind).await?;
     // A devnet always rescans its whole chain, so it only needs the delete.
     if !matches!(network, WalletNetwork::Regtest(_)) {
         let db_key = state.wallet_db_key(group_id).await?;
-        let wid = state.wallet_dir_id(group_id).await?;
         let from_db = wallet::wallet_start_height(&state.data_dir, &wid, network, db_key.as_ref())?;
         let private = state.load_private().await?;
         let recorded = private.network_birthdays.get(&key).or(private.wallet_birthdays.get(group_id)).copied();
@@ -411,7 +449,7 @@ pub(crate) async fn rebuild_after_reorg(state: &AppState, group_id: &str) -> App
                 .await?;
         }
     }
-    wallet::delete_wallet_db(&state.data_dir, &state.wallet_dir_id(group_id).await?, network)?;
+    wallet::delete_wallet_db(&state.data_dir, &wid, network)?;
     state.subtree_roots_fetched.lock().await.remove(&key);
     Ok(())
 }
@@ -463,9 +501,10 @@ pub(crate) async fn record_new_group_birthday(state: &AppState, group_id: &str) 
 pub(crate) async fn sync_once(
     state: &AppState,
     group_id: &str,
+    kind: WalletKind,
 ) -> AppResult<(WalletStatus, wallet::SyncStats)> {
     let group_id = group_id.to_string();
-    let (network, url, ufvk) = group_wallet_ctx(state, &group_id).await?;
+    let WalletCtx { network, url, ufvk, dir: wid, key: roots_key } = wallet_ctx(state, &group_id, kind).await?;
     let db_key = state.wallet_db_key(&group_id).await?;
 
     // Register a fresh cancellation token for this group, tripping (and replacing)
@@ -489,7 +528,6 @@ pub(crate) async fn sync_once(
     let _gate = state.sync_gate.lock().await;
 
     let lightwalletd = shared_lightwalletd(state, &url).await?;
-    let roots_key = crate::state::wallet_session_key(&group_id, network.dir_name());
     let roots_fresh = state
         .subtree_roots_fetched
         .lock()
@@ -500,7 +538,6 @@ pub(crate) async fn sync_once(
         batch_size: state.load_settings().sync_batch_size,
         skip_subtree_roots: roots_fresh,
     };
-    let wid = state.wallet_dir_id(&group_id).await?;
     let result = wallet::sync_group(
         &state.data_dir, &wid, network, &lightwalletd, db_key.as_ref(), opts, &cancel,
     )
@@ -537,12 +574,11 @@ pub(crate) async fn sync_once(
     Ok((status, stats))
 }
 
-/// The current status of a group's wallet from its local database (no network).
-pub(crate) async fn local_status(state: &AppState, group_id: &str) -> AppResult<WalletStatus> {
-    let (network, _url, ufvk) = group_wallet_ctx(state, group_id).await?;
+/// The status of one of a group's wallets from its local database (no network).
+pub(crate) async fn local_status(state: &AppState, group_id: &str, kind: WalletKind) -> AppResult<WalletStatus> {
+    let ctx = wallet_ctx(state, group_id, kind).await?;
     let db_key = state.wallet_db_key(group_id).await?;
-    let wid = state.wallet_dir_id(group_id).await?;
-    Ok(wallet::group_status(&state.data_dir, &wid, network, &ufvk, db_key.as_ref())?)
+    Ok(wallet::group_status(&state.data_dir, &ctx.dir, ctx.network, &ctx.ufvk, db_key.as_ref())?)
 }
 
 /// Ask the background sync service to sync the active wallet now. With
@@ -584,7 +620,8 @@ pub(crate) async fn shared_lightwalletd(state: &AppState, url: &str) -> AppResul
 
 
 /// On-chain transaction history for a group wallet: received funds and sent
-/// transactions from the local wallet db, newest confirmed first.
+/// transactions from the local wallet db, newest confirmed first. For a group
+/// that made its viewing key private, its old wallet's history too.
 #[tauri::command]
 pub async fn wallet_history(
     state: State<'_, AppState>,
@@ -596,7 +633,37 @@ pub async fn wallet_history(
     let (network, _url, _ufvk) = group_wallet_ctx(&state, &group_id).await?;
     let db_key = state.wallet_db_key(&group_id).await?;
     let wid = state.wallet_dir_id(&group_id).await?;
-    Ok(wallet::wallet_history(&state.data_dir, &wid, network, db_key.as_ref())?)
+    let current = wallet::wallet_history(&state.data_dir, &wid, network, db_key.as_ref())?;
+    if !state.has_old_viewing_key(&group_id).await? {
+        return Ok(current);
+    }
+    let old = wallet_ctx(&state, &group_id, WalletKind::Old).await?;
+    let old = wallet::wallet_history(&state.data_dir, &old.dir, network, db_key.as_ref()).unwrap_or_default();
+    Ok(merge_history(current, old))
+}
+
+/// One history from a group's current and old wallets. A move off the old
+/// address shows in both, as a send from one and a receipt in the other; it
+/// becomes one `"move"` entry.
+fn merge_history(current: Vec<wallet::TxRecord>, old: Vec<wallet::TxRecord>) -> Vec<wallet::TxRecord> {
+    let received: std::collections::HashSet<String> =
+        current.iter().filter(|t| t.direction == "receive").map(|t| t.txid.clone()).collect();
+    let moved: std::collections::HashSet<String> =
+        old.iter().filter(|t| t.direction == "send" && received.contains(&t.txid)).map(|t| t.txid.clone()).collect();
+    let mut all: Vec<wallet::TxRecord> = current
+        .into_iter()
+        .filter(|t| !moved.contains(&t.txid))
+        .chain(old.into_iter().map(|mut t| {
+            if moved.contains(&t.txid) {
+                t.direction = "move".into();
+                t.recipient = None;
+            }
+            t
+        }))
+        .collect();
+    // Newest first, unconfirmed on top, as each wallet's own history is.
+    all.sort_by_key(|t| std::cmp::Reverse(t.block_height.unwrap_or(u64::MAX)));
+    all
 }
 
 /// The unspent Orchard notes that make up the group's balance (for the "Review
@@ -809,6 +876,11 @@ pub struct WalletSendArgs {
     pub signers: Vec<String>,
     /// Optional memo to attach to the recipient's shielded output.
     pub memo: Option<String>,
+    /// Move everything spendable at the group's old address to its private
+    /// one instead (see `commands::viewing`); `recipient`, `amount_zatoshis`
+    /// and `memo` are then ignored.
+    #[serde(default)]
+    pub from_old_address: bool,
 }
 
 /// Build, FROST-sign, and (next phase) broadcast an Orchard transfer. Builds the
@@ -826,19 +898,24 @@ pub async fn wallet_send<R: tauri::Runtime>(
     let db_key = state.wallet_db_key(&args.group_id).await?;
 
     // 1. Build the unsigned transaction (refreshes the chain tip so the expiry
-    //    is anchored to the live tip).
+    //    is anchored to the live tip). A signed move off the old address waits
+    //    for broadcast with the group's other sends, in the current wallet.
     let wid = state.wallet_dir_id(&args.group_id).await?;
-    let draft = wallet::prepare_send(
-        &state.data_dir,
-        &wid,
-        network,
-        &args.recipient,
-        args.amount_zatoshis,
-        args.memo,
-        &url,
-        db_key.as_ref(),
-    )
-    .await?;
+    let draft = if args.from_old_address {
+        crate::commands::viewing::prepare_move(&state, &args.group_id).await?
+    } else {
+        wallet::prepare_send(
+            &state.data_dir,
+            &wid,
+            network,
+            &args.recipient,
+            args.amount_zatoshis,
+            args.memo,
+            &url,
+            db_key.as_ref(),
+        )
+        .await?
+    };
     if draft.spends.is_empty() {
         return Err(AppError::new(
             "wallet",
