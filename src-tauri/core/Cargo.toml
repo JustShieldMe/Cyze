@@ -43,22 +43,23 @@ xeddsa = "=1.0.2"
 # upstream library names kept, so `use orchard::…` and friends are unchanged.
 # Its Orchard tree hashing is ~7x faster than upstream's, and tree hashing is
 # ~78% of a sync's scan time (docs/SYNC_OPTIMIZATION.md). Versions are pinned
-# exactly to one consistent family, the one Vizor ships: the 3.x crypto crates
-# with wallet libraries rc9. Ranges would let cargo mix in the 4.x line, whose
-# types don't interoperate.
+# exactly to one consistent family: the stable 4.0 crypto crates with wallet
+# libraries rc9.3 (the newest; they have no stable release yet). Ranges would
+# let cargo mix families, whose types don't interoperate.
 #
-# Ironwood/NU6.3: these carry the NU6.3 branch id and build V6 transactions
-# with an Ironwood bundle from NU6.3 onward. orchard keeps the
+# NU7: 4.0 carries mainnet's NU7 activation (height 3,543,405) and its block
+# spacing, so the wallet keeps building valid transactions across it. The 3.x
+# crates would commit to NU6.3's branch after NU7 and be rejected. orchard keeps the
 # `unstable-frost` feature Cyze's threshold signing needs; `weighted-merkle`
 # is Zakura's fast tree hashing.
-orchard = { package = "zakura-orchard", version = "=3.0.0", optional = true, features = ["unstable-frost", "weighted-merkle"] }
-zcash_address = { package = "zakura-address", version = "=3.0.0", optional = true }
-pasta_curves = { package = "zakura-pasta-curves", version = "=3.0.0", optional = true }
+orchard = { package = "zakura-orchard", version = "=4.0.0", optional = true, features = ["unstable-frost", "weighted-merkle"] }
+zcash_address = { package = "zakura-address", version = "=4.0.0", optional = true }
+pasta_curves = { package = "zakura-pasta-curves", version = "=4.0.0", optional = true }
 ff = { version = "0.14", optional = true }
 
 # Wallet/light-client stack (feature `wallet`). Heavy: pulls the zcash
 # light-client backend, lightwalletd gRPC, PCZT builder, and sqlite.
-zcash_client_backend = { package = "zakura-client-backend", version = "=0.1.0-rc9", optional = true, default-features = false, features = [
+zcash_client_backend = { package = "zakura-client-backend", version = "=0.1.0-rc9.3", optional = true, default-features = false, features = [
     "orchard",
     "sync",
     "lightwalletd-tonic",
@@ -66,12 +67,12 @@ zcash_client_backend = { package = "zakura-client-backend", version = "=0.1.0-rc
     "lightwalletd-tonic-tls-webpki-roots",
     "pczt",
 ] }
-zcash_client_sqlite = { package = "zakura-client-sqlite", version = "=0.1.0-rc9", optional = true, features = ["orchard", "transparent-inputs", "unstable", "serde"] }
-pczt = { package = "zakura-pczt", version = "=0.1.0-rc6", optional = true, features = ["signer"] }
-zcash_keys = { package = "zakura-keys", version = "=3.0.0", optional = true, features = ["orchard"] }
+zcash_client_sqlite = { package = "zakura-client-sqlite", version = "=0.1.0-rc9.3", optional = true, features = ["orchard", "transparent-inputs", "unstable", "serde"] }
+pczt = { package = "zakura-pczt", version = "=0.1.0-rc9", optional = true, features = ["signer"] }
+zcash_keys = { package = "zakura-keys", version = "=4.0.0", optional = true, features = ["orchard"] }
 # `local-consensus` exposes `LocalNetwork`, the regtest parameters used for a
 # local devnet (see `WalletNetwork::Regtest`).
-zcash_protocol = { package = "zakura-protocol", version = "=3.0.0", optional = true, features = ["local-consensus"] }
+zcash_protocol = { package = "zakura-protocol", version = "=4.0.0", optional = true, features = ["local-consensus"] }
 tonic = { version = "0.14", optional = true, default-features = false, features = ["transport", "tls-webpki-roots"] }
 # SQLCipher (bundled amalgamation) so the per-group wallet database is encrypted
 # at rest. Feature-unifies with zcash_client_sqlite's `bundled` rusqlite: the
@@ -81,13 +82,13 @@ tonic = { version = "0.14", optional = true, default-features = false, features 
 rusqlite = { version = "0.37", optional = true, features = ["bundled-sqlcipher-vendored-openssl"] }
 prost = { version = "0.14", optional = true }
 async-trait = { version = "0.1", optional = true }
-zcash_primitives = { package = "zakura-primitives", version = "=3.0.0", optional = true }
+zcash_primitives = { package = "zakura-primitives", version = "=4.0.0", optional = true }
 # The `rand` generation the Zakura wallet crates use (WalletDb's RNG).
 rand10 = { package = "rand", version = "0.10", optional = true, default-features = false, features = ["sys_rng"] }
 # Co-signer verification (wallet/verify.rs): memo recovery and transparent
 # recipients.
-zcash_note_encryption = { package = "zakura-note-encryption", version = "=3.0.0", optional = true }
-transparent = { package = "zakura-transparent", version = "=3.0.0", optional = true }
+zcash_note_encryption = { package = "zakura-note-encryption", version = "=4.0.0", optional = true }
+transparent = { package = "zakura-transparent", version = "=4.0.0", optional = true }
 
 [features]
 # Orchard FVK / unified-address derivation from group key material.

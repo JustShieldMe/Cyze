@@ -28,7 +28,7 @@ use crate::error::AppError;
 use crate::state::{wallet_session_key, AppState};
 
 /// How often a caught-up wallet checks for a new block. Blocks arrive about
-/// every 75 s, so a new one shows up within ~15 s.
+/// every 75 s (25 s from NU7), so a new one shows up within ~15 s.
 const TIP_POLL: Duration = Duration::from_secs(15);
 /// How often progress is re-read and reported while a sync runs.
 const PROGRESS_TICK: Duration = Duration::from_secs(1);

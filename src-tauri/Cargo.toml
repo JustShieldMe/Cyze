@@ -4,7 +4,7 @@ resolver = "2"
 
 [package]
 name = "frost-app"
-version = "0.2.0-rc.3"
+version = "0.3.0-rc.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
@@ -41,7 +41,7 @@ tracing-subscriber = { workspace = true }
 tauri = { version = "2", features = ["test"] }
 tempfile = "3"
 # tests/devnet_send.rs: a throwaway recipient key (same crate the core uses).
-orchard = { package = "zakura-orchard", version = "=3.0.0" }
+orchard = { package = "zakura-orchard", version = "=4.0.0" }
 
 [lib]
 name = "frost_app_lib"

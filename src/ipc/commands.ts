@@ -121,7 +121,7 @@ export const setUsername = (username: string) =>
 /** The Zcash network the wallet runs on. "regtest" is a local devnet. */
 export type WalletNetwork = "main" | "test" | "regtest";
 /** A local devnet's newest active upgrade (all activated from genesis). */
-export type RegtestUpgrade = "nu6" | "nu6_1" | "nu6_2" | "nu6_3";
+export type RegtestUpgrade = "nu6" | "nu6_1" | "nu6_2" | "nu6_3" | "nu7";
 export interface WalletConfig {
   network: WalletNetwork;
   lightwalletd_url: string;

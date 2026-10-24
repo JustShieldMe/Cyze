@@ -33,7 +33,7 @@ export function unit(n: WalletNetwork): string {
   }
 }
 
-export const REGTEST_UPGRADES: RegtestUpgrade[] = ["nu6", "nu6_1", "nu6_2", "nu6_3"];
+export const REGTEST_UPGRADES: RegtestUpgrade[] = ["nu6", "nu6_1", "nu6_2", "nu6_3", "nu7"];
 
 /** "nu6_3" -> "NU6.3 (Ironwood)". */
 export function upgradeLabel(u: RegtestUpgrade): string {
@@ -41,10 +41,9 @@ export function upgradeLabel(u: RegtestUpgrade): string {
   return u === "nu6_3" ? `${base} (Ironwood)` : base;
 }
 
-/** The Zakura transaction builder only builds NU6.3 (Ironwood-era)
- *  transactions, so sending needs a devnet at NU6.3. Syncing works at any
- *  level. */
-export const devnetCanSend = (u: RegtestUpgrade | null) => u === "nu6_3";
+/** The Zakura transaction builder only builds Ironwood-era transactions, so
+ *  sending needs a devnet at NU6.3 or NU7. Syncing works at any level. */
+export const devnetCanSend = (u: RegtestUpgrade | null) => u === "nu6_3" || u === "nu7";
 
-/** Ironwood is the active shielded pool only from NU6.3. */
-export const devnetHasIronwood = (u: RegtestUpgrade | null) => u === "nu6_3";
+/** Ironwood is the active shielded pool from NU6.3 on. */
+export const devnetHasIronwood = (u: RegtestUpgrade | null) => u === "nu6_3" || u === "nu7";

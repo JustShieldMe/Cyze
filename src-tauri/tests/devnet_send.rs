@@ -4,8 +4,9 @@
 //! the transaction itself before he approves. Cyze applies the signature,
 //! proves, and broadcasts; the devnet mines it.
 //!
-//! Needs thus-spoke-zakura 0.3.x (NU6.3 active from block 1). Ignored by
-//! default; run in release mode, because Halo2 proving is very slow in debug:
+//! Needs thus-spoke-zakura 0.3.x (NU6.3 from block 1) or 0.4.x (NU7 from block
+//! 1, with `CYZE_DEVNET_UPGRADE=nu7`). Ignored by default; run in release mode,
+//! because Halo2 proving is very slow in debug:
 //!
 //! ```sh
 //! ths start --name cyze-e2e --port-offset 700 --no-open      # another terminal
@@ -29,6 +30,12 @@ use tauri::{Listener, Manager};
 
 fn devnet() -> String {
     std::env::var("CYZE_DEVNET").unwrap_or_else(|_| "cyze-e2e".into())
+}
+
+/// The upgrade the devnet runs: `nu6_3` for thus-spoke-zakura 0.3, `nu7` for
+/// 0.4 (`CYZE_DEVNET_UPGRADE`).
+fn devnet_upgrade() -> String {
+    std::env::var("CYZE_DEVNET_UPGRADE").unwrap_or_else(|_| "nu6_3".into())
 }
 
 fn ths(args: &[&str]) -> String {
@@ -80,7 +87,7 @@ async fn a_two_of_two_send_is_verified_signed_and_mined() {
     let lightwalletd = lightwalletd_url();
     eprintln!("devnet lightwalletd: {lightwalletd}");
     for state in [&alice, &bob] {
-        commands::wallet::set_wallet_config((*state).clone(), "regtest".into(), lightwalletd.clone(), Some("nu6_3".into()))
+        commands::wallet::set_wallet_config((*state).clone(), "regtest".into(), lightwalletd.clone(), Some(devnet_upgrade()))
             .await
             .unwrap();
     }

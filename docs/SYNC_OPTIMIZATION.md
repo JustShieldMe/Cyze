@@ -267,6 +267,33 @@ wasted for an Orchard-only account, because the wallet still maintains the
 Sapling commitment tree; skipping trees for pools without keys would need an
 upstream change.
 
+### Zakura 4.0 and NU7
+
+Moved to the stable 4.0 crypto crates with wallet libraries `0.1.0-rc9.3`
+(rc9.3 is the newest; the wallet crates have no stable release yet) on
+2026-10-23. 4.0 carries mainnet's NU7 activation at height 3,543,405, about
+two weeks out at the time; the 3.x crates would have built transactions for
+NU6.3's branch after it, which the network rejects. Speed is unchanged:
+20,000 mainnet blocks in 9.7 s (scan 7.0 s, subtree roots 2.3 s), tip
+re-syncs ~55 ms.
+
+What it changed for Cyze:
+
+- The Orchard circuit is picked by whether NU6.3 is active, not by matching
+  its branch id: NU7 changes the branch but not the circuit.
+- NU7 cuts the block time from 75 s to 25 s (ZIP 218), so a birthday
+  estimated from a group's age uses the block time of each era
+  (`wallet::height_before`).
+- Devnets can run NU7 (thus-spoke-zakura 0.4). A real send and reorg
+  recovery pass on NU7 and NU6.3 devnets.
+- When a new wallet catches up, it scans the tip first and the blocks behind
+  it afterwards, and rc9.2+ no longer stores rewind checkpoints for that
+  back-filled range. A reorg reaching into it now rebuilds the wallet (a
+  rescan of seconds) instead of rewinding in place.
+- The wallet crates gained a pipelined decrypt/scan API
+  (`decrypt_cached_blocks`, `scan_decrypted_blocks`) that Cyze doesn't use
+  yet: decrypting the next range while storing the previous one.
+
 ## Background sync service
 
 `src-tauri/src/sync_service.rs` runs the active wallet's sync in the backend
