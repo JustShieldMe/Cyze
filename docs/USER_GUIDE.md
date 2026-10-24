@@ -286,6 +286,28 @@ memo shown inline.
 **What to verify:** the txid confirms on a block explorer, and the sender's
 balance and history update (use **Sync Now** on Home if needed).
 
+### Make an older group private
+
+A group created before Cyze 0.3 derives its viewing key from its group ID, so
+anyone who learns the ID can see its balance and payments. Home says so for
+such a group, with **Make private**:
+
+1. Make sure every member has Cyze open and unlocked: every one of them has to
+   take part, and their apps join by themselves. Click **Make private**, then
+   **Start**. Home shows who the app is still waiting for.
+2. When everyone has joined, the wallet gets a new, private address, and its
+   balance starts again from zero. What the group holds is still at the old
+   address, and Home shows how much.
+3. Click **Move funds**, choose who approves, and **Request approvals**. Each
+   approver's app checks that the payment only moves the group's own funds to
+   its private address. The fee comes out of the amount moved.
+4. **Save a new backup** on every member's device: an older backup doesn't have
+   the new key, and the app shows it as out of date.
+
+The app keeps watching the old address, so anything sent there later shows up
+on Home to move as well. Payments made before the move stay visible to anyone
+who knows the group ID.
+
 ---
 
 ## 7. Settings & configuration

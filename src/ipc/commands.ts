@@ -232,7 +232,7 @@ export interface TxRecord {
   block_height: number | null;
   /** Unix timestamp (seconds) from the mined block; null when unconfirmed. */
   timestamp: number | null;
-  /** "receive" | "send" */
+  /** "receive" | "send" | "move" (from the group's old address to its private one) */
   direction: string;
   amount_zatoshis: number;
   fee_zatoshis: number | null;
@@ -354,6 +354,9 @@ export const walletSend = (args: {
   amount_zatoshis: number;
   signers: string[];
   memo?: string | null;
+  /** Move everything at the group's old address to its private one instead
+   *  (recipient, amount and memo are ignored). */
+  from_old_address?: boolean;
 }) => invoke<string>("wallet_send", { args });
 
 /** Re-broadcast a signed transaction whose first broadcast failed, without
@@ -466,6 +469,9 @@ export interface StartDkgArgs {
 
 export interface PendingSession {
   session_id: string;
+  /** "viewing_key" sessions agree on a group's private viewing key; the app
+   *  joins them by itself, so they aren't requests to approve. */
+  kind: "signing" | "viewing_key";
   coordinator: string | null;
   coordinator_pubkey: string;
   matching_groups: string[];
@@ -489,6 +495,40 @@ export const respondToSigning = (ceremonyId: string, approve: boolean) =>
   invoke<void>("respond_to_signing", { ceremonyId, approve });
 export const listPendingSessions = (serverUrl: string | null) =>
   invoke<PendingSession[]>("list_pending_sessions", { serverUrl });
+/** The sessions that are signing requests for the user (not the ones the app
+ *  joins by itself). */
+export const signingRequests = (sessions: PendingSession[] | undefined) =>
+  (sessions ?? []).filter((s) => s.kind !== "viewing_key");
+
+/** Agreeing on a private viewing key for a group created before they existed
+ *  (see commands/viewing.rs). */
+export interface ViewingKeyProgress {
+  session_id: string | null;
+  /** Hex communication key of the member who started it; null for this device. */
+  started_by: string | null;
+  state: "connecting" | "waiting" | "failed";
+  /** Members (hex communication keys) whose apps haven't joined yet. */
+  waiting_for: string[];
+  error: string | null;
+}
+export interface ViewingKeyStatus {
+  /** The members agreed on the viewing key; it isn't derived from the group id. */
+  private: boolean;
+  /** What's still at the old address, for a group that made its key private later. */
+  old_address: { total_zatoshis: number; spendable_zatoshis: number; synced: boolean } | null;
+  progress: ViewingKeyProgress | null;
+}
+export const viewingKeyStatus = (groupId: string) =>
+  invoke<ViewingKeyStatus>("viewing_key_status", { groupId });
+export const makeViewingKeyPrivate = (groupId: string) =>
+  invoke<void>("make_viewing_key_private", { groupId });
+export const joinViewingKeySession = (groupId: string, sessionId: string, startedBy: string | null) =>
+  invoke<void>("join_viewing_key_session", { groupId, sessionId, startedBy });
+export const cancelViewingKeySession = (groupId: string) =>
+  invoke<void>("cancel_viewing_key_session", { groupId });
+/** Build the payment moving everything at the old address to the private one. */
+export const walletPrepareMove = (groupId: string) =>
+  invoke<DraftTransaction>("wallet_prepare_move", { groupId });
 
 /** Encrypted UI state (ceremony history). Readable only while unlocked. */
 export const loadUiState = (key: string) => invoke<string | null>("load_ui_state", { key });
