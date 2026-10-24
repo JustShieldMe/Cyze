@@ -41,6 +41,11 @@ jobs:
       - name: Typecheck + frontend build
         run: npm run build
 
+      # The interface against a fake backend: onboarding, sending, approving,
+      # making an older group private (src/test).
+      - name: Frontend smoke tests
+        run: npm test
+
       # Only production dependencies ship in the app; dev tooling (vite etc.)
       # runs on developer machines. High severity fails the build; moderate
       # findings are triaged by hand.
