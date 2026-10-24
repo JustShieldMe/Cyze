@@ -25,6 +25,73 @@ pub fn serialize_config(config: &Config) -> Result<Zeroizing<String>, CoreError>
     Ok(Zeroizing::new(toml::to_string_pretty(config)?))
 }
 
+/// App data kept in the keystore beside the upstream config, under a `[cyze]`
+/// table that frost-client ignores: things that must be encrypted and backed up
+/// together with the key shares.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, serde::Deserialize)]
+pub struct KeystoreExtras {
+    /// Hex viewing seed per group id, for groups whose members agreed on one
+    /// (see `zcash::ViewingSeed`). Without it a group's funds can't be seen.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub viewing_seeds: BTreeMap<String, String>,
+}
+
+impl Drop for KeystoreExtras {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.viewing_seeds.values_mut().for_each(Zeroize::zeroize);
+    }
+}
+
+impl KeystoreExtras {
+    pub fn is_empty(&self) -> bool {
+        self.viewing_seeds.is_empty()
+    }
+
+    /// The viewing seed recorded for a group, if it has one.
+    pub fn viewing_seed(&self, group_id: &str) -> Result<Option<[u8; 32]>, CoreError> {
+        self.viewing_seeds
+            .get(group_id)
+            .map(|hex_seed| {
+                let bytes = Zeroizing::new(
+                    hex::decode(hex_seed).map_err(|e| CoreError::Config(format!("bad viewing seed: {e}")))?,
+                );
+                bytes.as_slice().try_into().map_err(|_| CoreError::Config("viewing seed must be 32 bytes".into()))
+            })
+            .transpose()
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct ExtrasIn {
+    #[serde(default)]
+    cyze: KeystoreExtras,
+}
+
+#[derive(Serialize)]
+struct ExtrasOut<'a> {
+    cyze: &'a KeystoreExtras,
+}
+
+/// Parse the keystore's plaintext: the upstream config and the app's extras.
+pub fn parse_keystore(toml_str: &str) -> Result<(Config, KeystoreExtras), CoreError> {
+    let config = parse_config(toml_str)?;
+    let mut extras: ExtrasIn = toml::from_str(toml_str)?;
+    Ok((config, std::mem::take(&mut extras.cyze)))
+}
+
+/// Serialize the keystore's plaintext. Without extras this is exactly the
+/// upstream TOML.
+pub fn serialize_keystore(config: &Config, extras: &KeystoreExtras) -> Result<Zeroizing<String>, CoreError> {
+    let mut out = serialize_config(config)?;
+    if !extras.is_empty() {
+        let table = Zeroizing::new(toml::to_string_pretty(&ExtrasOut { cyze: extras })?);
+        out.push('\n');
+        out.push_str(&table);
+    }
+    Ok(out)
+}
+
 /// Ciphersuite-independent summary of a group, for display.
 #[derive(Debug, Clone, Serialize)]
 pub struct GroupSummary {

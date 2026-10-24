@@ -157,7 +157,7 @@ export default function NewSigningSession() {
         </select>
         {!groups.data?.length && (
           <p className="dim">
-            No groups — run a <Link to="/dkg">DKG ceremony</Link> first.
+            No groups yet. <Link to="/groups/new">Start one</Link> first.
           </p>
         )}
 

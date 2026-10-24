@@ -133,7 +133,22 @@ pub struct ReceiveState {
 /// the recovery slot.
 pub struct UnlockedState {
     pub config: Config,
+    /// App data kept in the keystore beside the config (viewing seeds).
+    pub extras: frost_app_core::config::KeystoreExtras,
     pub file: frost_app_core::keystore::KeystoreFile,
+}
+
+impl UnlockedState {
+    /// Read the keystore's plaintext.
+    pub fn from_plaintext(plaintext: &str, file: frost_app_core::keystore::KeystoreFile) -> AppResult<Self> {
+        let (config, extras) = frost_app_core::config::parse_keystore(plaintext)?;
+        Ok(Self { config, extras, file })
+    }
+
+    /// The keystore's plaintext, for saving.
+    pub fn plaintext(&self) -> AppResult<zeroize::Zeroizing<String>> {
+        Ok(frost_app_core::config::serialize_keystore(&self.config, &self.extras)?)
+    }
 }
 
 /// Handle to a running ceremony task (DKG or signing).
@@ -206,6 +221,9 @@ pub struct AppState {
     /// send signs each note in its own round; once one round of a verified
     /// transaction is approved, its other rounds are approved automatically.
     pub approved_sighashes: Mutex<HashMap<String, std::time::Instant>>,
+    /// Sessions this app ran key generation in. The organizer keeps one open
+    /// briefly after it finishes, and it must not look like a signing request.
+    pub dkg_sessions: std::sync::Mutex<std::collections::HashSet<Uuid>>,
     /// Serializes read-modify-write cycles of the private settings.
     pub(crate) private_lock: Mutex<()>,
 }
@@ -254,6 +272,7 @@ impl AppState {
             unlocked_tx: tokio::sync::watch::channel(false).0,
             sync_service: crate::sync_service::SyncService::default(),
             approved_sighashes: Mutex::new(HashMap::new()),
+            dkg_sessions: Default::default(),
             private_lock: Mutex::new(()),
         }
     }
@@ -323,15 +342,29 @@ impl AppState {
         &self,
         f: impl FnOnce(&mut Config) -> AppResult<T>,
     ) -> AppResult<T> {
+        self.mutate_keystore(|config, _| f(config)).await
+    }
+
+    /// Change the config and the keystore's extras together, in one save.
+    pub async fn mutate_keystore<T>(
+        &self,
+        f: impl FnOnce(&mut Config, &mut frost_app_core::config::KeystoreExtras) -> AppResult<T>,
+    ) -> AppResult<T> {
         let mut guard = self.unlocked.write().await;
         let unlocked = guard.as_mut().ok_or_else(AppError::locked)?;
-        let result = f(&mut unlocked.config)?;
-        let toml = frost_app_core::config::serialize_config(&unlocked.config)
-            .map_err(AppError::from)?;
+        let result = f(&mut unlocked.config, &mut unlocked.extras)?;
         self.keystore()
-            .save_file(&unlocked.file, toml.as_bytes())
+            .save_file(&unlocked.file, unlocked.plaintext()?.as_bytes())
             .map_err(AppError::from)?;
         Ok(result)
+    }
+
+    /// The viewing seed a group's members agreed on, if it has one (groups
+    /// without one derive their viewing key from the group key alone).
+    pub async fn viewing_seed(&self, group_id: &str) -> AppResult<Option<zeroize::Zeroizing<[u8; 32]>>> {
+        let guard = self.unlocked.read().await;
+        let unlocked = guard.as_ref().ok_or_else(AppError::locked)?;
+        Ok(unlocked.extras.viewing_seed(group_id)?.map(zeroize::Zeroizing::new))
     }
 
     /// Read-only access to the unlocked config.

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   addContact,
   exportMyContact,
+  getIdentity,
   listContacts,
   removeContact,
   setContactAlias,
@@ -68,7 +69,9 @@ export default function Contacts() {
   const contacts = useQuery({ queryKey: ["contacts"], queryFn: listContacts });
   const [newContact, setNewContact] = useState("");
   const [newAlias, setNewAlias] = useState("");
-  const [myName, setMyName] = useState("");
+  const identity = useQuery({ queryKey: ["identity"], queryFn: getIdentity });
+  const [myName, setMyName] = useState<string | null>(null);
+  const name = myName ?? identity.data?.username ?? "";
   const [myContact, setMyContact] = useState<ContactDto | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -93,81 +96,15 @@ export default function Contacts() {
   });
 
   return (
-    <div>
+    <section style={{ marginTop: 28 }}>
       <h2>Contacts</h2>
-
       <div className="card">
-        <h3>Share your contact</h3>
-        <p className="dim">
-          Export your contact string and send it to the people you want to run
-          FROST with (and import theirs below).
-        </p>
-        <div className="row">
-          <input
-            type="text"
-            placeholder="Your display name"
-            value={myName}
-            onChange={(e) => setMyName(e.target.value)}
-          />
-          <button
-            disabled={!myName.trim()}
-            onClick={async () => setMyContact(await exportMyContact(myName.trim()))}
-          >
-            Export
-          </button>
-        </div>
-        {myContact && (
-          <div style={{ marginTop: 12 }}>
-            <div className="mono">{myContact.text}</div>
-            <div className="row" style={{ marginTop: 8 }}>
-              <button
-                className="secondary"
-                onClick={async () => {
-                  await navigator.clipboard.writeText(myContact.text);
-                  setCopied(true);
-                  setTimeout(() => setCopied(false), 1500);
-                }}
-              >
-                {copied ? "Copied!" : "Copy"}
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-
-      <div className="card">
-        <h3>Import a contact</h3>
-        <label>Contact string</label>
-        <textarea
-          rows={3}
-          placeholder="zffrost1..."
-          value={newContact}
-          onChange={(e) => setNewContact(e.target.value)}
-        />
-        <label>Alias / nickname (optional)</label>
-        <input
-          type="text"
-          placeholder="e.g. Alice's laptop — a local label only you see"
-          value={newAlias}
-          onChange={(e) => setNewAlias(e.target.value)}
-        />
-        {error && <div className="error">{error}</div>}
-        <button
-          disabled={!newContact.trim() || add.isPending}
-          onClick={() => add.mutate()}
-        >
-          Import
-        </button>
-      </div>
-
-      <div className="card">
-        <h3>Address book</h3>
         {contacts.data?.length ? (
           <table>
             <thead>
               <tr>
                 <th>Name</th>
-                <th>Alias</th>
+                <th>Nickname</th>
                 <th>Public key</th>
                 <th></th>
               </tr>
@@ -190,9 +127,68 @@ export default function Contacts() {
             </tbody>
           </table>
         ) : (
-          <p className="dim">No contacts yet.</p>
+          <p className="dim" style={{ margin: 0 }}>
+            No contacts yet. Swap contact codes with the people you'll share a wallet with.
+          </p>
         )}
       </div>
-    </div>
+
+      <div className="grid-2">
+        <div className="card">
+          <h3>Your contact code</h3>
+          <p className="dim">Send it to the people setting up a group with you.</p>
+          <div className="row">
+            <input
+              type="text"
+              placeholder="Your name"
+              value={name}
+              onChange={(e) => setMyName(e.target.value)}
+            />
+            <button
+              disabled={!name.trim()}
+              onClick={async () => setMyContact(await exportMyContact(name.trim()))}
+            >
+              Show
+            </button>
+          </div>
+          {myContact && (
+            <div style={{ marginTop: 12 }}>
+              <div className="mono">{myContact.text}</div>
+              <button
+                className="secondary"
+                style={{ marginTop: 8 }}
+                onClick={async () => {
+                  await navigator.clipboard.writeText(myContact.text);
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 1500);
+                }}
+              >
+                {copied ? "Copied" : "Copy"}
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div className="card">
+          <h3>Add a contact</h3>
+          <textarea
+            rows={2}
+            placeholder="Paste a contact code (zffrost1…)"
+            value={newContact}
+            onChange={(e) => setNewContact(e.target.value)}
+          />
+          <input
+            type="text"
+            placeholder="Nickname (optional, only you see it)"
+            value={newAlias}
+            onChange={(e) => setNewAlias(e.target.value)}
+          />
+          {error && <div className="error">{error}</div>}
+          <button disabled={!newContact.trim() || add.isPending} onClick={() => add.mutate()}>
+            Add
+          </button>
+        </div>
+      </div>
+    </section>
   );
 }

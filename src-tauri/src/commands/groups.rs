@@ -41,8 +41,10 @@ pub async fn group_orchard_keys(
     // Encode for the configured network, resolved the same way as every wallet
     // command (so the group page and the wallet never disagree on the prefix).
     let network = crate::commands::wallet::configured_network(&state.load_settings());
+    let seed = state.viewing_seed(&id).await?;
     Ok(Some(frost_app_core::zcash::derive_orchard_keys_hex(
         &id,
+        seed.as_deref(),
         network.network_type(),
     )?))
 }
@@ -50,7 +52,8 @@ pub async fn group_orchard_keys(
 #[tauri::command]
 pub async fn remove_group(state: State<'_, AppState>, id: String) -> AppResult<()> {
     state
-        .mutate_config(|config| {
+        .mutate_keystore(|config, extras| {
+            extras.viewing_seeds.remove(&id);
             config
                 .group
                 .remove(&id)

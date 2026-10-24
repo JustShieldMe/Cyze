@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { encryptedStorage } from "./encryptedStorage";
+import type { CreateInviteArgs } from "../ipc/commands";
 import { useKeystore } from "./keystore";
 
 export type CeremonyKind = "dkg" | "signing" | "send";
@@ -69,6 +70,10 @@ export interface CeremonyState {
   participants?: Record<string, "joined" | "approved">;
   /** When the ceremony was started (ms epoch), for ordering history. */
   startedAt?: number;
+  /** DKG the user organizes: what the invite needs once the session exists. */
+  inviteRequest?: Omit<CreateInviteArgs, "session_id">;
+  /** DKG the user organizes: the invite to send the members. */
+  invite?: string;
 }
 
 interface CeremoniesStore {
@@ -86,6 +91,8 @@ interface CeremoniesStore {
   txSigners: Record<string, string[]>;
   setActiveDkg: (id: string | null, label?: string) => void;
   setActiveSigning: (id: string | null) => void;
+  /** Record what a DKG's invite needs, or the invite itself once created. */
+  setInvite: (id: string, patch: Pick<CeremonyState, "inviteRequest" | "invite">) => void;
   /** Register a freshly-started send so it persists and can be reattached. */
   startSend: (ceremonyId: string, meta: SendMeta) => void;
   /** Drop the active send for a group (e.g. to start a new transaction). */
@@ -141,6 +148,8 @@ export const useCeremonies = create<CeremoniesStore>()(
           };
         }),
       setActiveSigning: (id) => set({ activeSigningId: id }),
+      setInvite: (id, patch) =>
+        set((s) => ({ ceremonies: { ...s.ceremonies, [id]: { ...s.ceremonies[id], ...patch } } })),
       startSend: (ceremonyId, meta) =>
         set((s) => ({
           activeSendByGroup: { ...s.activeSendByGroup, [meta.groupId]: ceremonyId },

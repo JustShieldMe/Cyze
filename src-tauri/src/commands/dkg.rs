@@ -23,10 +23,24 @@ pub struct StartDkgArgs {
     pub server_url: Option<String>,
     /// Session to join (participants only).
     pub session_id: Option<Uuid>,
+    /// Agree on a random viewing seed (see `dkg::DkgParams`). Off only for
+    /// groups with members using the upstream command-line tools.
+    #[serde(default = "agree_by_default")]
+    pub agree_viewing_key: bool,
+}
+
+fn agree_by_default() -> bool {
+    true
 }
 
 #[tauri::command]
 pub async fn start_dkg<R: tauri::Runtime>(app: AppHandle<R>, args: StartDkgArgs) -> AppResult<Uuid> {
+    begin_dkg(&app, args).await
+}
+
+/// Start a DKG ceremony in the background and return its id; progress arrives
+/// as `dkg:*` events.
+pub(crate) async fn begin_dkg<R: tauri::Runtime>(app: &AppHandle<R>, args: StartDkgArgs) -> AppResult<Uuid> {
     let state = app.state::<AppState>();
 
     let server_url = match args.server_url {
@@ -85,6 +99,7 @@ pub async fn start_dkg<R: tauri::Runtime>(app: AppHandle<R>, args: StartDkgArgs)
         participants,
         known_pubkeys,
         session_id: args.session_id,
+        agree_viewing_key: args.agree_viewing_key,
     };
 
     let ceremony_id = Uuid::new_v4();
@@ -102,6 +117,11 @@ pub async fn start_dkg<R: tauri::Runtime>(app: AppHandle<R>, args: StartDkgArgs)
     let event_app = app.clone();
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.recv().await {
+            if let frost_app_core::events::DkgEvent::SessionReady { session_id, .. } = &event {
+                if let Ok(mut sessions) = event_app.state::<AppState>().dkg_sessions.lock() {
+                    sessions.insert(*session_id);
+                }
+            }
             let _ = event_app.emit(
                 "dkg:progress",
                 serde_json::json!({ "ceremony_id": ceremony_id, "event": event }),
@@ -119,7 +139,10 @@ pub async fn start_dkg<R: tauri::Runtime>(app: AppHandle<R>, args: StartDkgArgs)
             Ok(output) => {
                 let group_id = output.group_id.clone();
                 let saved = state
-                    .mutate_config(move |config| {
+                    .mutate_keystore(move |config, extras| {
+                        if let Some(seed) = output.viewing_seed {
+                            extras.viewing_seeds.insert(output.group_id.clone(), hex::encode(seed));
+                        }
                         config.group.insert(output.group_id.clone(), output.group);
                         Ok(())
                     })

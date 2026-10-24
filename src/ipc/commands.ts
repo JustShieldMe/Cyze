@@ -451,6 +451,9 @@ export interface StartDkgArgs {
   participants: string[];
   server_url: string | null;
   session_id: string | null;
+  /** Agree on a random viewing key (default). Off only when a member uses the
+   *  upstream command-line tools, which don't take part in that step. */
+  agree_viewing_key?: boolean;
 }
 
 export interface PendingSession {
@@ -484,3 +487,43 @@ export const loadUiState = (key: string) => invoke<string | null>("load_ui_state
 /** Save encrypted UI state; `null` deletes it. */
 export const saveUiState = (key: string, value: string | null) =>
   invoke<void>("save_ui_state", { key, value });
+
+// Invites (see src-tauri/core/src/invite.rs)
+/** Where a new group's key generation runs: this device's address and the one
+ *  members use. Starts the server and a public link (or Tailscale) as needed. */
+export interface GroupServer {
+  local: string;
+  public: string;
+  via: "tunnel" | "tailscale";
+}
+export const prepareGroupServer = () => invoke<GroupServer>("prepare_group_server");
+export interface CreateInviteArgs {
+  session_id: string;
+  suite: Ciphersuite;
+  threshold: number;
+  name: string;
+  participants: string[];
+  server: string;
+  agree_viewing_key: boolean;
+}
+export const createInvite = (args: CreateInviteArgs) => invoke<string>("create_invite", { args });
+export interface InviteMember {
+  name: string;
+  pubkey: string;
+  status: "you" | "contact" | "new";
+  contact_name: string | null;
+}
+export interface InviteSummary {
+  name: string;
+  threshold: number;
+  suite: Ciphersuite;
+  server: string;
+  organizer: InviteMember;
+  members: InviteMember[];
+  for_you: boolean;
+  cert_fingerprint: string | null;
+}
+export const readInvite = (code: string) => invoke<InviteSummary>("read_invite", { code });
+/** Join the session an invite describes; returns the ceremony id. */
+export const acceptInvite = (code: string, name: string | null) =>
+  invoke<string>("accept_invite", { code, name });

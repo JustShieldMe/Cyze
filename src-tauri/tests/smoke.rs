@@ -115,6 +115,7 @@ async fn full_user_journey() {
             participants: vec![bob_contact.pubkey.clone()],
             server_url: Some(server_url.clone()),
             session_id: None,
+            agree_viewing_key: true,
         },
     )
     .await
@@ -130,6 +131,7 @@ async fn full_user_journey() {
             participants: vec![],
             server_url: Some(server_url.clone()),
             session_id: None,
+            agree_viewing_key: true,
         },
     )
     .await

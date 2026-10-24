@@ -88,7 +88,7 @@ history, contact nicknames) are stored encrypted at rest. The passphrase and the
 recovery code each unlock the keystore.
 
 **Back up your keys** once you're in a group. A banner reminds you, or use
-**Wallet Settings → Key backup**. The backup file is encrypted and opens only with
+**Settings → Security**. The backup file is encrypted and opens only with
 your passphrase or recovery code, so keep it somewhere other than this computer.
 To restore on a new device, choose **Restore from a backup** on the first screen,
 then unlock with your passphrase, or with your recovery code if you've forgotten
@@ -100,15 +100,15 @@ device's key shares.
 ## 3. Managing contacts
 
 Contacts are the people you run ceremonies with, identified by a communication
-public key. Go to **Contacts**.
+public key. They're listed under **Groups**, below your groups.
 
 **Share your contact:**
-1. Enter your display name and generate your **contact string** (begins with
-   `zffrost1…`).
+1. Under **Your contact code**, enter your name and click **Show** to get your
+   contact code (begins with `zffrost1…`).
 2. Copy it and send it to the others out-of-band (chat, email).
 
 **Import a contact:**
-1. Paste the `zffrost1…` string a peer shared into **"Import a contact."**
+1. Paste the `zffrost1…` code a peer shared into **Add a contact.**
 2. Optionally add a nickname (a local label only you see) and save.
 
 Imported contacts appear in your **address book** and become selectable when you
@@ -120,7 +120,12 @@ create a DKG ceremony. Exchange contacts in both directions before continuing.
 
 All ceremony traffic flows through a FROSTd coordination server. It is an
 untrusted relay — messages are end-to-end encrypted — so one party hosts it and
-the others connect. Go to **Session Configuration**.
+the others connect.
+
+**You usually don't need this section.** Creating a group starts your server and
+a public link automatically (or Tailscale, if you chose it here), and an invite
+tells members how to connect. Use **Settings → Connection** to choose Tailscale,
+or to set things up by hand as below.
 
 ### As the host (coordinator)
 
@@ -171,7 +176,9 @@ tailscale serve status    # should list the mapping
 
 ### As a participant
 
-1. In **Connect to the coordinator's server**, paste the URL the coordinator gave
+An invite sets this up for you. To connect by hand instead:
+
+1. In **Connect to the organizer's server**, paste the URL the coordinator gave
    you. It looks like `https://frost.example.com`, `https://203.0.113.7:2744`,
    `https://…trycloudflare.com`, or a Tailscale `https://<name>.ts.net`.
 2. Click **Test connection** — a success message confirms the server, its TLS
@@ -190,27 +197,37 @@ coordinator's live server before moving on.
 ## 5. DKG ceremony (create a group)
 
 Distributed Key Generation creates the shared key. Everyone ends up with one
-share; the full private key never exists anywhere. Go to **New DKG**.  Note, that to send transactions in ZCash, the RedPallas ciphersuite needs to be selected as a part of the DKG ceremony.
+share; the full private key never exists anywhere. Go to **Groups → New group**
+(or, from an empty Home screen, **Start a shared wallet**).
 
-### Coordinator
+### Organizer
 
-1. Set **Role → Create a ceremony.**
-2. Enter a **Group name** (tell the participants exactly what you called it — the
-   name is local to each device).
-3. Choose the **ciphersuite**: **RedPallas** for a Zcash wallet, or **Ed25519**
-   for general-purpose signing. *For enabling a wallet, choose RedPallas.*
-4. Set the **threshold** (e.g. 2) and **select the participants** from your
-   contacts.
-5. Click **Begin** and keep the app open.
+1. Collect each member's **contact code** (they find it under **Groups →
+   Contacts**, or on the **Join with an invite** screen) and add them under
+   **Members besides you**, either from your contacts or by pasting the code.
+2. Enter a **name** and choose how many members must **approve a payment**.
+3. Groups are Zcash wallets (RedPallas). With **Show advanced options** on, you
+   can choose **Ed25519** instead, for general-purpose signing without a wallet,
+   and tick **A member uses the frost-client command-line tools** if one does.
+   That tool can't help agree on a private viewing key, so such a group's
+   payments are visible to anyone who learns its group key.
+4. Click **Create invite.** The app starts your server and a link members can
+   reach, then shows the **invite**. Copy it and send it to the members.
+5. Keep the app open until everyone has joined.
 
-### Participant
+### Member
 
-1. Set **Role → Join a ceremony.**
-2. Enter the **same group name** the coordinator announced.
-3. Click **Begin.** The app joins the ceremony waiting on the configured server.
+1. Choose **Join with an invite** (on Home, or under **Groups**).
+2. Send the organizer **your contact code** (step 1 on that screen). They need
+   it before they create the invite.
+3. Paste the **invite** they send back. The app shows the group, how many must
+   approve, and every member's key. Members already in your contacts are
+   marked; anyone new is added only after you tick the box. If you can, compare
+   the new keys with those people.
+4. Click **Join.**
 
 When all parties have joined, the ceremony completes and the **group** appears in
-the left sidebar for everyone. A RedPallas group exposes a **Wallet** page.
+**Groups** for everyone, and its wallet opens on **Home**.
 
 **What to verify:** the group appears on every participant's device with the same
 threshold and participant count.
@@ -222,19 +239,23 @@ threshold and participant count.
 Spending requires the coordinator to draft a transaction and a threshold of
 members to approve it.
 
-### Coordinator — draft and send
+### Coordinator — send a payment
 
-1. Open the group from the sidebar → **Wallet.**
-2. Fund the group first if needed: copy the **receive address** (a `u1…` on
-   mainnet / `utest1…` on testnet) and send ZEC to it. Received funds need
-   **10 confirmations** before they are spendable (your own change needs 3).
-3. In the **Send** section, enter the **recipient address**, the **amount**, and
-   an optional **memo**. The **Prepare** button stays disabled — and explains why
-   — until there is enough spendable balance.
-4. Choose which members will **sign** (any subset that meets the threshold; you
-   are pre-selected).
-5. Click **Prepare draft transaction**, review the amount, recipient, and fee,
-   then **Sign and broadcast.** The signing ceremony starts.
+1. Open **Home**. With several wallets, pick this group's from the switcher at
+   the top.
+2. Fund the group first if needed: click **Receive** and send ZEC to the
+   address shown (a `u1…` on mainnet / `utest1…` on testnet). Received funds
+   need **10 confirmations** before they are spendable (your own change needs
+   3); until then the balance shows them as waiting for confirmations.
+3. Click **Send** and enter who to pay, the **amount**, and an optional
+   **memo**. A transparent (`t…`) address is detected automatically: the app
+   notes that the payment will be public, and memos aren't available. The
+   **Review payment** button explains why when it's disabled.
+4. Check the payment, fee, and total, and choose which members to **ask to
+   approve** (any set that meets the threshold; you are pre-selected). On
+   mainnet, tick **The recipient is correct**.
+5. Click **Request approvals.** The payment shows who has approved, then its
+   progress to **Sent**.
 
 ### Participant — review and approve
 
@@ -253,21 +274,21 @@ members to approve it.
 
 Once a threshold of members approves, the coordinator's app aggregates the
 signatures, builds the proof, broadcasts the transaction, and shows the **txid**.
-The transaction then appears in **Transaction history** on both sides, with its
-fee and memo shown inline.
+The transaction then appears under **Activity** on both sides, with its fee and
+memo shown inline.
 
 **What to verify:** the txid confirms on a block explorer, and the sender's
-balance and history update (use **Sync Now** on the Wallet page if needed).
+balance and history update (use **Sync Now** on Home if needed).
 
 ---
 
 ## 7. Settings & configuration
 
-Network and light-client endpoint are set on the **Wallet Settings** page.
+Network and light-client endpoint are set in **Settings → Wallet**.
 
 **Network.** Cyze defaults to **Mainnet**. The active network is shown as a small
-**Mainnet / Testnet / Devnet** label on the wallet page, and a real mainnet send
-asks for one confirmation before it broadcasts. Switch to **Testnet** to test with
+**Testnet / Devnet** label next to the wallet name, and a mainnet payment
+asks you to confirm the recipient before it's sent for approval. Switch to **Testnet** to test with
 faucet funds, and back to Mainnet when ready. **Local devnet** is for development
 (see below). Balances, addresses, and history are kept entirely separate per
 network.
@@ -278,12 +299,12 @@ enter a **custom** `https://host:port` URL instead. Plaintext `http://` endpoint
 are refused. Use **Test** to confirm reachability, then **Save** — the save
 confirms whether the server actually responded.
 
-**Sync.** The Wallet page auto-syncs and shows the current block height. If it
+**Sync.** The active wallet syncs in the background from unlock to lock, and Home shows the current block height. If it
 looks stalled, press **Sync Now** — it restarts the sync from scratch and
 refreshes every panel (balances, pending/settled, notes, and history).
 
 **Active wallet.** With more than one group, Cyze works on **one wallet at a
-time**. Use **Zcash → Wallets** to switch between groups; selecting one makes it
+time**. Use the switcher at the top of the window to change wallets; selecting one makes it
 the active wallet, and the app stops syncing the previous one so all processing
 stays focused on your choice.
 
@@ -300,7 +321,7 @@ a devnet is real money: addresses start with `uregtest1…` and amounts show as
    curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/zcashlabs/thus-spoke-zakura/main/install.sh | sh
    thus-spoke-zakura            # keep it running; Ctrl-C deletes the devnet
    ```
-2. In **Wallet Settings**, choose **Local devnet** and click **Detect local
+2. In **Settings → Wallet**, choose **Local devnet** and click **Detect local
    devnet**. Cyze asks the `thus-spoke-zakura` CLI where lightwalletd is
    listening (it picks a random port) and checks that it answers. Then click
    **Save**. If Cyze can't find the CLI, run `thus-spoke-zakura endpoints` and
@@ -334,7 +355,7 @@ a devnet is real money: addresses start with `uregtest1…` and amounts show as
   They are rebuilt on the next sync. This only affects devnet data. Testnet
   and mainnet wallets are stored separately.
 
-**Diagnostics log.** Wallet Settings has a **Diagnostics log** card that captures
+**Diagnostics log.** With **Show advanced options** on, **Settings → Advanced** has a **Diagnostics log** card that captures
 what the app logs while running (sync steps, errors). Use **Copy all** to grab it
 for troubleshooting; it's in memory only and clears on restart.
 

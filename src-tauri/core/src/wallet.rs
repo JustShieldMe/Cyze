@@ -2979,7 +2979,7 @@ mod tests {
             WalletNetwork::Main,
             WalletNetwork::Regtest(RegtestUpgrade::Nu6),
         ] {
-            let keys = crate::zcash::derive_orchard_keys(&ak, net.network_type()).unwrap();
+            let keys = crate::zcash::derive_orchard_keys(&ak, None, net.network_type()).unwrap();
             let addr = ufvk_default_address(net, &keys.ufvk).unwrap();
             assert_eq!(addr, keys.address, "zcash_keys must agree on {net:?}");
         }

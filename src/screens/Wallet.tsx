@@ -17,7 +17,6 @@ import {
 } from "../ipc/commands";
 import { REGTEST_UPGRADES, devnetCanSend, upgradeLabel } from "../network";
 import { useAdvancedMode } from "../lib/advanced";
-import { BackupCard } from "../components/Backup";
 
 /** Known lightwalletd endpoints per network (user can also type their own). */
 const PRESETS: Record<WalletNetwork, { label: string; url: string }[]> = {
@@ -46,6 +45,7 @@ const NETWORKS: { id: WalletNetwork; label: string; blurb: string }[] = [
 const INSTALL_CMD =
   "curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/zcashlabs/thus-spoke-zakura/main/install.sh | sh";
 
+/** Settings → Wallet: which network, and the lightwalletd server it syncs from. */
 export default function Wallet() {
   const queryClient = useQueryClient();
   const config = useQuery({ queryKey: ["wallet-config"], queryFn: getWalletConfig });
@@ -141,15 +141,8 @@ export default function Wallet() {
 
   return (
     <div>
-      <h2>Wallet</h2>
-
-      <p className="dim">
-        Cyze syncs Zcash as a light client from a{" "}
-        <span className="code-inline">lightwalletd</span> server; no full node needed.
-      </p>
-
       <div className="card">
-        <h3>{showNetworks ? "Network" : "Server"}</h3>
+        <h3 style={{ marginTop: 0 }}>{showNetworks ? "Network" : "Sync server"}</h3>
         {showNetworks && (
           <div className="row" style={{ marginBottom: 14, alignItems: "center", flexWrap: "wrap" }}>
             {NETWORKS.map((n) => (
@@ -184,7 +177,7 @@ export default function Wallet() {
           />
         )}
 
-        <label>lightwalletd endpoint</label>
+        {showNetworks && <label>Sync server (lightwalletd)</label>}
         {PRESETS[net].length > 0 && (
           <select
             value={PRESETS[net].some((p) => p.url === effectiveUrl) ? effectiveUrl : "custom"}
@@ -278,16 +271,13 @@ export default function Wallet() {
         {testErr && <div className="error" style={{ marginTop: 10 }}>{testErr}</div>}
       </div>
 
-      <BackupCard />
-      {advanced && <LogsCard />}
-      <AdvancedCard enabled={advanced} />
     </div>
   );
 }
 
 /** The switch for advanced options. Off by default so everyday screens stay
  *  focused on the mainnet wallet. */
-function AdvancedCard({ enabled }: { enabled: boolean }) {
+export function AdvancedCard({ enabled }: { enabled: boolean }) {
   const queryClient = useQueryClient();
   const toggle = useMutation({
     mutationFn: (on: boolean) => setAdvancedMode(on),
@@ -438,7 +428,7 @@ function DevnetPanel({
 /** In-app diagnostics log: shows what the app has logged this session (sync
  *  timing, errors, ceremony steps) so it can be copied and shared without a
  *  terminal. In-memory only — cleared when the app restarts. */
-function LogsCard() {
+export function LogsCard() {
   const [live, setLive] = useState(true);
   const [copied, setCopied] = useState(false);
   const preRef = useRef<HTMLPreElement>(null);

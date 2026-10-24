@@ -5,7 +5,6 @@ import {
   Outlet,
   NavLink,
   Navigate,
-  useLocation,
 } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { listen } from "@tauri-apps/api/event";
@@ -13,91 +12,25 @@ import { useKeystore } from "./stores/keystore";
 import { useCeremonies, selectDkgInProgress } from "./stores/ceremonies";
 import {
   lockKeystore,
-  listGroups,
   recordActivity,
   getSettings,
-  getActiveWallet,
   joinSigningSession,
   listPendingSessions,
 } from "./ipc/commands";
 import CeremonyListener from "./CeremonyListener";
 import { Logo } from "./components/Logo";
 import { BackupReminder } from "./components/Backup";
+import { WalletSwitcher } from "./components/WalletSwitcher";
 import Unlock from "./screens/Unlock";
-import Dashboard from "./screens/Dashboard";
-import Contacts from "./screens/Contacts";
-import Groups, { GroupDetail, GroupWalletPage } from "./screens/Groups";
-import ServerSettings from "./screens/ServerSettings";
+import Home from "./screens/Home";
+import Groups, { GroupDetail, OpenWallet } from "./screens/Groups";
 import SessionSetup from "./screens/SessionSetup";
-import DkgWizard from "./screens/DkgWizard";
+import NewGroup from "./screens/NewGroup";
+import JoinGroup from "./screens/JoinGroup";
 import NewSigningSession from "./screens/NewSigningSession";
 import Inbox from "./screens/Inbox";
 import Wallet from "./screens/Wallet";
-import Wallets from "./screens/Wallets";
-
-/** Groups nav entry: the Groups list plus, for the active group, quick sub-links
- *  to its Details (key info, participants) and its Wallet. The single active
- *  wallet is chosen on the Wallets switcher (4 · Zcash); this just surfaces its
- *  Details/Wallet where group management lives. */
-function GroupsNavItem() {
-  const groups = useQuery({ queryKey: ["groups"], queryFn: listGroups });
-  const active = useQuery({ queryKey: ["active-wallet"], queryFn: getActiveWallet });
-  const activeGroup = (groups.data ?? []).find((g) => g.id === active.data);
-
-  return (
-    <div className="nav-group">
-      <NavLink to="/groups" end>
-        Groups
-      </NavLink>
-      {activeGroup && (
-        <>
-          <NavLink to={`/groups/${activeGroup.id}`} end className="nav-subsubitem">
-            Details
-          </NavLink>
-          {activeGroup.ciphersuite.includes("Pallas") && (
-            <NavLink to={`/groups/${activeGroup.id}/wallet`} className="nav-subsubitem">
-              Wallet
-            </NavLink>
-          )}
-        </>
-      )}
-    </div>
-  );
-}
-
-/** Nav grouped in the order a first-time user moves through the tool:
- *  set up a server and contacts, create or join a group, then sign. */
-const NAV_SECTIONS: { title: string; links: { to: string; label: string }[] }[] = [
-  { title: "Overview", links: [{ to: "/", label: "Dashboard" }] },
-  {
-    title: "1 · Setup",
-    links: [
-      { to: "/server", label: "Server" },
-      { to: "/contacts", label: "Contacts" },
-      { to: "/dkg", label: "New DKG" },
-    ],
-  },
-  {
-    title: "2 · Groups",
-    links: [
-      { to: "/groups", label: "Groups" },
-    ],
-  },
-  {
-    title: "3 · Signing",
-    links: [
-      { to: "/inbox", label: "Approvals" },
-    ],
-  },
-  {
-    title: "4 · Zcash",
-    links: [
-      { to: "/wallets", label: "Wallets" },
-      { to: "/setup", label: "Session Configuration" },
-      { to: "/wallet", label: "Wallet Settings" },
-    ],
-  },
-];
+import Settings, { AdvancedSettings, SecuritySettings } from "./screens/Settings";
 
 /** A red dot with a white "!", shown against a nav entry that needs the user to
  *  do something: a signing session waiting in their inbox, or a DKG ceremony in
@@ -114,7 +47,6 @@ function AttentionBadge({ title }: { title: string }) {
 function Layout() {
   const { unlocked, loaded, setUnlocked } = useKeystore();
   const dkgInProgress = useCeremonies(selectDkgInProgress);
-  const location = useLocation();
   const settings = useQuery({
     queryKey: ["settings"],
     queryFn: getSettings,
@@ -183,17 +115,6 @@ function Layout() {
 
   if (loaded && !unlocked) return <Navigate to="/unlock" replace />;
 
-  // First run: once unlocked, if the session has never been configured, send the
-  // user to Session Configuration to set it up (and save it). Skip the redirect
-  // while already there so they can complete and save.
-  if (
-    settings.data &&
-    !settings.data.session_configured &&
-    location.pathname !== "/setup"
-  ) {
-    return <Navigate to="/setup" replace />;
-  }
-
   return (
     <div className="layout">
       <CeremonyListener />
@@ -201,30 +122,22 @@ function Layout() {
         <div className="sidebar-brand">
           <Logo markSize={24} showTagline />
         </div>
-        {NAV_SECTIONS.map((section) => (
-          <div className="nav-section" key={section.title}>
-            <div className="nav-section-title">{section.title}</div>
-            {section.links.map((link) =>
-              link.to === "/groups" ? (
-                <GroupsNavItem key={link.to} />
-              ) : (
-                <NavLink key={link.to} to={link.to} end={link.to === "/"}>
-                  {link.label}
-                  {link.to === "/dkg" && dkgInProgress && (
-                    <AttentionBadge title="A DKG ceremony is running — it needs your attention" />
-                  )}
-                  {link.to === "/inbox" && pendingCount > 0 && (
-                    <AttentionBadge
-                      title={`${pendingCount} signing ${
-                        pendingCount === 1 ? "request is" : "requests are"
-                      } waiting for you`}
-                    />
-                  )}
-                </NavLink>
-              )
-            )}
-          </div>
-        ))}
+        <NavLink to="/" end>
+          Home
+        </NavLink>
+        <NavLink to="/inbox">
+          Approvals
+          {pendingCount > 0 && (
+            <AttentionBadge
+              title={`${pendingCount} signing ${pendingCount === 1 ? "request is" : "requests are"} waiting for you`}
+            />
+          )}
+        </NavLink>
+        <NavLink to="/groups">
+          Groups
+          {dkgInProgress && <AttentionBadge title="A group is being set up and needs your attention" />}
+        </NavLink>
+        <NavLink to="/settings">Settings</NavLink>
         <div className="spacer" />
         <a
           href="#"
@@ -238,6 +151,9 @@ function Layout() {
         </a>
       </nav>
       <main className="content">
+        <header className="topbar">
+          <WalletSwitcher />
+        </header>
         <BackupReminder />
         <Outlet />
       </main>
@@ -251,18 +167,31 @@ const router = createBrowserRouter([
     path: "/",
     element: <Layout />,
     children: [
-      { index: true, element: <Dashboard /> },
-      { path: "contacts", element: <Contacts /> },
-      { path: "groups", element: <Groups /> },
-      { path: "groups/:id", element: <GroupDetail /> },
-      { path: "groups/:id/wallet", element: <GroupWalletPage /> },
-      { path: "dkg", element: <DkgWizard /> },
-      { path: "sign", element: <NewSigningSession /> },
+      { index: true, element: <Home /> },
       { path: "inbox", element: <Inbox /> },
-      { path: "wallets", element: <Wallets /> },
-      { path: "wallet", element: <Wallet /> },
-      { path: "server", element: <ServerSettings /> },
-      { path: "setup", element: <SessionSetup /> },
+      { path: "groups", element: <Groups /> },
+      { path: "groups/new", element: <NewGroup /> },
+      { path: "groups/join", element: <JoinGroup /> },
+      { path: "groups/:id", element: <GroupDetail /> },
+      { path: "groups/:id/wallet", element: <OpenWallet /> },
+      { path: "sign", element: <NewSigningSession /> },
+      {
+        path: "settings",
+        element: <Settings />,
+        children: [
+          { index: true, element: <SessionSetup /> },
+          { path: "wallet", element: <Wallet /> },
+          { path: "security", element: <SecuritySettings /> },
+          { path: "advanced", element: <AdvancedSettings /> },
+        ],
+      },
+      // Older paths.
+      { path: "wallets", element: <Navigate to="/" replace /> },
+      { path: "contacts", element: <Navigate to="/groups" replace /> },
+      { path: "dkg", element: <Navigate to="/groups/new" replace /> },
+      { path: "server", element: <Navigate to="/settings" replace /> },
+      { path: "setup", element: <Navigate to="/settings" replace /> },
+      { path: "wallet", element: <Navigate to="/settings/wallet" replace /> },
     ],
   },
 ]);

@@ -71,6 +71,8 @@ pub enum DkgEvent {
     Round2,
     /// Computing the final key share.
     Finalizing,
+    /// Agreeing on the group's viewing seed (RedPallas groups).
+    ViewingKey,
 }
 
 #[derive(Debug, Clone, Serialize)]

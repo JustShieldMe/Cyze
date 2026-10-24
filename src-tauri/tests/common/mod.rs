@@ -159,6 +159,7 @@ pub async fn dkg(pair: &Pair, suite: frost_app_core::ciphersuite::Suite) -> Stri
         participants,
         server_url: Some(pair.server_url.clone()),
         session_id: None,
+        agree_viewing_key: true,
     };
     commands::dkg::start_dkg(pair.alice.app.handle().clone(), args(vec![pair.bob_pubkey.clone()]))
         .await

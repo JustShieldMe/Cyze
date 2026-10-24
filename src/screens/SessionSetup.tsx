@@ -40,14 +40,10 @@ export function isEphemeralServer(url: string): boolean {
  *  because a tunnel or TLS proxy is in front. */
 function TransportSecurityNote() {
   return (
-    <div className="callout warn" style={{ marginTop: 12 }}>
-      <span>
-        <strong>Transport is not authentication.</strong> However you expose the
-        server, FROSTd messages stay end-to-end encrypted by the app's own Noise
-        layer, and participants are verified by their keys. Keep that key
-        verification in place whatever transport you use.
-      </span>
-    </div>
+    <p className="dim" style={{ fontSize: 12, marginTop: 12 }}>
+      Whichever you pick, messages stay end-to-end encrypted and members are
+      checked by their keys.
+    </p>
   );
 }
 
@@ -78,36 +74,23 @@ export default function SessionSetup() {
 
   return (
     <div>
-      <h2>Session Configuration</h2>
-      {!configured ? (
-        <div className="callout" style={{ marginBottom: 12 }}>
-          <span>
-            <strong>Welcome — configure your session.</strong> A ceremony runs
-            through one <span className="mono">frostd</span> server. Pick your role
-            below and save; change it anytime from{" "}
-            <em>Zcash → Session Configuration</em>.
-          </span>
-        </div>
-      ) : (
+      {configured && (
         <p className="dim" style={{ marginTop: 0 }}>
-          Your saved profile is{" "}
-          <strong>{savedRole === "participant" ? "Participant" : "Coordinator"}</strong>
-          . Update it below and save to change it.
+          You're set up as {savedRole === "participant" ? "a member joining" : "the organizer"}. Change it below.
         </p>
       )}
-
       <div className="row" style={{ gap: 12, marginTop: 16, flexWrap: "wrap" }}>
         <RoleCard
           active={effectiveRole === "coordinator"}
           onClick={() => setRole("coordinator")}
-          title="I'm coordinating"
-          desc="Host the server and share how to reach it. You drive the DKG / signing."
+          title="I'm organizing"
+          desc="Run the server the group connects to."
         />
         <RoleCard
           active={effectiveRole === "participant"}
           onClick={() => setRole("participant")}
           title="I'm joining"
-          desc="Connect to a coordinator's server using the address they gave you."
+          desc="Connect to the organizer's server."
         />
       </div>
 
@@ -142,7 +125,7 @@ function RoleCard({
         background: active ? "var(--bg-elevated)" : "var(--bg-card)",
       }}
     >
-      <div style={{ fontWeight: 600, color: active ? "var(--accent)" : undefined }}>
+      <div style={{ fontWeight: 600, color: active ? "var(--accent)" : "var(--text)" }}>
         {title}
       </div>
       <div className="dim" style={{ fontSize: 13, marginTop: 6 }}>
@@ -158,7 +141,7 @@ function CoordinatorPath({ savedExposure }: { savedExposure: string | null }) {
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const [exposure, setExposure] = useState<Exposure>(
-    (savedExposure as Exposure) ?? "direct"
+    (savedExposure as Exposure) ?? "tunnel"
   );
   const [cert, setCert] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -207,7 +190,7 @@ function CoordinatorPath({ savedExposure }: { savedExposure: string | null }) {
 
   return (
     <div className="card" style={{ marginTop: 18 }}>
-      <h3 style={{ marginTop: 0 }}>Step 1 — Start the embedded server</h3>
+      <h3 style={{ marginTop: 0 }}>Step 1 — Start the server</h3>
       {error && <div className="error">{error}</div>}
 
       {running ? (
@@ -222,8 +205,7 @@ function CoordinatorPath({ savedExposure }: { savedExposure: string | null }) {
               LAN, so exposing 0.0.0.0 bought almost nothing and widened the
               attack surface for anyone who ticked it without needing it. */}
           <p className="dim" style={{ fontSize: 12, marginTop: 0 }}>
-            The server listens on loopback only. Remote participants reach it
-            through the tunnel or reverse proxy you configure below.
+            Members reach it the way you choose in step 2.
           </p>
           <button onClick={() => start.mutate()} disabled={start.isPending}>
             {start.isPending ? "Starting…" : "Start server"}
@@ -239,12 +221,12 @@ function CoordinatorPath({ savedExposure }: { savedExposure: string | null }) {
         </div>
       )}
 
-      <h3 style={{ marginTop: 24 }}>Step 2 — Choose how participants reach it</h3>
+      <h3 style={{ marginTop: 24 }}>Step 2 — Choose how members reach it</h3>
       <div className="row" style={{ gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
-        <ExposureTab active={exposure === "direct"} onClick={() => setExposure("direct")} label="Direct URL / IP" />
-        <ExposureTab active={exposure === "tunnel"} onClick={() => setExposure("tunnel")} label="Cloudflare Tunnel" />
+        <ExposureTab active={exposure === "tunnel"} onClick={() => setExposure("tunnel")} label="Public link (Cloudflare)" />
         <ExposureTab active={exposure === "tailscale"} onClick={() => setExposure("tailscale")} label="Tailscale" />
-        <ExposureTab active={exposure === "nginx"} onClick={() => setExposure("nginx")} label="NGINX reverse proxy" />
+        <ExposureTab active={exposure === "direct"} onClick={() => setExposure("direct")} label="Direct address" />
+        <ExposureTab active={exposure === "nginx"} onClick={() => setExposure("nginx")} label="Your own domain" />
       </div>
 
       {exposure === "direct" &&
@@ -258,10 +240,7 @@ function CoordinatorPath({ savedExposure }: { savedExposure: string | null }) {
             onExportCert={async () => setCert(await exportSidecarCert())}
           />
         ) : (
-          <p className="dim">
-            Start the server (Step 1) to see the URL, fingerprint, and certificate
-            to share with participants.
-          </p>
+          <p className="dim">Start the server first.</p>
         ))}
 
       {exposure === "tunnel" &&
@@ -274,9 +253,7 @@ function CoordinatorPath({ savedExposure }: { savedExposure: string | null }) {
             pending={openTunnel.isPending}
           />
         ) : (
-          <p className="dim">
-            Start the server (Step 1), then open the public tunnel here.
-          </p>
+          <p className="dim">Start the server first.</p>
         ))}
 
       {exposure === "tailscale" && (
@@ -303,8 +280,7 @@ function CoordinatorPath({ savedExposure }: { savedExposure: string | null }) {
           </span>
         )}
         <p className="dim" style={{ fontSize: 12, marginTop: 6 }}>
-          Saves your <strong>Coordinator</strong> profile and the{" "}
-          <strong>{exposure}</strong> method so they're reused on the next launch.
+          Remembered for next time.
         </p>
       </div>
     </div>

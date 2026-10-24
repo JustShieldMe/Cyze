@@ -339,9 +339,13 @@ async fn gate_wallet_request<R: tauri::Runtime>(
     let state = app.state::<AppState>();
     let settings = state.load_settings();
     let network = crate::commands::wallet::configured_network(&settings);
+    let seed = match state.viewing_seed(group_id).await {
+        Ok(seed) => seed,
+        Err(e) => return Verdict::Refused(format!("refused to sign: can't read the group's viewing key ({})", e.message)),
+    };
     let verdict = match context.and_then(|c| c.pczt.as_deref().map(|pczt| (c, pczt))) {
-        Some((claimed, pczt)) => verify::verify_signing_request(network, group_id, pczt, message_hex, randomizer_hex)
-            .and_then(|tx| verify::check_coordinator_claims(network, group_id, &tx, claimed).map(|()| tx))
+        Some((claimed, pczt)) => verify::verify_signing_request(network, group_id, seed.as_deref(), pczt, message_hex, randomizer_hex)
+            .and_then(|tx| verify::check_coordinator_claims(network, group_id, seed.as_deref(), &tx, claimed).map(|()| tx))
             .map_or_else(|e| Verdict::Refused(e.to_string()), |tx| Verdict::Verified { tx, auto_approved: false }),
         None if settings.advanced_mode.unwrap_or(false) => Verdict::Raw,
         None => Verdict::Refused(
@@ -475,8 +479,13 @@ pub async fn list_pending_sessions(
         frost_app_core::transport::FrostdClient::new(format!("https://{server_url}"), &trust)?;
     client.login(&comm_privkey, &comm_pubkey).await?;
 
+    let dkg_sessions = state.dkg_sessions.lock().map(|s| s.clone()).unwrap_or_default();
     let mut pending = Vec::new();
     for session_id in client.list_sessions().await?.session_ids {
+        // A key-generation session the organizer hasn't closed yet.
+        if dkg_sessions.contains(&session_id) {
+            continue;
+        }
         let info = client
             .get_session_info(&api::GetSessionInfoArgs { session_id })
             .await?;

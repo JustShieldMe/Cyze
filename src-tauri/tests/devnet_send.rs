@@ -67,7 +67,7 @@ fn outside_recipient() -> String {
     let sk = orchard::keys::SpendingKey::from_bytes([42; 32]).unwrap();
     let ak: [u8; 32] = orchard::keys::FullViewingKey::from(&sk).to_bytes()[..32].try_into().unwrap();
     let net = WalletNetwork::Regtest(RegtestUpgrade::Nu6_3).network_type();
-    frost_app_core::zcash::derive_orchard_keys(&ak, net).unwrap().address
+    frost_app_core::zcash::derive_orchard_keys(&ak, None, net).unwrap().address
 }
 
 #[tokio::test(flavor = "multi_thread")]
