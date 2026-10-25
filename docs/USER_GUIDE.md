@@ -10,7 +10,7 @@ order to vet a build.
 
 **Option A — download a prebuilt installer (recommended).** Grab the build for
 your operating system from the
-**[Releases page](https://github.com/USCMig/Cyze/releases)** (open the latest
+**[Releases page](https://github.com/JustShieldMe/Cyze/releases)** (open the latest
 release and download the matching asset):
 
 | OS | Download |
@@ -20,12 +20,14 @@ release and download the matching asset):
 | **Linux** | `.AppImage` (portable), or `.deb` / `.rpm` for your package manager |
 
 The FROSTd and tunnel helpers are bundled inside, so there is nothing else to
-install.
+install. Builds aren't code-signed yet, so macOS and Windows warn the first
+time you open the app. On macOS, open **System Settings → Privacy & Security**
+and click **Open Anyway**; on Windows, choose **More info → Run anyway**.
 
 **Option B — build from source.** For the latest code or an unlisted platform:
 
 ```sh
-git clone https://github.com/USCMig/Cyze.git
+git clone https://github.com/JustShieldMe/Cyze.git
 cd Cyze
 git checkout main
 npm install
@@ -59,11 +61,24 @@ ceremony; **Participant** = someone who connects to that server and approves.
 
 Cyze is a desktop wallet for Zcash where **no one person holds the private key**.
 A group jointly controls the funds using [FROST](https://frost.zfnd.org/)
-threshold signatures: a configurable quorum (e.g. 2 of 3) must cooperate to
-authorize any spend. It handles the full lifecycle — distributed key generation,
-a shared Zcash (Ironwood) wallet (sync, receive, balances, history), and
-threshold-signed sending where each participant explicitly reviews and approves
-the transaction before their signature share is produced.
+threshold signatures: a set number of members (for example 2 of 3) must
+approve every payment.
+
+The app has five places:
+- **Home:** the group's wallet.
+- **Approvals:** payments waiting for you.
+- **Votes:** polls in your groups, and Zcash community votes.
+- **Groups:** your groups and contacts.
+- **Settings:** connection, wallet, security, advanced options and licenses.
+
+It covers the whole lifecycle:
+- creating a group (distributed key generation, with one invite code);
+- a shared Zcash wallet that syncs in the background (receive, balances,
+  history);
+- payments that each approver's app verifies before they approve.
+
+It supports NU6.3 (Ironwood) and NU7, which mainnet activates at block
+3,543,405 (around November 5, 2026).
 
 ---
 
@@ -112,7 +127,7 @@ public key. They're listed under **Groups**, below your groups.
 2. Optionally add a nickname (a local label only you see) and save.
 
 Imported contacts appear in your **address book** and become selectable when you
-create a DKG ceremony. Exchange contacts in both directions before continuing.
+create a group. Exchange contacts in both directions before continuing.
 
 **Check safety codes.** A contact code passed through chat could be swapped by
 someone in between. Click **Check** next to a contact, ask them to read you
@@ -273,19 +288,20 @@ again** sends the signed transaction without asking anyone again.
 
 ### Participant — review and approve
 
-1. A red **!** badge appears next to **Approvals** in the sidebar. Open it. The
-   app joins the request in the background, which only shares
-   message-independent commitments.
+1. A red **!** badge appears next to **Approvals** in the sidebar, with a
+   system notification if Cyze isn't in front. Open it. The app joins the
+   request in the background, which only shares message-independent
+   commitments.
 2. The request shows what your app **verified from the transaction itself**: who
    gets paid and how much, any memo, what goes back to the group, and the fee.
    If the transaction doesn't match what the coordinator described, or its
    contents don't match its commitments, your app **refuses automatically** and
    says why.
-3. Click **Approve and sign** to release your signature share, before the time
-   the request shows. Nothing is signed until you approve; a request that has
-   expired can only be dismissed. A send that spends several notes needs this one approval;
-   its other notes are approved automatically once they verify as the same
-   transaction.
+3. Click **Approve and sign** to release your signature share, before the
+   **Approve by** time the request shows. Nothing is signed until you approve.
+   A request that has expired can only be dismissed. A send that spends several
+   notes needs this one approval; its other notes are approved automatically
+   once they verify as the same transaction.
 
 Once a threshold of members approves, the coordinator's app aggregates the
 signatures, builds the proof, broadcasts the transaction, and shows the **txid**.
@@ -362,12 +378,12 @@ with the balance they held at the round's snapshot. Votes shows what's open
 
 Network and light-client endpoint are set in **Settings → Wallet**.
 
-**Network.** Cyze defaults to **Mainnet**. The active network is shown as a small
-**Testnet / Devnet** label next to the wallet name, and a mainnet payment
-asks you to confirm the recipient before it's sent for approval. Switch to **Testnet** to test with
-faucet funds, and back to Mainnet when ready. **Local devnet** is for development
-(see below). Balances, addresses, and history are kept entirely separate per
-network.
+**Network.** Cyze defaults to **Mainnet**. The active network is shown as a
+small **Testnet / Devnet** label next to the wallet name, and a mainnet payment
+asks you to confirm the recipient before it's sent for approval. Switch to
+**Testnet** to test with faucet funds, and back to Mainnet when ready. **Local
+devnet** is for development (see below). Balances, addresses and history are
+kept entirely separate per network.
 
 **Sync server.** By default it's **Automatic**: the app measures the known
 servers (zec.rocks and its regional servers on mainnet) and uses the quickest
@@ -391,9 +407,15 @@ Home shows whether it's up to date. If a sync fails, Home says so and offers
 **Restart**, which restarts the sync and refreshes every panel.
 
 **Active wallet.** With more than one group, Cyze works on **one wallet at a
-time**. Use the switcher at the top of the window to change wallets; selecting one makes it
-the active wallet, and the app stops syncing the previous one so all processing
-stays focused on your choice.
+time**. Use the switcher at the top of the window to change wallets. Selecting
+one makes it the active wallet, and the app stops syncing the previous one, so
+all processing stays focused on your choice.
+
+**Security.** **Settings → Security** changes your passphrase and saves a
+backup file. It shows whether your backup covers every group.
+
+**About.** **Settings → About** shows the version and lists the open-source
+software Cyze is built on, with each license.
 
 ### Local devnet (regtest)
 
@@ -406,18 +428,19 @@ a devnet is real money: addresses start with `uregtest1…` and amounts show as
 1. **Install and start the devnet** (Linux or macOS, needs Docker):
    ```sh
    curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/zcashlabs/thus-spoke-zakura/main/install.sh | sh
-   thus-spoke-zakura            # keep it running; Ctrl-C deletes the devnet
+   ths start            # keep it running; Ctrl-C deletes the devnet
    ```
 2. In **Settings → Wallet**, choose **Local devnet** and click **Detect local
-   devnet**. Cyze asks the `thus-spoke-zakura` CLI where lightwalletd is
-   listening (it picks a random port) and checks that it answers. Then click
-   **Save**. If Cyze can't find the CLI, run `thus-spoke-zakura endpoints` and
-   paste the `lightwalletd` URL (`http://127.0.0.1:<port>`) into the endpoint
-   field. Plain `http://` is allowed only for local addresses. On Windows, run
-   the devnet in WSL2 and enter the URL by hand.
+   devnet**. Cyze asks the devnet's command-line tool (`ths`, or
+   `thus-spoke-zakura` before 0.4) where lightwalletd is listening (it picks a
+   random port), and checks that it answers. Then click **Save**. If Cyze
+   can't find the tool, run `ths endpoints` and paste the `lightwalletd` URL
+   (`http://127.0.0.1:<port>`) into the endpoint field. Plain `http://` is
+   allowed only for local addresses. On Windows, run the devnet in WSL2 and
+   enter the URL by hand.
 3. **Network upgrade.** A devnet picks its own upgrades, and the wallet must
    match the node. **Auto** reads the upgrade from the node when you click
-   Detect or Test connection. You can also force NU6 through NU6.3 (Ironwood).
+   Detect or Test connection. You can also force one, from NU6 to NU7.
 4. **Fund the group.** Open the group's wallet, copy its `uregtest1…` address,
    and use the faucet on the devnet dashboard (the link appears after Detect).
    Mine a few blocks there so the funds confirm. Devnet wallets scan the whole
@@ -436,7 +459,7 @@ a devnet is real money: addresses start with `uregtest1…` and amounts show as
   devnet funds land.
 - ZcashNames don't resolve on a devnet.
 - **Resetting the devnet starts a brand-new chain.** A group's devnet wallet
-  still holds the old chain, so after `thus-spoke-zakura reset` (or recreating
+  still holds the old chain, so after `ths reset --force` (or recreating
   it), delete the devnet wallet data: the `regtest` folders inside `wallets/`
   in Cyze's data directory (the folders above them have random-looking names).
   They are rebuilt on the next sync. This only affects devnet data. Testnet

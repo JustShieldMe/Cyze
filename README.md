@@ -1,178 +1,266 @@
 # CYZE — Coordinate Your ZCash Easily ❄️
 
-**A desktop wallet and signing companion for threshold-controlled Zcash funds.**
+**A desktop wallet for Zcash funds that a group controls together.**
 
 Cyze puts a graphical interface on [ZF FROST](https://frost.zfnd.org/) threshold
 signatures, built on the Zcash Foundation's
 [frost-tools](https://github.com/ZcashFoundation/frost-tools). It lets a group of
 people jointly control a Zcash wallet where **no single person ever holds the
-full private key** — a configurable threshold (e.g. 2-of-3) must cooperate to
-authorize any spend.
+full private key**. A configurable threshold of members (for example 2 of 3)
+must approve every payment.
 
 > ### ⚠️ Beta software — unaudited — use at your own risk
 >
-> Cyze is in **beta** and has **not been security-audited**. It targets the
-> **Ironwood (NU6.3)** network upgrade and runs on the **Zakura** Zcash crates,
-> whose wallet libraries are still release candidates. Do not use it
-> to hold funds you cannot afford to lose. You are solely responsible for backing
-> up your key shares and recovery code, and for any transaction you broadcast.
-> **No warranty is provided.** Start on testnet, and if you use mainnet, use
-> small amounts.
+> Cyze is in **beta** and has **not been security-audited**. It runs on the
+> **Zakura** Zcash crates, whose wallet libraries are still release
+> candidates. Do not use it to hold funds you cannot afford to lose. You alone
+> are responsible for backing up your key shares and recovery code, and for
+> any transaction you broadcast. **No warranty is provided.** Start on
+> testnet. If you use mainnet, use small amounts.
+>
+> **Mainnet activates NU7 at block 3,543,405 (around November 5, 2026).** Cyze
+> 0.3 supports it; earlier versions can't send on mainnet after that.
 
 ---
 
 ## What it does
 
-- **Key ceremonies (DKG)** — create or join a distributed key generation
-  ceremony. The private key is split into shares across participants and never
-  exists in one place.
-- **Threshold signing** — coordinate a signing session (the coordinator can also
-  be a signer), or participate through an inbox with an explicit review/approve
-  step before your signature share is produced.
-- **Zcash wallet (Ironwood)** — for RedPallas groups: sync from a lightwalletd
-  server with a pipelined light-client scanner, view the group's **Ironwood
-  shielded balance**, receive to a rotating group address (with QR), and **send** —
-  each spend is authorized by a live FROST signing ceremony among the group. Sends
-  build **V6 transactions** post-NU6.3. Any legacy **Orchard** funds are surfaced
-  only when present, with a one-tap sweep into Ironwood. The app focuses on **one
-  active wallet at a time** — selecting a group makes it the sole wallet the app
-  syncs and acts on. Includes on-chain and local transaction/message history, and
-  an in-app diagnostics log for troubleshooting.
-- **Local devnet for development** — besides mainnet and testnet, the wallet can
-  run against a local regtest devnet
-  ([thus-spoke-zakura](https://github.com/zcashlabs/thus-spoke-zakura)), found
-  with one click, for Zcash protocol and app development with throwaway funds.
-- **Group polls** — any member asks the group a question, every member answers
-  for themselves and can change their answer until it closes, and an option
-  counts as agreed once as many members back it as the group needs to approve
-  a payment. Polls travel end-to-end encrypted through the group's coordination
-  server, nothing goes on chain, and each member only ever sends records they
-  wrote, so no one can forge another's vote.
-- **Zcash community votes** — see the coinholder votes run through
-  [Shielded Vote](https://valargroup.gitbook.io/shielded-vote-docs) (production
-  rounds on mainnet, staging on testnet): what's open, each proposal, and recent
-  results. **Decide together** turns a round's proposals into group polls.
-  Casting the group's vote with its balance comes once it's been tested on a
-  live round (see TODO.md).
-- **ZcashNames (ZNS)** — on testnet, send to a human-readable `name.zcash` in
-  the recipient field: it is resolved to a unified address via the public ZNS
-  indexer and shown for you to confirm before signing (the resolver is external,
-  never an authorization). Off on mainnet until a production indexer exists; the
-  only mainnet one is a test service.
-- **Server hosting** — run the `frostd` coordination server embedded
-  (auto-generated, pinned self-signed TLS), and expose it to off-LAN peers either
-  through a built-in **Cloudflare tunnel** (public HTTPS URL, no port-forwarding)
-  or over **Tailscale** (a stable `*.ts.net` tailnet address with automatic,
-  publicly-trusted TLS — tailnet-only, not public), or point at any external
-  `frostd`.
-- **Contacts & groups** — a per-group view with public key material, named
-  participants, receive addresses, and share-repair guidance.
+The app has five places: **Home**, **Approvals**, **Votes**, **Groups** and
+**Settings**.
 
-Supports both frost-tools ciphersuites: **Ed25519** (generic signing) and
-**RedPallas** (re-randomized FROST for Zcash shielded spend authorization).
+- **A shared Zcash wallet.** Home shows the active group's balance, with
+  **Receive** (a rotating shielded address, with QR code) and **Send**.
+  - **Sending takes two steps:** enter the payment, then review it and choose
+    who approves.
+  - **Send all** pays everything, with the fee taken out of the amount.
+  - **Transparent addresses** are detected automatically, with a note that the
+    payment will be public.
+  - **Activity** lists payments with their memos and fees.
+  - With several groups, a switcher at the top picks the one wallet the app
+    syncs and acts on.
+- **A wallet that's always current.**
+  - Sync runs in the background from unlock to lock, on any screen.
+  - Scanning is about 4.5 times faster on the Zakura crates.
+  - Each member's app records the wallet's starting block when the group is
+    created, so no payment to it is missed.
+  - Cyze picks the quickest of zec.rocks's servers, and switches if one stops
+    answering.
+  - **Tor** for the wallet's traffic is optional.
+- **Approvals.**
+  - The app joins signing requests by itself and shows what it verified from
+    the transaction.
+  - Each approver approves a payment once, however many notes it spends. A
+    system notification says when a request is waiting.
+  - Approvals must come within the transaction's standard expiry (about 50
+    minutes). Both sides see the deadline.
+  - If time runs out, **Ask again** rebuilds the payment for the same members.
+    If a payment was approved but didn't reach the network, **Try sending
+    again** sends it without new approvals.
+- **Groups.**
+  - **Joining takes one invite code.** Creating a group starts the app's
+    coordination server, and a link members can reach (Tailscale if it's set
+    up, otherwise a Cloudflare tunnel). Members paste the invite to join.
+  - **Contacts** carry safety codes, so people can confirm they hold each
+    other's real keys.
+  - **New groups get a private viewing key,** and older groups can be made
+    private (see [Security model](#security-model)).
+- **Votes.** Group polls let any member ask the group a question. Zcash
+  community votes show the coinholder rounds run through
+  [Shielded Vote](https://valargroup.gitbook.io/shielded-vote-docs), and
+  **Decide together** turns a round's proposals into group polls. Casting the
+  group's vote with its balance comes in a later version. See
+  [Voting in Cyze](docs/VOTING.md).
+- **Backups.** Encrypted key backups restore your shares on a new device. The
+  app reminds you while a group isn't in any backup yet.
+- **ZcashNames (testnet).** Send to `name.zcash`. The resolved address is
+  shown for you to confirm before anything is signed. Lookups are off on
+  mainnet until a production directory exists.
+- **Hosting choices.** Run the bundled `frostd` coordination server and reach
+  it through a Cloudflare tunnel, Tailscale, a direct address (pinned
+  self-signed TLS) or your own domain; or point at any external `frostd`.
+- **A local devnet for development.** Run against a
+  [thus-spoke-zakura](https://github.com/zcashlabs/thus-spoke-zakura) regtest
+  chain (0.3 runs NU6.3, 0.4 runs NU7), found with one click.
+- **Advanced options**, off by default: test networks and the devnet, a
+  diagnostics log, Ed25519 groups and raw-message signing.
+
+Cyze supports both frost-tools ciphersuites: **RedPallas** (re-randomized FROST
+for Zcash shielded spends; every wallet group) and **Ed25519** (general-purpose
+signing, an advanced option).
+
+## How it works
+
+1. **A group is created.**
+   - The members run a distributed key generation (DKG) through the
+     coordination server. Each ends up with one key share, and the full
+     private key never exists anywhere.
+   - They also agree on a random viewing seed, so the group's public key isn't
+     enough to see its payments. Each member contributes, and everyone compares
+     a digest of the result.
+   - Each member's app records the chain height at that moment as the wallet's
+     starting point.
+2. **The wallet stays in sync.**
+   - Each member's app downloads compact blocks from a lightwalletd server.
+   - It finds the group's payments on the member's own computer, with the
+     viewing key. The server can't tell which payments are the group's.
+3. **A member sends a payment.**
+   - Their app builds the unsigned transaction (a PCZT) from the group's notes,
+     with the standard ZIP-317 fee, and sends it to the approvers they chose.
+   - Each approver's app checks the transaction itself before showing it: that
+     the hash to sign is the transaction's, that the inputs are the group's
+     notes, the real recipients and amounts, and that the change returns to
+     the group.
+   - When the approvers approve, their apps contribute signature shares. The
+     sender's app combines them, builds the zero-knowledge proof, and
+     broadcasts the transaction.
+4. **The servers are untrusted relays.**
+   - Everything members send each other through the coordination server is
+     end-to-end encrypted (Noise). The server sees public communication keys,
+     IP addresses and timing.
+   - The sync server sees which blocks are downloaded and when, and that a
+     transaction was broadcast. It sees your IP address unless Tor is on.
+
+[PRIVACY.md](PRIVACY.md) lists everything Cyze sends and keeps.
 
 ## Security model
 
-- Key shares and contacts live in an **envelope-encrypted keystore**: a random
-  data key (XChaCha20-Poly1305) is wrapped under both your passphrase and a
-  one-time **12-word BIP-39 recovery code** (Argon2id), so either can unlock, and
-  changing one doesn't invalidate the other. The plaintext is byte-compatible
-  with upstream `~/.config/frost/credentials.toml`, so an existing frost-client
-  config imports in one step.
-- The **recovery code is shown once** at setup behind an explicit
-  acknowledgement and is never stored. It unlocks the keystore if you forget the
-  passphrase.
-- **Backups** restore your key shares on another device. A backup file holds the
-  encrypted keystore plus the wallet's scan start heights, which are encrypted
-  under a key derived from the keystore. It opens only with your passphrase or
-  recovery code, and neither half is enough alone. The app reminds you to back
-  up whenever a group isn't in any backup yet.
-- **A private viewing key per group.** When a group is created, its members
-  agree on a random viewing seed: each sends the others a random contribution,
-  the seed hashes all of them (so no one member chooses it), and everyone
-  compares a digest of the result before the group is saved. The seed lives in
-  each member's keystore, so it's encrypted and backed up with their share.
-  Knowing the group's id (its Orchard `ak`) is then not enough to see its
-  payments. Groups with a member using the upstream command-line tools (an
-  advanced option) still derive their viewing key from `ak`.
-- **Optional Tor for wallet traffic.** With Tor on (Settings → Wallet), every
-  connection to a sync server, including broadcasting a payment, goes through
-  an embedded Tor client (Arti, through the wallet libraries). Nothing falls
-  back to a direct connection: while Tor starts, or if it fails, those
-  connections fail instead. A local devnet is still reached directly, and
-  coordination traffic (frostd) is not routed through Tor.
-- **Older groups can go private.** A group created before private viewing
-  keys can have its members run the same agreement later, over a frostd
-  session that holds exactly the group's members (each app refuses any other).
-  Every member's app records the seed, keeps watching the old address, and
-  hands out a new one. The funds move with an ordinary payment the group
-  approves; co-signers' apps verify it, accepting notes under the old key as
-  the group's but counting only outputs to the new key as change, so nothing
-  can be routed back to the publicly viewable address unnoticed. Payments made
-  before the move stay visible to anyone who knows the group's id.
-- **Nothing outside the keystore names a group.** Per-group settings, contact
-  nicknames, signed transactions awaiting broadcast, and the ceremony history
-  are encrypted under keys derived from the keystore, and wallet folders have
-  opaque names derived the same way. Settings from earlier versions move over
-  on the first unlock.
-- **Invites never add keys silently.** An invite lists every member's key; the
-  app marks those already in your contacts and adds new ones only after you
-  confirm, since whoever controls a listed key holds a share.
-- Keystore writes are atomic and flushed to disk, and the previous version is
-  kept; unlocking falls back to it if the current file is damaged.
-- All ceremony messages are **end-to-end encrypted** (Noise, via frost-client);
-  `frostd` is an untrusted relay.
-- Self-signed server certificates are **pinned exactly** (trust-on-first-use
-  with fingerprint display): the app accepts that one certificate and nothing
-  else for the server, not even one a public CA issued for the same address. A
-  Cloudflare tunnel or Tailscale address presents a publicly valid certificate,
-  so peers using it skip cert trust.
-- **Safety codes** let people confirm they hold each other's real keys: each
-  key has a 30-digit code (an iterated hash, as Signal's safety numbers), you
-  read yours aloud, and the other person checks it and marks you verified.
-  Invites show which members are verified.
-- Key-derivation settings read from a keystore or backup file are bounded, so a
-  tampered file can't make an unlock exhaust memory or hang.
-- Signers **verify the transaction itself** before approving. The coordinator
-  attaches the unsigned transaction (PCZT). Each signer's app checks:
-  - the message to sign is that transaction's sighash
-  - every input carrying value is one of the group's own notes
-  - every recipient and amount matches its on-chain commitment
-  - the coordinator's description matches what was proven
+### Keys and backups
 
-  If any check fails, it refuses automatically. A multi-note send needs one
-  approval; its other rounds are approved after they verify as the same
-  transaction. Wallet keys never sign a request without a transaction
-  attached, unless advanced options are on. Round-1 commitments are
-  message-independent, so nothing is at risk before approval.
+- **An envelope-encrypted keystore.** Key shares and contacts live in a
+  keystore whose random data key (XChaCha20-Poly1305) is wrapped under both
+  your passphrase and a one-time **12-word BIP-39 recovery code** (Argon2id).
+  Either can unlock it, and changing one doesn't invalidate the other. The
+  plaintext is byte-compatible with upstream
+  `~/.config/frost/credentials.toml`, so an existing frost-client config
+  imports in one step.
+- **The recovery code is shown once** at setup, behind an explicit
+  acknowledgement, and is never stored.
+- **Backups restore key shares on another device.** A backup file holds the
+  encrypted keystore, plus the wallets' scan start heights encrypted under a
+  key derived from the keystore. It opens only with your passphrase or
+  recovery code; the file and the secret are each useless alone.
+- **Keystore writes** are atomic and flushed to disk, and the previous version
+  is kept. Unlocking falls back to it if the current file is damaged.
+- **Key-derivation settings** read from a keystore or backup file are bounded,
+  so a tampered file can't make an unlock exhaust memory or hang.
+
+### Privacy
+
+- **A private viewing key per group.**
+  - When a group is created, its members agree on a random viewing seed: each
+    sends the others a random contribution, and the seed hashes all of them, so
+    no one member chooses it.
+  - The seed lives in each member's keystore, encrypted and backed up with
+    their share. Knowing the group's id (its Orchard `ak`) is then not enough
+    to see its payments.
+  - Groups where a member uses the upstream command-line tools (an advanced
+    option) still derive their viewing key from `ak`.
+- **Older groups can go private.**
+  - A group created before Cyze 0.3 can run the same agreement later, over a
+    session that holds exactly the group's members.
+  - The funds move to the new address with an ordinary payment the group
+    approves. Co-signers' apps count only outputs to the new key as change, so
+    nothing can be routed back to the old, publicly viewable address
+    unnoticed.
+  - Payments made before the move stay visible to anyone who knows the group's
+    id.
+- **Nothing outside the keystore names a group.**
+  - Per-group settings, contact nicknames, poll records, signed transactions
+    awaiting broadcast and the ceremony history are encrypted under keys
+    derived from the keystore.
+  - Wallet databases are encrypted with SQLCipher, in folders with opaque
+    names.
+  - The diagnostics log has group ids removed, and stays in memory only.
+- **Optional Tor for wallet traffic.**
+  - With Tor on, every connection to a sync server, broadcasts included, goes
+    through an embedded Tor client (Arti). Nothing falls back to a direct
+    connection.
+  - Coordination traffic and a local devnet are not routed through Tor.
+- **Payments look like any other wallet's.** Transactions keep the standard
+  expiry instead of a longer one that would single out Cyze's payments
+  on-chain.
+
+### Approving payments
+
+- **Signers verify the transaction itself.** The sender attaches the unsigned
+  transaction (PCZT). Each signer's app checks:
+  - the message to sign is that transaction's sighash;
+  - every input carrying value is one of the group's own notes;
+  - every recipient and amount matches its on-chain commitment;
+  - the sender's description matches what was proven.
+
+  If any check fails, it refuses automatically.
+- **One approval per payment.** A payment that spends several notes needs one
+  approval; its other rounds are approved once they verify as the same
+  transaction.
+- **No unverified signing.** Wallet keys never sign a request without a
+  transaction attached, unless advanced options are on.
+- **Nothing is at risk before approval.** Round-1 commitments don't depend on
+  the message.
+
+### Servers and people
+
+- **frostd is an untrusted relay.** All ceremony and poll messages are
+  end-to-end encrypted (Noise, via frost-client).
+- **Self-signed server certificates are pinned exactly** (trust on first use,
+  with the fingerprint shown). The app accepts that one certificate and
+  nothing else for the server, not even one a public CA issued for the same
+  address. A Cloudflare tunnel or Tailscale address presents a publicly valid
+  certificate, so members using it skip this step.
+- **Invites never add keys silently.** An invite lists every member's key. The
+  app marks those already in your contacts, and adds new ones only after you
+  confirm, since whoever controls a listed key holds a share.
+- **Safety codes** let people confirm they hold each other's real keys. Each
+  key has a 30-digit code (an iterated hash, like Signal's safety numbers):
+  you read yours aloud, and the other person checks it and marks you verified.
+- **No one can forge a vote.** Each member's app sends only the poll records
+  its member wrote, and the encrypted channel authenticates the sender.
+
+To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## Getting started
 
-On first launch you set a passphrase and a display name, and are shown a
-one-time recovery code to back up. A typical first run:
+Download an installer from the
+[Releases page](https://github.com/JustShieldMe/Cyze/releases), or build from
+source (below). Builds aren't code-signed yet, so macOS and Windows show a
+warning the first time you open the app.
 
-1. **Contacts** — members send the organizer their contact codes.
-2. **New group** — the organizer picks the members and how many must approve;
-   the app starts a server members can reach and makes an **invite**. Members
-   choose **Join with an invite** and paste it.
-3. **Home** — the wallet: its receive address, balance, and history.
-4. **Send** — enter a recipient and amount; the app runs a signing ceremony with
-   the chosen threshold of members, then broadcasts the transaction.
+1. **First run.**
+   - Set a passphrase and a display name.
+   - Save the one-time recovery code.
+   - Choose **Start a shared wallet** or **Join with an invite**.
+2. **Start a group.** The organizer adds each member's contact code, chooses
+   how many must approve, and clicks **Create invite**. The app starts a
+   server members can reach and makes the invite.
+3. **Join.** Members paste the invite, check the keys listed, and click
+   **Join**. The group's wallet opens on **Home** for everyone.
+4. **Back up.** Each member saves a backup file from **Settings → Security**.
+5. **Receive and send.**
+   - **Receive** shows the group's address.
+   - **Send** builds a payment and asks the members you choose. They approve it
+     in **Approvals**, and the app sends it once enough have.
 
-**📖 [User Walkthrough & Testing Guide](docs/USER_GUIDE.md)** — a detailed,
-step-by-step guide covering security setup, contacts, hosting/joining a server,
-the DKG ceremony, building and approving transactions, and configuration. Follow
-it in order to fully test and vet the application.
+## Documentation
 
-**🗳️ [Voting in Cyze](docs/VOTING.md)**: group polls and Zcash community
-votes, step by step.
+- **[User guide](docs/USER_GUIDE.md):** every feature step by step, in the
+  order to test a build.
+- **[Voting in Cyze](docs/VOTING.md):** group polls and Zcash community votes.
+- **[Privacy](PRIVACY.md):** what the app sends, to whom, and what it keeps.
+- **[Security policy](SECURITY.md):** how to report a vulnerability.
+- **[Changelog](CHANGELOG.md):** what changed in each version.
+- **[Building and releasing](docs/RELEASE.md):** packaging, sidecars, code
+  signing, licenses and SBOMs.
+- **[Sync design](docs/SYNC_OPTIMIZATION.md):** how the wallet syncs, with
+  measurements.
 
 ## Building
 
 Prerequisites:
 
-- Rust (1.92+), Node 18+
-- Tauri Linux system deps:
+- Rust 1.92+ (stable) and Node 20+.
+- A C toolchain and Perl: the wallet database uses SQLCipher with vendored
+  OpenSSL, compiled from source.
+- Tauri's Linux system packages:
   `sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libdbus-1-dev librsvg2-dev libayatana-appindicator3-dev build-essential`
 
 ```sh
@@ -182,41 +270,49 @@ npm run tauri dev            # development
 npm run tauri build          # native installers (AppImage/deb/…)
 ```
 
-**`build-sidecar.sh` is not optional.** The app bundles two sidecar binaries, and
-Tauri refuses to build unless both are present for your host's target triple:
+**`build-sidecar.sh` is not optional.** The app bundles two sidecar binaries,
+and Tauri refuses to build unless both are present for your host's target
+triple:
 
-- **`frostd`** — the coordination server, built from `frost-tools` at the pinned
-  revision (`scripts/PINNED_REV`). It must match the `frost-client` dependency in
-  `src-tauri/Cargo.toml` or client and server disagree on the wire format.
-- **`cloudflared`** — downloaded from Cloudflare's releases, so the optional
-  public-tunnel feature needs no separate install or PATH entry.
+- **`frostd`**, the coordination server, built from `frost-tools` at the
+  pinned revision (`scripts/PINNED_REV`). It must match the `frost-client`
+  dependency in `src-tauri/Cargo.toml`, or client and server disagree on the
+  wire format.
+- **`cloudflared`**, for the optional public tunnel: the release pinned in
+  `scripts/CLOUDFLARED_VERSION`, checked against `scripts/cloudflared.sha256`.
 
 The script fetches both. Skip it and the build fails late with
 `resource path 'binaries/cloudflared-<triple>' doesn't exist`. The binaries land
 in `src-tauri/binaries/` (gitignored), so a fresh clone always needs this step.
 
-Windows builds run natively (MSVC + Node) or via WSL2; build a Windows `frostd`
-sidecar and target `nsis`/`msi`. To run two instances on one machine (e.g. to
-play coordinator and participant), give the second its own data dir:
+Windows builds run natively (MSVC, Node and NASM) or through WSL2. To run two
+instances on one machine (for example, to play organizer and member), give
+the second its own data directory:
 
 ```sh
 FROST_APP_DATA_DIR=/tmp/frost-app-2 npm run tauri dev
 ```
 
-See [`docs/RELEASE.md`](docs/RELEASE.md) for packaging and sidecar details.
-
 ## Tests
 
-The core crate is Tauri-free and fully testable headlessly:
-
 ```sh
-cd src-tauri && cargo test -p frost-app-core
+npm test                                  # frontend smoke tests
+cd src-tauri && cargo test --workspace    # Rust: core, commands, ceremonies
 ```
 
-`tests/ceremony_e2e.rs` spawns a real `frostd` and runs complete 3-party DKG +
-2-of-3 signing ceremonies over TLS for both ciphersuites, plus a rejection path;
-keystore tests cover the envelope format and recovery code. A headless smoke test
-drives the full Tauri command layer (`cargo test -p frost-app --test smoke`).
+- **Frontend smoke tests** (`src/test`) drive the real interface against a fake
+  backend: onboarding, sending and asking again, approving, making an older
+  group private, votes, sync status, settings.
+- **`src-tauri/core/tests/ceremony_e2e.rs`** spawns a real `frostd` and runs complete
+  3-party DKG and 2-of-3 signing over TLS for both ciphersuites, plus a
+  rejection path.
+- **The app crate's tests** (`src-tauri/tests`) cover the Tauri command layer:
+  approvals, invites, backups and restore, private settings, viewing keys and
+  group polls.
+- **Devnet tests**, ignored by default, run against a
+  [thus-spoke-zakura](https://github.com/zcashlabs/thus-spoke-zakura) chain:
+  a real 2-of-2 send, recovery from a reorg, and making a group private. See
+  the header of `src-tauri/tests/devnet_send.rs` to run them.
 
 To time a real wallet sync against lightwalletd, use the sync benchmark (see
 [`docs/SYNC_OPTIMIZATION.md`](docs/SYNC_OPTIMIZATION.md#measurements-2026-10-23)):
@@ -227,17 +323,36 @@ cd src-tauri && cargo run --release -p frost-app-core --features wallet --exampl
 
 ## Layout
 
-- `src-tauri/core` — `frost-app-core`: keystore, frostd transport (pinned-cert
-  TLS), DKG/signing ceremony engines, the Zcash wallet/PCZT send path (Ironwood,
-  plus legacy Orchard) and pipelined sync driver, coinholder-poll voting
-  (`voting.rs`), and ZcashNames resolution (`zns.rs`). No Tauri dependency.
-- `src-tauri/src` — Tauri adapter: commands, event forwarding, sidecar lifecycle.
-- `src/` — React + TypeScript frontend.
-- `scripts/PINNED_REV` — the frost-tools revision used for both the
+- **`src-tauri/core`** is `frost-app-core`, with no Tauri dependency:
+  - the keystore, backups, and encryption at rest (`keystore.rs`, `backup.rs`,
+    `sealed.rs`);
+  - the frostd transport with pinned-certificate TLS (`transport.rs`,
+    `tls.rs`);
+  - the DKG and signing engines (`dkg.rs`, `signing.rs`);
+  - invites, safety codes and viewing seeds (`invite.rs`, `safety.rs`,
+    `viewing.rs`);
+  - the Zcash wallet: sync, the send path, and Tor (`wallet.rs`,
+    `wallet/tor.rs`), plus signer verification (`wallet/verify.rs`);
+  - group polls and community votes (`polls.rs`, `community_vote.rs`);
+  - ZcashNames (`zns.rs`).
+- **`src-tauri/src`** is the Tauri adapter:
+  - commands (`commands/`) and the background sync service
+    (`sync_service.rs`);
+  - the `frostd` sidecar, Cloudflare tunnel and Tailscale (`sidecar.rs`,
+    `tunnel.rs`, `tailscale.rs`);
+  - devnet discovery (`devnet.rs`) and encrypted private settings
+    (`private.rs`).
+- **`src/`** is the React + TypeScript frontend:
+  - the five places and their screens (`screens/`);
+  - the wallet's panels (`wallet/`);
+  - ceremony state (`stores/`);
+  - smoke tests (`test/`).
+- **`scripts/PINNED_REV`** is the frost-tools revision used for both the
   `frost-client` library dependency and the `frostd` sidecar build (they must
   match for wire compatibility).
 
 ## License
 
-See repository headers. Third-party components (`frostd`, `cloudflared`) are
-redistributed under their own licenses.
+[MIT](LICENSE). The software Cyze is built on, including the bundled `frostd`
+and `cloudflared`, keeps its own licenses. **Settings → About** lists them with
+their texts, and each release carries SBOMs.

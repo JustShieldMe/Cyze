@@ -1,5 +1,11 @@
 # UAT — pipelined sync & Tailscale serve
 
+> **Historical.** Both features merged in 0.2.0-rc.1. Part A's toggle and the
+> stock driver no longer exist: pipelined sync is the only driver (see
+> [SYNC_PIPELINE_UAT.md](SYNC_PIPELINE_UAT.md)). Part B still describes
+> Tailscale serving, now under Settings → Connection. For current behavior, use
+> the [user guide](USER_GUIDE.md).
+
 User-acceptance checklists for the two in-flight features. Each part names the
 branch it needs; until both merge to `main`, test each on its own branch build
 (they don't depend on each other).
