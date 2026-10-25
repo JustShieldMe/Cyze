@@ -51,10 +51,9 @@ async fn records_from_a_newer_version_dont_hold_up_the_rest() {
         closes_at: 4_000_000_000,
         community: None,
     };
-    let payee: serde_json::Value =
-        serde_json::json!({ "kind": "payee", "payee_id": "x", "name": "Acme", "address": "u1..." });
+    let future: serde_json::Value = serde_json::json!({ "kind": "from_the_future", "what": "a kind no version uses" });
     let batch = [
-        record(1, RecordBody::Unknown(payee.as_object().unwrap().clone())),
+        record(1, RecordBody::Unknown(future.as_object().unwrap().clone())),
         record(2, poll("wide", (0..20).map(|i| i.to_string()).collect())),
         record(3, poll("p", vec!["Yes".into(), "No".into()])),
     ];

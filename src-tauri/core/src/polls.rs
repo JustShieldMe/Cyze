@@ -494,7 +494,7 @@ mod tests {
     /// What a newer version might send: a kind of record this one doesn't
     /// know, then a vote, plus a message type it doesn't know.
     const FROM_A_NEWER_VERSION: &str = r#"[
-        {"cyze_poll":"record","group_id":"group","seq":1,"at":10,"kind":"payee","payee_id":"x","name":"Acme","address":"u1..."},
+        {"cyze_poll":"record","group_id":"group","seq":1,"at":10,"kind":"from_the_future","what":"a kind no version uses"},
         {"cyze_poll":"record","group_id":"group","seq":2,"at":20,"kind":"vote","poll_id":"p","choice":0},
         {"cyze_poll":"something_new","group_id":"group"}
     ]"#;
@@ -503,20 +503,20 @@ mod tests {
     fn a_batch_from_a_newer_version_still_delivers_what_this_version_can_read() {
         let messages = decode_batch(FROM_A_NEWER_VERSION.as_bytes()).unwrap();
         assert_eq!(messages.len(), 2, "the unknown message type is skipped, not the batch");
-        let [Message::Record(payee), Message::Record(vote)] = messages.as_slice() else { panic!("{messages:?}") };
-        assert!(matches!(payee.body, RecordBody::Unknown(_)));
+        let [Message::Record(future), Message::Record(vote)] = messages.as_slice() else { panic!("{messages:?}") };
+        assert!(matches!(future.body, RecordBody::Unknown(_)));
         assert_eq!(vote.body, RecordBody::Vote { poll_id: "p".into(), choice: 0 });
     }
 
     #[test]
     fn a_record_kind_this_version_doesnt_know_fills_its_number_and_never_counts() {
-        let Message::Record(payee) = decode_batch(FROM_A_NEWER_VERSION.as_bytes()).unwrap().remove(0) else {
+        let Message::Record(future) = decode_batch(FROM_A_NEWER_VERSION.as_bytes()).unwrap().remove(0) else {
             panic!()
         };
-        assert!(payee.check().is_err());
+        assert!(future.check().is_err());
         let mut log = GroupLog::default();
         log.insert("alice", rec(2, 20, poll("p", 20, 1_000)));
-        log.insert("alice", payee.clone());
+        log.insert("alice", future.clone());
         assert_eq!(log.have().get("alice"), Some(&2), "no gap left to ask for again");
         assert_eq!(polls(G, &log, &members(), 2, "bob", 500).len(), 1);
 
@@ -555,8 +555,8 @@ mod tests {
     #[test]
     fn an_oversized_record_is_kept_without_its_contents() {
         let mut big = serde_json::Map::new();
-        big.insert("kind".into(), "payee".into());
-        big.insert("name".into(), "x".repeat(MAX_RECORD_BYTES).into());
+        big.insert("kind".into(), "from_the_future".into());
+        big.insert("what".into(), "x".repeat(MAX_RECORD_BYTES).into());
         let kept = rec(5, 50, RecordBody::Unknown(big)).bounded();
         assert_eq!((kept.seq, kept.at), (5, 50));
         assert_eq!(kept.body, RecordBody::Unknown(serde_json::Map::new()));
