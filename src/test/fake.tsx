@@ -78,6 +78,8 @@ const defaults: Record<string, Handler> = {
   record_activity: () => null,
   notify: () => null,
   tor_status: () => ({ state: "off", error: null }),
+  list_polls: () => [],
+  community_votes: () => ({ open: [], recent: [] }),
 };
 
 /** Install the fake backend, with `overrides` replacing default commands. */

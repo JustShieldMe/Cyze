@@ -52,6 +52,12 @@ export default function CeremonyListener() {
     queryClient.invalidateQueries({ queryKey: ["backup-status"] });
   });
 
+  // Group polls arrived or changed (commands/polls.rs).
+  useTauriEvent<{ group_id: string; new_polls: number }>("polls:updated", ({ new_polls }) => {
+    queryClient.invalidateQueries({ queryKey: ["polls"] });
+    if (new_polls > 0) notifyIfAway("A new poll in one of your groups.");
+  });
+
   useTauriEvent<CeremonyEventPayload>("dkg:progress", (p) => onProgress("dkg", p));
   useTauriEvent<CeremonyEventPayload>("dkg:complete", (p) => {
     onComplete("dkg", p);

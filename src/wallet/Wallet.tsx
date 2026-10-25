@@ -11,10 +11,8 @@ import {
   walletPrepareMove,
   walletPrepareSend,
   walletPrepareSendMax,
-  walletPrepareVote,
   walletSend,
   resolveZnsName,
-  type VoteInput,
   type ZnsResolution,
   AppError,
   DraftTransaction,
@@ -30,7 +28,6 @@ import { ReviewNotesTab } from "./Notes";
 import { ViewingKeyCallout } from "./Privacy";
 import { ReceiveShieldCard } from "./Receive";
 import { SendSessionPanel } from "./SendProgress";
-import { VoteTab } from "./Vote";
 import { ADDRESS_PLACEHOLDER, checkRecipient } from "./address";
 import { SEND_MAX_SCAN_LAG, SyncErrorView, zec } from "./common";
 
@@ -38,13 +35,13 @@ import { SEND_MAX_SCAN_LAG, SyncErrorView, zec } from "./common";
  *  moving legacy funds): generous for up to ~20 inputs. */
 const SELF_SEND_FEE_BUFFER = 100_000;
 
-type Panel = "receive" | "send" | "notes" | "vote";
+type Panel = "receive" | "send" | "notes";
 
 /** What a prepared transaction is for, which changes how it's reviewed:
  *  "max" pays everything spendable; "migration" moves old-pool Orchard funds
  *  into Ironwood; "move" empties the group's old (publicly viewable) address
  *  into its private one. */
-type DraftKind = "payment" | "max" | "consolidation" | "migration" | "move" | "vote";
+type DraftKind = "payment" | "max" | "consolidation" | "migration" | "move";
 
 /** A group's Zcash wallet: balance, receive, send, and activity. Shown on Home
  *  for the active wallet. */
@@ -131,21 +128,6 @@ export function GroupWallet({ group, network }: { group: GroupSummary; network: 
     mutationFn: () => walletPrepareMove(group.id),
     onSuccess: (d) => review(d, "move"),
     onError: (e) => setErr((e as unknown as AppError).message ?? String(e)),
-  });
-
-  // A coinholder-poll vote is a shielded send to the poll's address carrying
-  // the encoded answers; the backend validates and encodes them.
-  const prepareVote = useMutation({
-    mutationFn: (v: { receptionAddress: string; ballotJson: string; votes: VoteInput[]; amountZatoshis: number }) =>
-      walletPrepareVote({
-        group_id: group.id,
-        reception_address: v.receptionAddress,
-        ballot_json: v.ballotJson,
-        votes: v.votes,
-        amount_zatoshis: v.amountZatoshis,
-      }),
-    onSuccess: (d) => review(d, "vote"),
-    onError: (e) => setErr((e as unknown as AppError).message),
   });
 
   // The active send lives in the persisted ceremony store, so it survives
@@ -238,9 +220,6 @@ export function GroupWallet({ group, network }: { group: GroupSummary; network: 
               <button className="link-button" onClick={() => toggle("notes")}>
                 Notes
               </button>
-              <button className="link-button" onClick={() => toggle("vote")}>
-                Vote
-              </button>
             </>
           )}
         </div>
@@ -313,19 +292,6 @@ export function GroupWallet({ group, network }: { group: GroupSummary; network: 
                 ? "Balance too low to consolidate."
                 : null
           }
-        />
-      ) : panel === "vote" && advanced ? (
-        <VoteTab
-          network={network}
-          disabledReason={
-            sendInProgress
-              ? "A payment is already in progress."
-              : spendable <= 0
-                ? "The group needs a spendable balance to vote."
-                : null
-          }
-          pending={prepareVote.isPending}
-          onCastVote={(v) => prepareVote.mutate(v)}
         />
       ) : null}
     </>
@@ -571,7 +537,6 @@ function ReviewSend({
     consolidation: "Review: combine notes",
     migration: "Review: move funds",
     move: "Review: move to the private address",
-    vote: "Review vote",
   }[kind];
   const u = unit(network);
 
@@ -586,11 +551,6 @@ function ReviewSend({
       {kind === "move" && (
         <p className="dim">
           Moves everything at the group's old address to its new, private one. The fee comes out of the amount.
-        </p>
-      )}
-      {kind === "vote" && (
-        <p className="dim">
-          Sends your answers to the poll. Your vote counts the balance at the poll's snapshot, not this amount.
         </p>
       )}
       <table className="participants">

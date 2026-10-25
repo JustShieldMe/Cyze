@@ -2250,54 +2250,6 @@ fn draft_from_proposal(
     })
 }
 
-/// Build an unsigned coinholder-poll **vote** as a draft transaction: a shielded
-/// payment carrying the encoded Vote Cast Memo to the poll's reception Z-address.
-/// Returns the same [`DraftTransaction`] a normal send does, so the existing
-/// FROST signing + broadcast path casts the vote unchanged.
-///
-/// `ballot_definition` is the poll's ballot bytes *exactly as published* (hashed
-/// for the memo's `poll-hash`); `question_shapes` describes each question so the
-/// votes can be validated; `votes` is one [`VoteEntry`] per question. The vote is
-/// validated before anything is built — an invalid memo is counted as all-abstain
-/// on-chain, so it must never be cast.
-///
-/// `amount_zatoshis` is the value delivered to the reception address alongside
-/// the memo. Vote **weight** is derived by the poll's tally from a shielded
-/// balance snapshot, *not* from this amount, so callers pass the minimum the poll
-/// requires (often a dust amount) rather than staking real value here. The group
-/// must simply hold its balance through the poll's snapshot window to be counted.
-#[allow(clippy::too_many_arguments)]
-pub async fn prepare_vote(
-    data_dir: &Path,
-    wallet_id: &str,
-    network: WalletNetwork,
-    reception_address: &str,
-    ballot_definition: &[u8],
-    question_shapes: &[crate::voting::QuestionShape],
-    votes: &[crate::voting::VoteEntry],
-    amount_zatoshis: u64,
-    lightwalletd_url: &str,
-    db_key: &[u8],
-) -> Result<DraftTransaction, CoreError> {
-    // Validate + encode before touching the wallet or network: a malformed vote
-    // must never be broadcast (it would be tallied as all-abstain).
-    crate::voting::validate_votes(votes, question_shapes)?;
-    let poll_hash = crate::voting::poll_hash(ballot_definition);
-    let memo = crate::voting::encode_vote_memo(&poll_hash, votes)?;
-
-    prepare_send(
-        data_dir,
-        wallet_id,
-        network,
-        reception_address,
-        amount_zatoshis,
-        Some(memo),
-        lightwalletd_url,
-        db_key,
-    )
-    .await
-}
-
 /// How many blocks the wallet's scan may trail the live chain tip and still
 /// build a transaction. Auto-sync keeps an open wallet within a block of the
 /// tip; this leaves room for blocks mined since the last scan.

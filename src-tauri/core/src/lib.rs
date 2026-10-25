@@ -7,6 +7,7 @@
 
 pub mod backup;
 pub mod ciphersuite;
+pub mod community_vote;
 pub mod config;
 pub mod dkg;
 pub mod error;
@@ -14,6 +15,7 @@ pub mod events;
 pub mod invite;
 pub mod keystore;
 pub mod neterr;
+pub mod polls;
 pub mod redact;
 pub mod safety;
 pub mod sealed;
@@ -21,7 +23,6 @@ pub mod signing;
 pub mod tls;
 pub mod transport;
 pub mod viewing;
-pub mod voting;
 pub mod zns;
 #[cfg(feature = "zcash")]
 pub mod zcash;

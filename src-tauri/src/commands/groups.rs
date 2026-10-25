@@ -51,6 +51,7 @@ pub async fn group_orchard_keys(
 
 #[tauri::command]
 pub async fn remove_group(state: State<'_, AppState>, id: String) -> AppResult<()> {
+    let _ = crate::commands::polls::forget(&state, &id).await;
     state
         .mutate_keystore(|config, extras| {
             extras.viewing_seeds.remove(&id);

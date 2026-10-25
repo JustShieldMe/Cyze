@@ -143,6 +143,18 @@ current build depends on them.
       That de-risks the one genuinely novel part (threshold signing into their
       prover) cheaply. Own branch, own PR; larger effort than any current item.
 
+      **Built (2026-10-25):** the Votes screen reads rounds and results from the
+      live configs (`core/src/community_vote.rs`; production for mainnet,
+      staging for testnet) and "Decide together" turns proposals into group
+      polls. **Still to build: casting** (delegation via the Keystone path with a
+      FROST signature, co-signer verification of the governance PCZT, the
+      voting hotkey in the keystore, ZKP2 casting and share tracking), to be
+      tested against a staging round on testnet with a group holding notes at
+      its snapshot. Staging rounds open irregularly (the last was created
+      2026-10-16); `GET /shielded-vote/v1/rounds` lists them with their status
+      (1 active, 2 tallying, 3 finalized, 4 pending, 5 failed). Tallies are in
+      ballots of 0.125 ZEC.
+
       **Spike findings (2026-10-24):**
       - **The crates fit.** `zcash_voting =5.2.0-rc.2` and `pir-client =0.9.0`
         build in Cyze's tree. They're on the same Zakura 4.0 family

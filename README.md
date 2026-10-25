@@ -42,10 +42,18 @@ authorize any spend.
   run against a local regtest devnet
   ([thus-spoke-zakura](https://github.com/zcashlabs/thus-spoke-zakura)), found
   with one click, for Zcash protocol and app development with throwaway funds.
-- **Coinholder voting** — cast a Zcash coinholder-poll vote from a group: paste
-  the poll's published ballot, answer, and the vote is delivered as a shielded
-  memo (Vote Cast Memo v1) to the poll's reception address through the same FROST
-  signing path. Vote weight is set by the poll's balance snapshot, not the wallet.
+- **Group polls** — any member asks the group a question, every member answers
+  for themselves and can change their answer until it closes, and an option
+  counts as agreed once as many members back it as the group needs to approve
+  a payment. Polls travel end-to-end encrypted through the group's coordination
+  server, nothing goes on chain, and each member only ever sends records they
+  wrote, so no one can forge another's vote.
+- **Zcash community votes** — see the coinholder votes run through
+  [Shielded Vote](https://valargroup.gitbook.io/shielded-vote-docs) (production
+  rounds on mainnet, staging on testnet): what's open, each proposal, and recent
+  results. **Decide together** turns a round's proposals into group polls.
+  Casting the group's vote with its balance comes once it's been tested on a
+  live round (see TODO.md).
 - **ZcashNames (ZNS)** — on testnet, send to a human-readable `name.zcash` in
   the recipient field: it is resolved to a unified address via the public ZNS
   indexer and shown for you to confirm before signing (the resolver is external,

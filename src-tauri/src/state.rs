@@ -106,7 +106,7 @@ pub struct Settings {
     pub active_group_id: Option<String>,
     /// Show developer and expert options: test networks and the local devnet,
     /// the diagnostics log, the Ed25519 ciphersuite, raw-message signing, and
-    /// coinholder voting. Off by default so the everyday screens stay focused
+    /// and the notes view. Off by default so the everyday screens stay focused
     /// on the mainnet wallet.
     #[serde(default)]
     pub advanced_mode: Option<bool>,
@@ -238,6 +238,13 @@ pub struct AppState {
     /// `as_str`), when the user hasn't chosen one. See
     /// `commands::wallet::pick_server`.
     pub auto_lightwalletd: std::sync::Mutex<HashMap<&'static str, frost_app_core::wallet::ServerProbe>>,
+    /// Group-poll sessions this app has read (see `commands::polls`), so the
+    /// request poll stops offering them while the server still keeps them.
+    pub group_message_sessions: std::sync::Mutex<std::collections::HashSet<Uuid>>,
+    /// Serializes read-modify-write cycles of the group polls.
+    pub(crate) polls_lock: Mutex<()>,
+    /// The last Zcash community votes read, with when and for which network.
+    pub community_votes: Mutex<Option<(std::time::Instant, String, frost_app_core::community_vote::CommunityVotes)>>,
     /// Serializes read-modify-write cycles of the private settings.
     pub(crate) private_lock: Mutex<()>,
 }
@@ -302,6 +309,9 @@ impl AppState {
             viewing_key_runs: Default::default(),
             viewing_key_sessions: Default::default(),
             auto_lightwalletd: Default::default(),
+            group_message_sessions: Default::default(),
+            polls_lock: Mutex::new(()),
+            community_votes: Mutex::new(None),
             private_lock: Mutex::new(()),
         }
     }
