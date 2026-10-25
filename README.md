@@ -164,6 +164,9 @@ step-by-step guide covering security setup, contacts, hosting/joining a server,
 the DKG ceremony, building and approving transactions, and configuration. Follow
 it in order to fully test and vet the application.
 
+**🗳️ [Voting in Cyze](docs/VOTING.md)**: group polls and Zcash community
+votes, step by step.
+
 ## Building
 
 Prerequisites:
