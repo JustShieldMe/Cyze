@@ -8,10 +8,11 @@
 //! B: the fork is below the wallet's start. The background service rebuilds
 //!    the wallet from an earlier height and syncs again.
 //!
-//! Needs thus-spoke-zakura 0.3.x; ignored by default (see devnet_send.rs):
+//! Needs thus-spoke-zakura 0.3.x (NU6.3) or 0.4.x (NU7, with
+//! `CYZE_DEVNET_UPGRADE=nu7`); ignored by default (see devnet_send.rs):
 //!
 //! ```sh
-//! CYZE_DEVNET=cyze-e2e cargo test -p frost-app --test devnet_reorg -- --ignored --nocapture
+//! CYZE_DEVNET=cyze-nu7 CYZE_DEVNET_UPGRADE=nu7 cargo test --release -p frost-app --test devnet_reorg -- --ignored --nocapture
 //! ```
 
 mod common;
@@ -70,8 +71,9 @@ fn tip() -> u64 {
 fn reorg_from(height: u64, blocks: u32) {
     let hash = rpc("getblockhash", serde_json::json!([height]));
     rpc("invalidateblock", serde_json::json!([hash]));
-    // The devnet's own dashboard wallet may fail to follow the reorg; the
-    // blocks are mined regardless, which is all this needs.
+    // On thus-spoke-zakura 0.3, the devnet's own dashboard wallet failed to
+    // follow this reorg and `ths mine` exited non-zero, though the blocks were
+    // mined, which is all this needs. 0.4 follows it.
     let out = std::process::Command::new("ths")
         .args(["mine", &blocks.to_string(), "--name", &devnet()])
         .output()
