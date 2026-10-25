@@ -9,10 +9,12 @@ import {
   signingRequests,
   respondToSigning,
   AppError,
+  ApprovalWindow,
 } from "../ipc/commands";
 import { useCeremonies } from "../stores/ceremonies";
 import { asNetwork, networkLabel, unit } from "../network";
 import { resolveParticipant } from "../lib/participants";
+import { clock, useNow } from "../lib/time";
 
 /** Signer-side ceremony phases, as a human would say them. */
 const SIGNER_PHASES: Record<string, string> = {
@@ -70,7 +72,14 @@ function formatZec(zatoshis: number, network: string): string {
   })} ${unit(asNetwork(network))}`;
 }
 
-function ApproveReject({ ceremonyId }: { ceremonyId: string }) {
+/** Whether a request's transaction can no longer be sent, by the approver's
+ *  own sync server (at verification) and the clock since. */
+function hasExpired(approval: ApprovalWindow | null | undefined, now: number): boolean {
+  if (!approval) return false;
+  return approval.blocks_left === 0 || (approval.closes_at_ms !== null && now >= approval.closes_at_ms);
+}
+
+function ApproveReject({ ceremonyId, expired = false }: { ceremonyId: string; expired?: boolean }) {
   const [error, setError] = useState<string | null>(null);
   const respond = async (approve: boolean) => {
     setError(null);
@@ -82,12 +91,23 @@ function ApproveReject({ ceremonyId }: { ceremonyId: string }) {
   };
   return (
     <>
-      <div className="row" style={{ marginTop: 12 }}>
-        <button onClick={() => respond(true)}>Approve and sign</button>
-        <button className="danger" onClick={() => respond(false)}>
-          Reject
-        </button>
-      </div>
+      {expired ? (
+        <>
+          <p className="dim mt-3">This request expired before it was approved. Nothing was signed.</p>
+          <div className="row">
+            <button className="secondary" onClick={() => respond(false)}>
+              Dismiss
+            </button>
+          </div>
+        </>
+      ) : (
+        <div className="row mt-3">
+          <button onClick={() => respond(true)}>Approve and sign</button>
+          <button className="danger" onClick={() => respond(false)}>
+            Reject
+          </button>
+        </div>
+      )}
       {error && <div className="error">{error}</div>}
     </>
   );
@@ -98,18 +118,21 @@ function VerifiedSummary({
   network,
   noteIndex,
   noteTotal,
+  closesAt,
 }: {
   tx: VerifiedTransaction;
   network: string;
   noteIndex?: number;
   noteTotal?: number;
+  /** When approvals are needed by, if this device's sync server could say. */
+  closesAt?: number | null;
 }) {
   return (
     <>
-      <p className="ok" style={{ fontWeight: 600, marginBottom: 4 }}>
+      <p className="ok bold mb-1">
         ✓ Verified: this is exactly what your signature would authorize
       </p>
-      <table className="kv" style={{ width: "100%", marginTop: 4 }}>
+      <table className="kv w-full mt-1">
         <tbody>
           {tx.payments.length === 0 && (
             <tr>
@@ -125,19 +148,19 @@ function VerifiedSummary({
             <tr key={i}>
               <td className="dim">Pays</td>
               <td>
-                <div style={{ fontWeight: 600 }}>
+                <div className="bold">
                   {formatZec(p.value_zatoshis, network)}
                   {p.transparent && (
-                    <span className="badge" style={{ color: "#f4b728", marginLeft: 8 }}>
+                    <span className="badge accent ml-2">
                       Public (transparent)
                     </span>
                   )}
                 </div>
-                <div className="mono" style={{ wordBreak: "break-all", fontSize: 12 }}>
+                <div className="mono break-all text-sm">
                   {p.address}
                 </div>
                 {p.memo && (
-                  <div style={{ fontStyle: "italic", wordBreak: "break-word", marginTop: 2 }}>
+                  <div className="italic break-word mt-1">
                     “{p.memo}”
                   </div>
                 )}
@@ -156,10 +179,16 @@ function VerifiedSummary({
             <td className="dim">Network</td>
             <td>{networkLabel(asNetwork(network))}</td>
           </tr>
+          {closesAt && (
+            <tr>
+              <td className="dim">Approve by</td>
+              <td>About {clock(closesAt)}</td>
+            </tr>
+          )}
         </tbody>
       </table>
       {(noteTotal ?? 1) > 1 && (
-        <p className="dim" style={{ fontSize: 12, marginTop: 6 }}>
+        <p className="dim text-sm mt-2">
           This transaction spends {noteTotal} notes, signed one at a time (this is note{" "}
           {noteIndex}). Approve once: the others are approved automatically after
           they verify as the same transaction.
@@ -181,6 +210,7 @@ export default function Inbox() {
   });
 
   const [error, setError] = useState<string | null>(null);
+  const now = useNow(30_000);
 
   // Listeners are mounted globally in CeremonyListener; just read the store.
   // Requests are usually joined automatically (see useAutoJoin in App.tsx).
@@ -223,6 +253,7 @@ export default function Inbox() {
           const context = detail.context as SigningContext | undefined;
           const network = context?.network ?? "main";
           const verified = detail.verified as VerifiedTransaction | undefined;
+          const approval = detail.window as ApprovalWindow | null | undefined;
           const refused = detail.refused as string | undefined;
           const autoApproved = detail.auto_approved === true;
           const messageHex = detail.message_hex as string | undefined;
@@ -231,7 +262,7 @@ export default function Inbox() {
             s.matching_groups.length === 1 ? groups.data?.find((g) => g.id === s.matching_groups[0]) : undefined;
           return (
             <div className="card" key={s.session_id}>
-              <h3 style={{ margin: 0 }}>
+              <h3 className="m-0">
                 {from} asks to approve
                 {group
                   ? group.ciphersuite.includes("Pallas")
@@ -242,14 +273,14 @@ export default function Inbox() {
 
               {!ceremony &&
                 (s.matching_groups.length === 1 ? (
-                  <div className="row" style={{ marginTop: 10 }}>
+                  <div className="row mt-3">
                     <button onClick={() => join(s.session_id, s.matching_groups[0])}>Review request</button>
                   </div>
                 ) : s.matching_groups.length ? (
                   s.matching_groups.map((gid) => {
                     const g = groups.data?.find((x) => x.id === gid);
                     return (
-                      <div className="row" key={gid} style={{ marginTop: 10 }}>
+                      <div className="row mt-3" key={gid}>
                         <span className="dim">{g?.description || gid.slice(0, 16)}</span>
                         <button onClick={() => join(s.session_id, gid)}>Open with this group</button>
                       </div>
@@ -266,7 +297,7 @@ export default function Inbox() {
               )}
 
               {refused ? (
-                <div className="callout warn" style={{ marginTop: 10 }}>
+                <div className="callout warn mt-3">
                   <span>
                     <strong>Refused automatically. Nothing was signed.</strong>
                     <br />
@@ -274,32 +305,33 @@ export default function Inbox() {
                   </span>
                 </div>
               ) : awaiting && ceremonyId && autoApproved ? (
-                <p className="ok" style={{ marginTop: 10 }}>
+                <p className="ok mt-3">
                   ✓ Approved automatically: another note of a transaction you already
                   approved, verified as the same transaction.
                 </p>
               ) : awaiting && ceremonyId && verified ? (
-                <div style={{ marginTop: 10 }}>
+                <div className="mt-3">
                   <VerifiedSummary
                     tx={verified}
                     network={network}
                     noteIndex={context?.spend_index}
                     noteTotal={context?.spend_total}
+                    closesAt={approval?.closes_at_ms}
                   />
-                  <ApproveReject ceremonyId={ceremonyId} />
+                  <ApproveReject ceremonyId={ceremonyId} expired={hasExpired(approval, now)} />
                 </div>
               ) : awaiting && ceremonyId && messageHex ? (
-                <div style={{ marginTop: 10 }}>
-                  <p className="error" style={{ fontWeight: 600 }}>
+                <div className="mt-3">
+                  <p className="error bold">
                     Raw message: there is no transaction to check what this signs.
                   </p>
-                  <p className="dim" style={{ fontSize: 12 }}>
+                  <p className="dim text-sm">
                     Only approve if you trust the coordinator and know exactly what this
                     message is for.
                   </p>
-                  <label style={{ marginTop: 6 }}>Message (hex)</label>
-                  <div className="mono" style={{ wordBreak: "break-all" }}>{messageHex}</div>
-                  <label style={{ marginTop: 8 }}>Message (as UTF-8)</label>
+                  <label className="mt-2">Message (hex)</label>
+                  <div className="mono break-all">{messageHex}</div>
+                  <label className="mt-2">Message (as UTF-8)</label>
                   <div className="mono">{hexToUtf8(messageHex)}</div>
                   <ApproveReject ceremonyId={ceremonyId} />
                 </div>

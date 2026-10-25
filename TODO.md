@@ -187,10 +187,10 @@ current build depends on them.
 
 ## Wallet (Zcash)
 
-- [ ] **Auto-sync polish** — auto-sync runs every 10s (see `GroupWallet` in
-      `src/screens/Groups.tsx`), and a manual **Sync Now** button sits in the
-      sync box because auto-sync can still lag or stall. Once auto-sync is proven
-      reliable in the field, reconsider whether the manual button is still needed.
+- [x] **Auto-sync polish** — the backend sync service keeps the active wallet
+      current, so Home no longer shows a permanent **Sync Now**: it offers
+      **Retry now** after a failed sync and **Restart** after a minute without
+      progress (`useSyncStalled` in `src/wallet/Wallet.tsx`).
 - [x] **Send history (client-side)** — the "Transaction history" panel
       (`SendHistory` in `src/screens/Groups.tsx`) now lists this device's past
       send ceremonies from the persisted store (time, amount, recipient, status
@@ -225,11 +225,14 @@ current build depends on them.
       device's member; the Sign button is gated on `>= threshold`. The chosen
       pubkeys flow through `wallet_send` unchanged (backend already accepted an
       arbitrary signer list).
-- [ ] **Longer expiry window** — `prepare_send` now anchors the tx expiry to the
-      live chain tip, but `propose_standard_transfer_to_address` bakes in the
-      default ~40-block delta (≈50 min on testnet). A slow multi-party ceremony
-      can still exceed it. `zcash_client_backend` exposes no expiry knob and the
-      pczt `Updater` has no `set_expiry_height`, so a longer/zero expiry needs
-      either an upstream API or writing the PCZT global directly. NB: bumping the
-      wallet's chain tip past reality is NOT a workaround — it makes `sync::run`
-      try to fetch non-existent blocks and fail.
+- [x] **Slow approvals** — decided (2026-10-25) to keep the standard expiry
+      (~50 minutes, both before and after NU7) rather than lengthen it. Zakura's
+      `create_pczt_from_proposal` now takes an expiry override, but the expiry
+      height is public and a longer one would single out Cyze's payments
+      on-chain. Instead: `wallet::ApprovalWindow` gives the deadline to the
+      sender (Review, then "needed by about 3:42 PM") and to approvers (from
+      their own sync server's tip); the send stops when the chain gets within
+      `EXPIRING_SOON_BLOCKS` of the expiry, not on a fixed timer; an expired
+      send offers **Ask again** (built afresh, same members), and a signed one
+      that failed to broadcast offers **Try sending again** (`wallet_rebroadcast`).
+      Sends cut off by a lock or restart are marked as such on unlock.

@@ -29,23 +29,15 @@ export function ReceiveShieldCard({ groupId, fallback }: { groupId: string; fall
   if (!address) return null;
   return (
     <div className="card panel">
-      <h3 style={{ marginTop: 0 }}>Receive</h3>
-      <p className="dim" style={{ marginTop: 0 }}>Anyone can pay the group at this address.</p>
-      <div className="row" style={{ gap: 16, alignItems: "flex-start", flexWrap: "wrap" }}>
+      <h3 className="mt-0">Receive</h3>
+      <p className="dim mt-0">Anyone can pay the group at this address.</p>
+      <div className="row gap-4 items-start wrap">
         {/* Scan target for a mobile wallet. The QR always renders dark-on-white
             regardless of the app theme — inverted codes fail on many scanners —
             and carries a 4-module quiet zone as the spec requires. It re-encodes
             automatically when the address rotates. */}
-        <div style={{ flex: "0 0 auto" }}>
-          <div
-            style={{
-              background: "#ffffff",
-              padding: 8,
-              borderRadius: 8,
-              lineHeight: 0,
-              border: "1px solid var(--border)",
-            }}
-          >
+        <div className="flex-none">
+          <div className="qr-frame">
             {/* A unified address is ~215 bytes, so this encodes at roughly QR
                 version 11 (61x61 modules). Sized so each module stays wide
                 enough (~2.6px) for a phone camera to resolve. */}
@@ -60,18 +52,17 @@ export function ReceiveShieldCard({ groupId, fallback }: { groupId: string; fall
             />
           </div>
           <p
-            className="dim"
-            style={{ fontSize: 11, margin: "6px 0 0", textAlign: "center" }}
+            className="dim text-xs m-0 mt-2 text-center"
           >
             Scan to send from a phone
           </p>
         </div>
 
-        <div style={{ flex: "1 1 260px", minWidth: 0 }}>
-          <div className="mono" style={{ wordBreak: "break-all" }}>
+        <div className="receive-details">
+          <div className="mono break-all">
             {address}
           </div>
-          <div className="row" style={{ gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+          <div className="row gap-2 mt-2 wrap">
             <button
               className="secondary"
               onClick={async () => {
@@ -92,7 +83,7 @@ export function ReceiveShieldCard({ groupId, fallback }: { groupId: string; fall
           </div>
         </div>
       </div>
-      <p className="dim" style={{ fontSize: 12, marginTop: 8 }}>
+      <p className="dim text-sm mt-2">
         Once this address is paid the next payment gets a new one, so payments
         can't be linked to each other.
       </p>

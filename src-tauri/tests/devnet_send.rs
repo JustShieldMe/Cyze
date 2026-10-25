@@ -255,6 +255,12 @@ async fn send_with_bobs_approval(p: &common::Pair, args: commands::wallet::Walle
                     assert_eq!(payments[0]["value_zatoshis"].as_u64().unwrap(), spent - fee);
                 }
             }
+            // Bob sees how long is left, from his own view of the chain: the
+            // standard window, open, and counted in blocks on a devnet.
+            let window = &event["window"];
+            assert_eq!(window["expiry_height"], verified["expiry_height"], "{event}");
+            assert!(window["blocks_left"].as_u64().unwrap() > 0, "{window}");
+            assert!(window["closes_at_ms"].is_null(), "{window}");
             if event["auto_approved"] != true {
                 commands::signing::respond_to_signing(bob.clone(), ceremony.parse().unwrap(), true)
                     .await

@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import { fireEvent, waitFor } from "@testing-library/react";
-import { ALICE, fakeBackend, GROUP_ID, ME, renderApp } from "./fake";
+import { emit } from "@tauri-apps/api/event";
+import { ALICE, fakeBackend, GROUP_ID, ME, renderApp, started } from "./fake";
 
 const PAYEE = "u1payee0example0address0000000000000000000000000000000000000000";
 
@@ -15,8 +16,9 @@ test("a payment is entered, reviewed, and sent for approval", async () => {
       recipient,
       memo,
       is_unshield: false,
+      approval_window: { expiry_height: 3_500_040, blocks_left: 37, closes_at_ms: Date.now() + 46 * 60_000 },
     }),
-    wallet_send: () => "send-1",
+    wallet_send: () => started("send-1"),
   });
   const ui = await renderApp("/");
 
@@ -38,6 +40,7 @@ test("a payment is entered, reviewed, and sent for approval", async () => {
   await ui.findByRole("checkbox", { name: /me \(You\)/, checked: true });
   fireEvent.click(ui.getByRole("checkbox", { name: /Alice/ }));
   expect(request.disabled).toBe(true);
+  expect(ui.getByText("They'll have about 46 minutes to approve.")).toBeTruthy();
   fireEvent.click(ui.getByRole("checkbox", { name: /The recipient is correct/ }));
   expect(request.disabled).toBe(false);
   fireEvent.click(request);
@@ -83,7 +86,7 @@ test("Send all pays everything, with the fee coming out of it", async () => {
       memo,
       is_unshield: false,
     }),
-    wallet_send: () => "send-3",
+    wallet_send: () => started("send-3"),
   });
   const ui = await renderApp("/");
   await ui.findByText("12.345");
@@ -132,4 +135,72 @@ test("an approver ticked before your identity loads stays ticked", async () => {
   fireEvent.click(ui.getByRole("checkbox", { name: /Alice/ }));
   await ui.findByRole("checkbox", { name: /me \(You\)/, checked: true });
   expect((ui.getByRole("checkbox", { name: /Alice/ }) as HTMLInputElement).checked).toBe(true);
+});
+
+/** Enter a 1 ZEC payment, approved by you and Alice, and request approvals. */
+async function requestPayment(ui: Awaited<ReturnType<typeof renderApp>>) {
+  await ui.findByText("12.345");
+  fireEvent.click(ui.getByRole("button", { name: "Send" }));
+  fireEvent.change(ui.getByPlaceholderText(/u1… address/), { target: { value: PAYEE } });
+  fireEvent.change(ui.getByPlaceholderText("0.00"), { target: { value: "1" } });
+  fireEvent.click(ui.getByRole("button", { name: "Review payment" }));
+  await ui.findByRole("checkbox", { name: /me \(You\)/, checked: true });
+  fireEvent.click(ui.getByRole("checkbox", { name: /Alice/ }));
+  fireEvent.click(ui.getByRole("checkbox", { name: /The recipient is correct/ }));
+  fireEvent.click(ui.getByRole("button", { name: "Request approvals" }));
+  await ui.findByText("Payment in progress");
+}
+
+const draft = ({ recipient, amountZatoshis }: Record<string, unknown>) => ({
+  pczt_hex: "00",
+  sighash_hex: "9f".repeat(32),
+  spends: [{ pool: "ironwood", index: 0, alpha_hex: "00" }],
+  fee_zatoshis: 15_000,
+  amount_zatoshis: amountZatoshis,
+  recipient,
+  memo: null,
+  is_unshield: false,
+  approval_window: null,
+});
+
+test("a payment that ran out of time is asked again, built afresh", async () => {
+  const ids = ["send-5", "send-6"];
+  const backend = fakeBackend({ wallet_prepare_send: draft, wallet_send: () => started(ids.shift()!, 100_000_000) });
+  const ui = await renderApp("/");
+  await requestPayment(ui);
+  expect(ui.getByText(/Approvals are needed by about/)).toBeTruthy();
+
+  await emit("send:failed", {
+    ceremony_id: "send-5",
+    error: "Not enough members approved in time, so the payment expired. Nothing was sent.",
+    expired: true,
+  });
+  await ui.findByText("Payment failed");
+  expect(ui.queryByRole("button", { name: "Try sending again" })).toBeNull();
+  fireEvent.click(ui.getByRole("button", { name: "Ask again" }));
+
+  await ui.findByText("Payment in progress");
+  const sends = backend.calls("wallet_send");
+  expect(sends).toHaveLength(2);
+  expect(sends[1]).toEqual(sends[0]);
+  expect(sends[1]).toMatchObject({ args: { recipient: PAYEE, amount_zatoshis: 100_000_000, signers: [ME, ALICE] } });
+});
+
+test("an approved payment that didn't reach the network is sent again without new approvals", async () => {
+  const backend = fakeBackend({
+    wallet_prepare_send: draft,
+    wallet_send: () => started("send-7", 100_000_000),
+    wallet_rebroadcast: () => "ab".repeat(32),
+  });
+  const ui = await renderApp("/");
+  await requestPayment(ui);
+
+  await emit("send:failed", { ceremony_id: "send-7", error: "broadcast: connection refused", retryable: true });
+  await ui.findByText("Payment failed");
+  expect(ui.queryByRole("button", { name: "Ask again" })).toBeNull();
+  fireEvent.click(ui.getByRole("button", { name: "Try sending again" }));
+
+  await ui.findByText("Payment sent");
+  expect(backend.calls("wallet_rebroadcast")).toEqual([{ groupId: GROUP_ID, ceremonyId: "send-7" }]);
+  expect(backend.calls("wallet_send")).toHaveLength(1);
 });

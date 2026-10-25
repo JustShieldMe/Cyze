@@ -68,8 +68,8 @@ export function ViewingKeyCallout({
   if (p && p.state !== "failed") {
     const waiting = p.waiting_for.map(label);
     return (
-      <div className="callout" style={{ marginTop: 12, alignItems: "center" }}>
-        <span style={{ flex: 1 }}>
+      <div className="callout mt-3 items-center">
+        <span className="flex-1">
           <strong>Making this wallet private</strong>
           {p.started_by ? `, as ${label(p.started_by)} asked. ` : ". "}
           {p.state === "connecting"
@@ -87,8 +87,8 @@ export function ViewingKeyCallout({
 
   if (p?.state === "failed") {
     return (
-      <div className="callout warn" style={{ marginTop: 12, alignItems: "center" }}>
-        <span style={{ flex: 1 }}>Couldn't make this wallet private: {p.error}</span>
+      <div className="callout warn mt-3 items-center">
+        <span className="flex-1">Couldn't make this wallet private: {p.error}</span>
         <div className="row">
           <button onClick={() => start.mutate()} disabled={start.isPending}>
             Try again
@@ -103,16 +103,16 @@ export function ViewingKeyCallout({
 
   if (!v.private) {
     return (
-      <div className="callout" style={{ marginTop: 12, display: "block" }}>
-        <div className="row" style={{ alignItems: "center" }}>
-          <span style={{ flex: 1 }}>Anyone who knows this group's ID can see its balance and payments.</span>
+      <div className="callout mt-3 block">
+        <div className="row items-center">
+          <span className="flex-1">Anyone who knows this group's ID can see its balance and payments.</span>
           {!confirming && (
             <button onClick={() => setConfirming(true)}>Make private</button>
           )}
         </div>
         {confirming && (
           <>
-            <p className="dim" style={{ marginBottom: 8 }}>
+            <p className="dim mb-2">
               Every member needs Cyze open while it runs; their apps join by themselves. The wallet then gets a new
               address, and you move its funds there with one payment the group approves.
             </p>
@@ -126,7 +126,7 @@ export function ViewingKeyCallout({
             </div>
           </>
         )}
-        {err && <div className="error" style={{ marginBottom: 0 }}>{err}</div>}
+        {err && <div className="error mb-0">{err}</div>}
       </div>
     );
   }
@@ -136,8 +136,8 @@ export function ViewingKeyCallout({
   const u = unit(network);
   const waitingOnly = old.spendable_zatoshis === 0;
   return (
-    <div className="callout" style={{ marginTop: 12, alignItems: "center" }}>
-      <span style={{ flex: 1 }}>
+    <div className="callout mt-3 items-center">
+      <span className="flex-1">
         {zec(old.total_zatoshis)} {u} is still at the old address, which anyone with the group's ID can see.
         {waitingOnly && " It can move once it has 10 confirmations."}
         {!waitingOnly && !old.synced && " Checking the old address is up to date…"}

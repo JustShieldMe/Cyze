@@ -11,7 +11,6 @@ import {
   walletPrepareMove,
   walletPrepareSend,
   walletPrepareSendMax,
-  walletSend,
   resolveZnsName,
   type ZnsResolution,
   AppError,
@@ -27,13 +26,29 @@ import { WalletTxHistory } from "./Activity";
 import { ReviewNotesTab } from "./Notes";
 import { ViewingKeyCallout } from "./Privacy";
 import { ReceiveShieldCard } from "./Receive";
-import { SendSessionPanel } from "./SendProgress";
+import { requestApprovals, SendSessionPanel } from "./SendProgress";
 import { ADDRESS_PLACEHOLDER, checkRecipient } from "./address";
 import { SEND_MAX_SCAN_LAG, SyncErrorView, zec } from "./common";
 
 /** Fee headroom for self-sends sized to the whole balance (consolidating notes,
  *  moving legacy funds): generous for up to ~20 inputs. */
 const SELF_SEND_FEE_BUFFER = 100_000;
+
+/** How long a running sync can go without scanning a block before the wallet
+ *  offers to restart it. Batches take a few seconds, so this is well past slow. */
+const SYNC_STALL_MS = 60_000;
+
+/** True once a running sync has gone SYNC_STALL_MS without scanning further. */
+function useSyncStalled(running: boolean, scanned: number): boolean {
+  const [stalled, setStalled] = useState(false);
+  useEffect(() => {
+    setStalled(false);
+    if (!running) return;
+    const t = setTimeout(() => setStalled(true), SYNC_STALL_MS);
+    return () => clearTimeout(t);
+  }, [running, scanned]);
+  return stalled;
+}
 
 type Panel = "receive" | "send" | "notes";
 
@@ -93,6 +108,8 @@ export function GroupWallet({ group, network }: { group: GroupSummary; network: 
   // backend re-checks against the live tip when it builds the transaction.
   const caughtUp = tipHeight > 0 && blocksRemaining <= SEND_MAX_SCAN_LAG;
   const catchingUp = sync?.state === "syncing" && blocksRemaining > 0;
+  // The backend syncs by itself, so restarting is only offered when it's stuck.
+  const stalled = useSyncStalled(sync?.state === "syncing", scannedHeight);
 
   const [panel, setPanel] = useState<Panel | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -136,9 +153,11 @@ export function GroupWallet({ group, network }: { group: GroupSummary; network: 
   const activeSend = useCeremonies((s) => selectActiveSend(s, group.id));
   const activeSendId = useCeremonies((s) => s.activeSendByGroup[group.id]);
   const sendInProgress = !!activeSend && !activeSend.done;
+  // A failed payment stays up until dismissed: it may need asking again.
+  const sendNeedsAttention = sendInProgress || !!activeSend?.failed;
 
-  /** "Sync now": restart the backend sync (abandoning a stalled one) and re-read
-   *  every wallet panel. */
+  /** Restart the backend sync (abandoning a stalled one) and re-read every
+   *  wallet panel. */
   const forceSync = useCallback(async () => {
     for (const key of ["wallet-status", "wallet-history", "wallet-notes"]) {
       queryClient.invalidateQueries({ queryKey: [key, group.id] });
@@ -170,7 +189,7 @@ export function GroupWallet({ group, network }: { group: GroupSummary; network: 
             <button onClick={() => forceSync()}>Retry</button>
           </>
         ) : (
-          <p className="dim" style={{ margin: 0 }}>Setting up the wallet…</p>
+          <p className="dim m-0">Setting up the wallet…</p>
         )}
       </div>
     );
@@ -188,7 +207,7 @@ export function GroupWallet({ group, network }: { group: GroupSummary; network: 
               {zec(pool.total_zatoshis)} <span className="balance-unit">{unit(network)}</span>
             </div>
             {pool.pending_zatoshis > 0 && (
-              <div className="dim" style={{ fontSize: 13 }}>
+              <div className="dim text-md">
                 {zec(pool.spendable_zatoshis)} spendable · {zec(pool.pending_zatoshis)} waiting for confirmations
               </div>
             )}
@@ -212,21 +231,21 @@ export function GroupWallet({ group, network }: { group: GroupSummary; network: 
           ) : (
             <>Waiting for the first sync…</>
           )}
-          <button className="link-button" onClick={() => forceSync()}>
-            {catchingUp ? "Restart" : "Sync now"}
-          </button>
+          {(syncErr || stalled) && (
+            <button className="link-button" onClick={() => forceSync()}>
+              {syncErr ? "Retry now" : "Restart"}
+            </button>
+          )}
           {advanced && (
-            <>
-              <button className="link-button" onClick={() => toggle("notes")}>
-                Notes
-              </button>
-            </>
+            <button className="link-button" onClick={() => toggle("notes")}>
+              Notes
+            </button>
           )}
         </div>
         {syncErr && <SyncErrorView text={syncErr} />}
         {livePool === "ironwood" && s.orchard.spendable_zatoshis > SELF_SEND_FEE_BUFFER && !sendInProgress && (
-          <div className="callout" style={{ marginTop: 12, alignItems: "center" }}>
-            <span style={{ flex: 1 }}>
+          <div className="callout mt-3 items-center">
+            <span className="flex-1">
               {zec(s.orchard.spendable_zatoshis)} {unit(network)} is in an older format. Move it so it stays spendable.
             </span>
             <button onClick={() => selfSend.mutate("migration")} disabled={selfSend.isPending}>
@@ -245,7 +264,7 @@ export function GroupWallet({ group, network }: { group: GroupSummary; network: 
 
       {err && <SyncErrorView text={err} />}
 
-      {activeSend && (panel === "send" || sendInProgress) ? (
+      {activeSend && (panel === "send" || sendNeedsAttention) ? (
         <SendSessionPanel
           ceremonyId={activeSendId ?? ""}
           ceremony={activeSend}
@@ -370,7 +389,7 @@ function EnterSend({
 
   return (
     <div className="card panel">
-      <h3 style={{ marginTop: 0 }}>Send</h3>
+      <h3 className="mt-0">Send</h3>
       <label>To</label>
       <input
         type="text"
@@ -378,35 +397,35 @@ function EnterSend({
         value={recipient}
         onChange={(e) => setRecipient(e.target.value)}
       />
-      {check.error && <div className="error" style={{ marginTop: -4 }}>{check.error}</div>}
+      {check.error && <div className="error pull-up">{check.error}</div>}
       {check.transparent && !check.error && (
-        <p className="dim" style={{ marginTop: -4, fontSize: 12 }}>
+        <p className="dim pull-up text-sm">
           A transparent address: the amount and recipient will be public.
         </p>
       )}
       {isName && network === "main" && (
-        <p className="dim" style={{ marginTop: -4, fontSize: 12 }}>
+        <p className="dim pull-up text-sm">
           ZcashNames lookups are off on mainnet until there's a production directory. Paste the address instead.
         </p>
       )}
       {isName && network !== "main" &&
         (zns ? (
-          <div className="callout" style={{ marginBottom: 12, display: "block" }}>
+          <div className="callout mb-3 block">
             <div className="dim">{zns.name}.zcash is this address. Check it before sending:</div>
-            <div className="mono-cell" style={{ wordBreak: "break-all", marginTop: 4 }}>{zns.address}</div>
+            <div className="mono-cell break-all mt-1">{zns.address}</div>
             {zns.listing && (
-              <div className="error" style={{ marginBottom: 0 }}>
+              <div className="error mb-0">
                 This name is for sale, so its owner and address may change.
               </div>
             )}
           </div>
         ) : (
-          <button className="secondary" style={{ marginBottom: 12 }} onClick={() => resolve.mutate()} disabled={resolve.isPending}>
+          <button className="secondary mb-3" onClick={() => resolve.mutate()} disabled={resolve.isPending}>
             {resolve.isPending ? "Looking up…" : "Look up name"}
           </button>
         ))}
 
-      <div className="row" style={{ justifyContent: "space-between" }}>
+      <div className="row between">
         <label>Amount ({unit(network)})</label>
         {spendable > 0 && !all && (
           <button className="link-button" onClick={() => setAll(true)}>
@@ -424,7 +443,7 @@ function EnterSend({
           setAmount(e.target.value);
         }}
       />
-      <p className="dim" style={{ marginTop: -6, fontSize: 12 }}>
+      <p className="dim pull-up text-sm">
         {all
           ? "Everything available. The network fee comes out of it."
           : tooMuch
@@ -446,7 +465,7 @@ function EnterSend({
       )}
 
       {err && <SyncErrorView text={err} />}
-      {blocked && <p className="dim" style={{ fontSize: 12 }}>{blocked}</p>}
+      {blocked && <p className="dim text-sm">{blocked}</p>}
       <button
         onClick={() => prepare.mutate()}
         disabled={
@@ -476,7 +495,6 @@ function ReviewSend({
   onBack: () => void;
   onError: (message: string | null) => void;
 }) {
-  const startSend = useCeremonies((s) => s.startSend);
   const identity = useQuery({ queryKey: ["identity"], queryFn: getIdentity });
   const contacts = useQuery({ queryKey: ["contacts"], queryFn: listContacts });
   const members = useMemo(
@@ -505,18 +523,7 @@ function ReviewSend({
 
   const send = useMutation({
     mutationFn: () =>
-      walletSend({
-        group_id: group.id,
-        recipient: draft.recipient,
-        amount_zatoshis: draft.amount_zatoshis,
-        signers: [...signers],
-        memo: draft.memo ?? null,
-        from_old_address: kind === "move",
-        send_max: kind === "max",
-      }),
-    onSuccess: (id) => {
-      onError(null);
-      startSend(id, {
+      requestApprovals({
         groupId: group.id,
         recipient: draft.recipient,
         amountZatoshis: draft.amount_zatoshis,
@@ -526,10 +533,15 @@ function ReviewSend({
         isUnshield: draft.is_unshield,
         memo: draft.memo ?? undefined,
         signers: [...signers],
-      });
-    },
+        sendMax: kind === "max",
+        fromOldAddress: kind === "move",
+      }),
+    onSuccess: () => onError(null),
     onError: (e) => onError((e as unknown as AppError).message),
   });
+  // Approvers get the standard window every wallet's transactions have.
+  const closesAt = draft.approval_window?.closes_at_ms;
+  const windowMinutes = closesAt ? Math.round((closesAt - Date.now()) / 60_000) : null;
 
   const title = {
     payment: "Review payment",
@@ -542,7 +554,7 @@ function ReviewSend({
 
   return (
     <div className="card panel">
-      <h3 style={{ marginTop: 0 }}>{title}</h3>
+      <h3 className="mt-0">{title}</h3>
       {kind === "migration" && (
         <p className="dim">Sends these funds back to this wallet in the current format.</p>
       )}
@@ -557,7 +569,7 @@ function ReviewSend({
         <tbody>
           <tr>
             <td>To</td>
-            <td className="mono-cell" style={{ wordBreak: "break-all" }}>{kind === "move" ? "This wallet's private address" : selfSend ? "This wallet" : draft.recipient}</td>
+            <td className="mono-cell break-all">{kind === "move" ? "This wallet's private address" : selfSend ? "This wallet" : draft.recipient}</td>
           </tr>
           <tr>
             <td>Amount</td>
@@ -574,20 +586,20 @@ function ReviewSend({
           {draft.memo && (
             <tr>
               <td>Memo</td>
-              <td style={{ wordBreak: "break-word" }}>{draft.memo}</td>
+              <td className="break-word">{draft.memo}</td>
             </tr>
           )}
         </tbody>
       </table>
       {draft.is_unshield && !selfSend && (
-        <p className="dim" style={{ fontSize: 12 }}>To a transparent address: the amount and recipient will be public.</p>
+        <p className="dim text-sm">To a transparent address: the amount and recipient will be public.</p>
       )}
 
-      <label style={{ marginTop: 14 }}>
+      <label className="mt-4">
         Ask to approve ({group.threshold} of {group.num_participants} needed)
       </label>
       {members.map((m) => (
-        <label key={m.pubkey} className="member-pick" style={{ marginBottom: 6 }}>
+        <label key={m.pubkey} className="member-pick mb-2">
           <input
             type="checkbox"
             checked={signers.has(m.pubkey)}
@@ -602,20 +614,25 @@ function ReviewSend({
           <span className="dim code-inline">{m.short}</span>
         </label>
       ))}
-      {signers.size < group.threshold && (
-        <p className="dim" style={{ fontSize: 12 }}>
+      {signers.size < group.threshold ? (
+        <p className="dim text-sm">
           Choose {group.threshold - signers.size} more. Each must be online to approve.
         </p>
+      ) : (
+        windowMinutes !== null &&
+        windowMinutes > 0 && (
+          <p className="dim text-sm">They'll have about {windowMinutes} minutes to approve.</p>
+        )
       )}
 
       {needsCheck && (
-        <label className="row confirm" style={{ alignItems: "flex-start", marginTop: 10 }}>
-          <input type="checkbox" style={{ width: "auto", marginTop: 3 }} checked={checked} onChange={(e) => setChecked(e.target.checked)} />
+        <label className="row confirm items-start mt-3">
+          <input type="checkbox" className="w-auto mt-1" checked={checked} onChange={(e) => setChecked(e.target.checked)} />
           <span>The recipient is correct. A payment can't be undone.</span>
         </label>
       )}
 
-      <div className="row" style={{ marginTop: 12 }}>
+      <div className="row mt-3">
         <button className="secondary" onClick={onBack} disabled={send.isPending}>
           Back
         </button>
@@ -626,13 +643,13 @@ function ReviewSend({
           {send.isPending ? "Starting…" : "Request approvals"}
         </button>
       </div>
-      <details style={{ marginTop: 14 }}>
-        <summary className="dim" style={{ cursor: "pointer", fontSize: 12 }}>Technical details</summary>
+      <details className="mt-4">
+        <summary className="dim clickable text-sm">Technical details</summary>
         <table className="participants">
           <tbody>
             <tr>
               <td>Signature hash</td>
-              <td className="dim mono-cell" style={{ wordBreak: "break-all" }}>{draft.sighash_hex}</td>
+              <td className="dim mono-cell break-all">{draft.sighash_hex}</td>
             </tr>
             <tr>
               <td>Inputs</td>

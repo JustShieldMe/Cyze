@@ -39,6 +39,7 @@
   --gold-faint: #7a5d13;
   --danger: #f87171;
   --ok: #4ade80;
+  --pending: #facc15;
   --mono: 'JetBrains Mono', ui-monospace, 'Courier New', monospace;
   font-family: var(--mono);
   color-scheme: dark;
@@ -336,7 +337,7 @@ td { padding: 8px; border-top: 1px solid var(--border); vertical-align: top; }
   color: var(--text);
 }
 
-.group-pick { transition: border-color 0.12s; }
+.group-pick { display: block; text-decoration: none; color: inherit; transition: border-color 0.12s; }
 .group-pick:hover { border-color: var(--accent); }
 
 /* Wallet: balances left, sync box right */
@@ -760,6 +761,8 @@ button.link-button {
 }
 button.link-button:hover { text-decoration: underline; filter: none; }
 button.link-button.danger-link { color: var(--danger); }
+/* A link inside a sentence takes the sentence's size. */
+button.link-button.inline { font-size: inherit; font-weight: inherit; letter-spacing: inherit; }
 .card.panel { background: var(--bg-card); }
 .safety-check { background: var(--bg-elevated); border-radius: 8px; padding: 12px 14px; margin: 4px 0 8px; }
 .safety-code { font-size: 18px; letter-spacing: 0.08em; color: var(--accent); margin-bottom: 8px; }
@@ -778,13 +781,31 @@ button.link-button.danger-link { color: var(--danger); }
   border: 1px solid var(--border, #1f2a37);
 }
 
-/* Activity: a whole row opens its details. */
-.tx-row {
-  cursor: pointer;
-}
-.tx-row:hover td {
-  background: var(--bg-elevated);
-}
+/* Activity: one line per transaction, cells clipped rather than wrapped; a
+   whole row opens its details. */
+table.tx-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.tx-table col.col-date { width: 24%; }
+.tx-table col.col-type { width: 22%; }
+.tx-table col.col-amount { width: 20%; }
+.tx-table col.col-with { width: 26%; }
+.tx-table col.col-toggle { width: 8%; }
+.tx-table > thead > tr > th { text-align: left; padding-bottom: 6px; font-weight: 500; }
+.tx-table > tbody > tr > td { padding: 3px 0; border-top: none; vertical-align: top; }
+.tx-table .num { text-align: right; padding-right: 12px; }
+.tx-row { cursor: pointer; }
+.tx-row:hover td { background: var(--bg-elevated); }
+.tx-row > td { max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.tx-row > td.tx-with { font-size: 11px; }
+.tx-row > td.tx-toggle-cell { text-align: center; }
+/* Started here and not on-chain yet. */
+.tx-row.pending > td { color: var(--pending); }
+.tx-toggle { padding: 2px 6px; font-size: 11px; line-height: 1; }
+.tx-table > tbody > tr > td.tx-memo-cell { padding: 0 8px 6px; }
+.tx-table > tbody > tr > td.tx-detail-cell { padding: 0 0 12px; background: var(--bg-elevated); }
+.tx-detail { padding: 8px 12px 4px; overflow: hidden; }
+.tx-detail table { width: 100%; font-size: 12px; border-collapse: collapse; }
+.tx-detail td { padding: 3px 0 5px; border-top: none; vertical-align: top; word-break: break-all; overflow-wrap: anywhere; }
+.tx-detail td.tx-detail-label { color: var(--text-dim); white-space: nowrap; padding-right: 12px; width: 120px; word-break: normal; }
 
 /* A copyable value with its button beside it. */
 .key-row {
@@ -851,3 +872,148 @@ button.link-button.danger-link { color: var(--danger); }
 .panel-inset { background: var(--bg-elevated); border-radius: 8px; padding: 12px; margin-top: 8px; }
 .proposal-result { margin: 10px 0; font-size: 13px; }
 .result-row { display: grid; grid-template-columns: minmax(0, 1fr) 40% 3em; gap: 10px; align-items: center; margin-top: 4px; }
+
+/* Connection settings: one card per choice, the chosen one outlined; tabs
+   underline the chosen way of hosting. */
+button.card.option { flex: 1 1 260px; text-align: left; }
+button.card.option.active { border-color: var(--accent); background: var(--bg-elevated); }
+.option-title { font-weight: 600; color: var(--text); }
+.option.active .option-title { color: var(--accent); }
+button.tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: inherit;
+  padding: 6px 12px;
+  font-weight: 400;
+}
+button.tab.active { border-bottom-color: var(--accent); color: var(--accent); font-weight: 600; }
+.address-examples { display: grid; grid-template-columns: auto 1fr; column-gap: 12px; row-gap: 6px; align-items: baseline; }
+
+/* A card set into the one around it. */
+.card.inset { background: var(--bg-elevated); }
+
+/* Plain table headers, and a column set off from the one before it. */
+table.participants th { text-align: left; padding-bottom: 6px; }
+table.participants .gutter { padding-left: 12px; }
+
+/* A section below a rule. */
+.section-rule { border-top: 1px solid var(--border); padding-top: 12px; }
+
+/* Renaming in place: a compact input with small buttons beside it. */
+.inline-edit input { margin: 0; padding: 4px 8px; }
+.inline-edit button { padding: 4px 10px; }
+.inline-edit.title input { flex: 1; font-size: 20px; font-weight: 600; padding: 2px 8px; }
+
+/* A borderless button around a single symbol, e.g. ✏. */
+button.icon-button {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  padding: 2px 7px;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1;
+}
+
+/* A masked secret, as dots. */
+.mono.masked { letter-spacing: 2px; }
+
+/* Receive: the QR code stays black on white whatever the theme (inverted codes
+   fail on many scanners); the address and its actions sit beside it. */
+.qr-frame { background: #ffffff; padding: 8px; border-radius: 8px; line-height: 0; border: 1px solid var(--border); }
+.receive-details { flex: 1 1 260px; min-width: 0; }
+
+/* Diagnostics log: a scrolling, wrapped view of recent lines. */
+.log-view {
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px;
+}
+
+/* ── Utilities ─────────────────────────────────────────────
+   Small, single-purpose adjustments in place of inline styles, on one spacing
+   scale: --space-1…6 = 4, 8, 12, 16, 20, 24 px. They stand in for what inline
+   styles did, so they win over component rules (!important). Prefer a
+   component class when a pattern repeats. */
+:root {
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+}
+
+.m-0 { margin: 0 !important; }
+.mt-0 { margin-top: 0 !important; }
+.mt-1 { margin-top: var(--space-1) !important; }
+.mt-2 { margin-top: var(--space-2) !important; }
+.mt-3 { margin-top: var(--space-3) !important; }
+.mt-4 { margin-top: var(--space-4) !important; }
+.mt-5 { margin-top: var(--space-5) !important; }
+.mt-6 { margin-top: var(--space-6) !important; }
+.mb-0 { margin-bottom: 0 !important; }
+.mb-1 { margin-bottom: var(--space-1) !important; }
+.mb-2 { margin-bottom: var(--space-2) !important; }
+.mb-3 { margin-bottom: var(--space-3) !important; }
+.mb-4 { margin-bottom: var(--space-4) !important; }
+.ml-1 { margin-left: var(--space-1) !important; }
+.ml-2 { margin-left: var(--space-2) !important; }
+.ml-3 { margin-left: var(--space-3) !important; }
+/* Tucks a hint up under the input above it (inputs keep a bottom margin). */
+.pull-up { margin-top: calc(-1 * var(--space-1)) !important; }
+
+.text-xs { font-size: 11px !important; }
+.text-sm { font-size: 12px !important; }
+.text-md { font-size: 13px !important; }
+.bold { font-weight: 600 !important; }
+.medium { font-weight: 500 !important; }
+.normal-weight { font-weight: 400 !important; }
+.italic { font-style: italic; }
+.leading-none { line-height: 1 !important; }
+.leading-relaxed { line-height: 1.6 !important; }
+.muted { color: var(--text-dim) !important; }
+.accent { color: var(--accent) !important; }
+.ok-text { color: var(--ok) !important; }
+.danger-text { color: var(--danger) !important; }
+.no-underline { text-decoration: none; }
+
+.break-all { word-break: break-all; }
+.break-word { word-break: break-word; }
+.break-anywhere { overflow-wrap: anywhere; word-break: break-all; }
+.nowrap { white-space: nowrap; }
+.pre-wrap { white-space: pre-wrap; }
+.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.overflow-hidden { overflow: hidden; }
+.text-left { text-align: left !important; }
+.text-right { text-align: right !important; }
+.text-center { text-align: center !important; }
+.align-top { vertical-align: top; }
+
+.block { display: block !important; }
+.flex { display: flex !important; }
+.flex-1 { flex: 1; }
+.flex-none { flex: none; }
+.shrink-0 { flex-shrink: 0; }
+.min-w-0 { min-width: 0; }
+.w-full { width: 100% !important; }
+.w-auto { width: auto !important; }
+.clickable { cursor: pointer; }
+.row.between { justify-content: space-between; }
+.items-center { align-items: center !important; }
+.items-baseline { align-items: baseline !important; }
+.items-start { align-items: flex-start !important; }
+.wrap { flex-wrap: wrap; }
+.gap-1 { gap: var(--space-1) !important; }
+.gap-2 { gap: var(--space-2) !important; }
+.gap-3 { gap: var(--space-3) !important; }
+.gap-4 { gap: var(--space-4) !important; }

@@ -26,7 +26,7 @@ export function SyncErrorView({ text: raw }: { text: string }) {
   return (
     <div className="error">
       <strong>{headline}</strong>
-      <div className="dim" style={{ fontSize: 12, marginTop: 6, whiteSpace: "pre-wrap" }}>
+      <div className="dim text-sm mt-2 pre-wrap">
         {detail}
       </div>
     </div>
@@ -38,10 +38,10 @@ export function KeyRow({ label, value, masked = false }: { label: string; value:
   const [copied, setCopied] = useState(false);
   const display = masked ? "•".repeat(16) : value;
   return (
-    <div style={{ marginTop: 8 }}>
+    <div className="mt-2">
       <label>{label}</label>
       <div className="key-row">
-        <div className="mono" style={{ letterSpacing: masked ? 2 : undefined }}>{display}</div>
+        <div className={masked ? "mono masked" : "mono"}>{display}</div>
         {!masked && (
           <button
             className="secondary"

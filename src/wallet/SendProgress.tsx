@@ -1,17 +1,19 @@
-import { useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
   cancelCeremony,
   getIdentity,
   listContacts,
+  walletRebroadcast,
+  walletSend,
+  AppError,
   WalletNetwork,
 } from "../ipc/commands";
 import { unit } from "../network";
 import { resolveParticipant } from "../lib/participants";
-import {
-  type CeremonyState,
-} from "../stores/ceremonies";
+import { clock, useNow } from "../lib/time";
+import { useCeremonies, type CeremonyState, type SendMeta } from "../stores/ceremonies";
 
 import { zec, KeyRow } from "./common";
 
@@ -25,6 +27,28 @@ export const SEND_STEPS: { label: string; phases: string[] }[] = [
   { label: "Sending to the network", phases: ["proving"] },
   { label: "Sent", phases: ["complete"] },
 ];
+
+/** Ask the group to approve a payment. The transaction is built afresh from
+ *  `meta`, so asking again after one expired gets a new approval window. */
+export async function requestApprovals(meta: SendMeta): Promise<string> {
+  const started = await walletSend({
+    group_id: meta.groupId,
+    recipient: meta.recipient,
+    amount_zatoshis: meta.amountZatoshis,
+    signers: meta.signers ?? [],
+    memo: meta.memo ?? null,
+    from_old_address: !!meta.fromOldAddress,
+    send_max: !!meta.sendMax,
+  });
+  useCeremonies.getState().startSend(started.ceremony_id, {
+    ...meta,
+    amountZatoshis: started.amount_zatoshis,
+    feeZatoshis: started.fee_zatoshis,
+    sighashHex: started.sighash_hex,
+    closesAtMs: started.closes_at_ms,
+  });
+  return started.ceremony_id;
+}
 
 /** Active signing session for a transaction: persisted session id (to convey to
  *  signers / find in their inbox) plus a live step-by-step status. Survives
@@ -68,10 +92,10 @@ export function SessionParticipants({
   }).length;
 
   return (
-    <div style={{ marginTop: 14 }}>
+    <div className="mt-4">
       <label>
         Approvals{" "}
-        <span className="dim" style={{ fontWeight: 400 }}>
+        <span className="dim normal-weight">
           {approvedCount} of {signers.length}
         </span>
       </label>
@@ -84,10 +108,10 @@ export function SessionParticipants({
             const badge = badgeFor(status);
             return (
               <tr key={pubkey}>
-                <td style={{ color: p.isSelf ? "var(--ok)" : undefined }}>
+                <td className={p.isSelf ? "ok-text" : undefined}>
                   {p.label} <span className="dim code-inline">{p.shortPubkey}</span>
                 </td>
-                <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                <td className="text-right nowrap">
                   <span className={`badge ${badge.cls}`}>{badge.label}</span>
                 </td>
               </tr>
@@ -111,17 +135,18 @@ export function SendSessionPanel({
   network: WalletNetwork;
 }) {
   const [cancelling, setCancelling] = useState(false);
-  // Track elapsed minutes so we can show a "stuck" warning when a signer
-  // goes offline. Updates every 30 s while the ceremony is in flight.
-  const [elapsedMin, setElapsedMin] = useState(0);
-  useEffect(() => {
-    if (!ceremony.startedAt || ceremony.done || ceremony.failed) return;
-    const update = () =>
-      setElapsedMin(Math.floor((Date.now() - ceremony.startedAt!) / 60_000));
-    update();
-    const t = setInterval(update, 30_000);
-    return () => clearInterval(t);
-  }, [ceremony.startedAt, ceremony.done, ceremony.failed]);
+  // For the time left to approve, while the send is running.
+  const now = useNow(30_000, !ceremony.done && !ceremony.failed);
+
+  const askAgain = useMutation({
+    mutationFn: () => requestApprovals(ceremony.send!),
+  });
+  const onComplete = useCeremonies((s) => s.onComplete);
+  const sendAgain = useMutation({
+    mutationFn: () => walletRebroadcast(ceremony.send!.groupId, ceremonyId),
+    onSuccess: (txid) => onComplete("send", { ceremony_id: ceremonyId, txid }),
+  });
+  const actionError = (askAgain.error ?? sendAgain.error) as AppError | null;
 
   const handleCancel = async () => {
     setCancelling(true);
@@ -136,10 +161,13 @@ export function SendSessionPanel({
   const failed = ceremony.failed;
   const done = ceremony.done && !failed;
   const currentIdx = done ? SEND_STEPS.length : Math.max(0, SEND_STEPS.findIndex((st) => st.phases.includes(ceremony.phase)));
+  // Approvals have until the transaction's standard expiry.
+  const waiting = !done && !failed && currentIdx === 0;
+  const minutesLeft = meta?.closesAtMs ? Math.max(0, Math.round((meta.closesAtMs - now) / 60_000)) : null;
 
   return (
     <div className="card panel">
-      <h3 style={{ marginTop: 0 }}>{done ? "Payment sent" : failed ? "Payment failed" : "Payment in progress"}</h3>
+      <h3 className="mt-0">{done ? "Payment sent" : failed ? "Payment failed" : "Payment in progress"}</h3>
       {meta && (
         <table className="participants">
           <tbody>
@@ -149,7 +177,7 @@ export function SendSessionPanel({
             </tr>
             <tr>
               <td>To</td>
-              <td className="mono-cell" style={{ wordBreak: "break-all" }}>
+              <td className="mono-cell break-all">
                 {meta.isConsolidation ? "This wallet" : meta.recipient}
               </td>
             </tr>
@@ -160,7 +188,7 @@ export function SendSessionPanel({
             {meta.memo && (
               <tr>
                 <td>Memo</td>
-                <td style={{ wordBreak: "break-word" }}>{meta.memo}</td>
+                <td className="break-word">{meta.memo}</td>
               </tr>
             )}
           </tbody>
@@ -190,16 +218,33 @@ export function SendSessionPanel({
         })}
       </ol>
 
-      {!done && !failed && elapsedMin >= 10 && (
-        <div className="callout warn" style={{ marginTop: 4 }}>
-          <span>Waiting {elapsedMin} minutes. A member may be offline; you can cancel and try again later.</span>
+      {waiting && meta?.closesAtMs && minutesLeft !== null && minutesLeft > 10 && (
+        <p className="dim text-sm">Approvals are needed by about {clock(meta.closesAtMs)}.</p>
+      )}
+      {waiting && minutesLeft !== null && minutesLeft <= 10 && (
+        <div className="callout warn mt-1">
+          <span>
+            {minutesLeft <= 1 ? "About a minute" : `About ${minutesLeft} minutes`} left to approve. A member may be
+            offline.
+          </span>
         </div>
       )}
       {done && <p className="ok">It confirms on the network in a few minutes.</p>}
       {failed && <div className="error">{ceremony.error ?? "Something went wrong."}</div>}
+      {actionError && <div className="error">{actionError.message ?? String(actionError)}</div>}
 
-      <div className="row" style={{ marginTop: 12, flexWrap: "wrap", gap: 8 }}>
-        <button className={done || failed ? "" : "secondary"} onClick={onDismiss}>
+      <div className="row wrap gap-2 mt-3">
+        {failed && meta && !ceremony.retryable && (
+          <button onClick={() => askAgain.mutate()} disabled={askAgain.isPending}>
+            {askAgain.isPending ? "Asking…" : "Ask again"}
+          </button>
+        )}
+        {failed && meta && ceremony.retryable && (
+          <button onClick={() => sendAgain.mutate()} disabled={sendAgain.isPending}>
+            {sendAgain.isPending ? "Sending…" : "Try sending again"}
+          </button>
+        )}
+        <button className={done ? "" : "secondary"} onClick={onDismiss}>
           {done || failed ? "Done" : "Hide"}
         </button>
         {!done && !failed && (
@@ -209,9 +254,9 @@ export function SendSessionPanel({
         )}
       </div>
 
-      <details style={{ marginTop: 14 }}>
-        <summary className="dim" style={{ cursor: "pointer", fontSize: 12 }}>Technical details</summary>
-        <p className="dim" style={{ fontSize: 12 }}>
+      <details className="mt-4">
+        <summary className="dim clickable text-sm">Technical details</summary>
+        <p className="dim text-sm">
           Members approve in <Link to="/inbox">Approvals</Link>. Someone signing with the command-line
           tools needs the session ID{ceremony.groupId ? " and group key" : ""}.
         </p>

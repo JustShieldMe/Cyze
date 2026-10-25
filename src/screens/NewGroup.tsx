@@ -97,16 +97,16 @@ export default function NewGroup() {
             ))}
           </div>
         ) : (
-          <p className="dim" style={{ marginTop: 0 }}>Add each member's contact code below.</p>
+          <p className="dim mt-0">Add each member's contact code below.</p>
         )}
         <AddMember onAdded={(pk) => setSelected((s) => (s.includes(pk) ? s : [...s, pk]))} />
 
         {selected.length > 0 && (
           <>
-            <label style={{ marginTop: 12 }}>Approvals needed for a payment</label>
+            <label className="mt-3">Approvals needed for a payment</label>
             <div className="row">
               <select
-                style={{ width: "auto", marginBottom: 0 }}
+                className="w-auto mb-0"
                 value={Math.min(threshold, total)}
                 onChange={(e) => setThreshold(Number(e.target.value))}
               >
@@ -123,16 +123,16 @@ export default function NewGroup() {
 
         {advanced && (
           <>
-            <label style={{ marginTop: 12 }}>Key type</label>
+            <label className="mt-3">Key type</label>
             <select value={suite} onChange={(e) => setSuite(e.target.value as Ciphersuite)}>
               <option value="redpallas">Zcash wallet (RedPallas)</option>
               <option value="ed25519">General signing, no wallet (Ed25519)</option>
             </select>
             {suite === "redpallas" && (
-              <label className="row confirm" style={{ alignItems: "flex-start" }}>
+              <label className="row confirm items-start">
                 <input
                   type="checkbox"
-                  style={{ width: "auto", marginTop: 3 }}
+                  className="w-auto mt-1"
                   checked={cliMembers}
                   onChange={(e) => setCliMembers(e.target.checked)}
                 />
@@ -146,7 +146,7 @@ export default function NewGroup() {
         )}
 
         {error && <div className="error">{error}</div>}
-        <div className="row" style={{ marginTop: 16 }}>
+        <div className="row mt-4">
           <button disabled={selected.length === 0 || stage !== null} onClick={start}>
             Create invite
           </button>
@@ -170,13 +170,13 @@ function AddMember({ onAdded }: { onAdded: (pubkey: string) => void }) {
     },
   });
   return (
-    <div className="row" style={{ marginTop: 8, alignItems: "flex-start" }}>
+    <div className="row mt-2 items-start">
       <input
         type="text"
         placeholder="Paste a member's contact code (zffrost1…)"
         value={code}
         onChange={(e) => setCode(e.target.value)}
-        style={{ marginBottom: 0 }}
+        className="mb-0"
       />
       <button className="secondary" disabled={!code.trim() || add.isPending} onClick={() => add.mutate()}>
         Add

@@ -263,6 +263,14 @@ members to approve it.
 5. Click **Request approvals.** The payment shows who has approved, then its
    progress to **Sent**.
 
+**Approvals have about 50 minutes.** Every Zcash transaction carries a public
+expiry height, and Cyze keeps the standard one other wallets use, so the group's
+payments look like anyone else's on-chain. The payment shows when approvals are
+needed by, and warns when 10 minutes are left. If time runs out, nothing is
+sent: **Ask again** builds the same payment afresh and asks the same members.
+If the payment was approved but couldn't reach the network, **Try sending
+again** sends the signed transaction without asking anyone again.
+
 ### Participant — review and approve
 
 1. A red **!** badge appears next to **Approvals** in the sidebar. Open it. The
@@ -273,8 +281,9 @@ members to approve it.
    If the transaction doesn't match what the coordinator described, or its
    contents don't match its commitments, your app **refuses automatically** and
    says why.
-3. Click **Approve and sign** to release your signature share. Nothing is signed
-   until you approve. A send that spends several notes needs this one approval;
+3. Click **Approve and sign** to release your signature share, before the time
+   the request shows. Nothing is signed until you approve; a request that has
+   expired can only be dismissed. A send that spends several notes needs this one approval;
    its other notes are approved automatically once they verify as the same
    transaction.
 
@@ -284,7 +293,7 @@ The transaction then appears under **Activity** on both sides, with its fee and
 memo shown inline.
 
 **What to verify:** the txid confirms on a block explorer, and the sender's
-balance and history update (use **Sync Now** on Home if needed).
+balance and history update.
 
 ### Make an older group private
 
@@ -376,9 +385,10 @@ never connects directly: if Tor can't start, the wallet waits and says so until
 it does or you turn it off. Connecting to your group's coordination server
 isn't affected, and name lookups (testnet) are off while Tor is on.
 
-**Sync.** The active wallet syncs in the background from unlock to lock, and Home shows the current block height. If it
-looks stalled, press **Sync Now** — it restarts the sync from scratch and
-refreshes every panel (balances, pending/settled, notes, and history).
+**Sync.** The active wallet syncs in the background from unlock to lock, and
+Home shows whether it's up to date. If a sync fails, Home says so and offers
+**Retry now**; if one stops making progress for a minute, it offers
+**Restart**, which restarts the sync and refreshes every panel.
 
 **Active wallet.** With more than one group, Cyze works on **one wallet at a
 time**. Use the switcher at the top of the window to change wallets; selecting one makes it

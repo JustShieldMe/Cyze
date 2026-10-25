@@ -34,7 +34,7 @@ export function GroupKeys({ group, masked = false }: { group: GroupSummary; mask
   });
 
   return (
-    <div style={{ marginTop: 10 }}>
+    <div className="mt-3">
       {/* The group id is the group's public verifying key. CLI users need it to
        *  join this group's sessions, so surface it as a labeled, copyable row. */}
       <KeyRow label="Group ID (its public key)" value={group.id} masked={masked} />
@@ -46,7 +46,7 @@ export function GroupKeys({ group, masked = false }: { group: GroupSummary; mask
             value={keys.data.ufvk}
             masked={masked}
           />
-          <div className="callout" style={{ marginTop: 10 }}>
+          <div className="callout mt-3">
             <span>
               Funds sent here can be spent only when enough members approve. The
               viewing key shows the wallet's balance and payments to whoever has
@@ -76,13 +76,13 @@ function ShareRepairGuide({ group }: { group: GroupSummary }) {
   const repairable = t < n;
 
   return (
-    <div style={{ marginTop: 14, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+    <div className="section-rule mt-4">
       <button className="secondary" onClick={() => setOpen((o) => !o)}>
         {open ? "Hide" : "Recovery & share repair"}
       </button>
 
       {open && (
-        <div style={{ marginTop: 12 }}>
+        <div className="mt-3">
           {repairable ? (
             <div className="callout">
               <span>
@@ -109,7 +109,7 @@ function ShareRepairGuide({ group }: { group: GroupSummary }) {
             </div>
           )}
 
-          <h3 style={{ marginTop: 16 }}>How your recovery options fit together</h3>
+          <h3 className="mt-4">How your recovery options fit together</h3>
           <ul className="guide-list">
             <li>
               <strong>Forgot your passphrase</strong> but still have this device:
@@ -140,7 +140,7 @@ function ShareRepairGuide({ group }: { group: GroupSummary }) {
 
           {repairable && (
             <>
-              <h3 style={{ marginTop: 16 }}>Before you start</h3>
+              <h3 className="mt-4">Before you start</h3>
               <div className="callout">
                 <span>
                   You'll need: a working install of this app holding this group's
@@ -150,7 +150,7 @@ function ShareRepairGuide({ group }: { group: GroupSummary }) {
                 </span>
               </div>
 
-              <h3 style={{ marginTop: 16 }}>How repair works (not in the app yet)</h3>
+              <h3 className="mt-4">How repair works (not in the app yet)</h3>
               <ol className="steps">
                 <li>
                   <div className="step-title">Choose your helpers</div>
@@ -195,7 +195,7 @@ function ShareRepairGuide({ group }: { group: GroupSummary }) {
                 </li>
               </ol>
 
-              <div className="callout warn" style={{ marginTop: 14 }}>
+              <div className="callout warn mt-4">
                 <span>
                   <strong>Privacy guarantee:</strong> at no point does any helper
                   learn your share, and the full group secret is never
@@ -205,7 +205,7 @@ function ShareRepairGuide({ group }: { group: GroupSummary }) {
             </>
           )}
 
-          <p className="dim" style={{ marginTop: 12 }}>
+          <p className="dim mt-3">
             The protocol above is FROST's repairable threshold scheme
             (<span className="code-inline">frost-core</span>). A guided in-app repair
             ceremony is planned. Until then, keep your recovery code and a current
@@ -251,19 +251,18 @@ function GroupNameEditor({
 
   if (editing) {
     return (
-      <div className="row" style={{ gap: 6, alignItems: "center", flex: 1 }}>
+      <div className="row gap-2 items-center flex-1 inline-edit title">
         <input
           ref={inputRef}
           type="text"
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") save(); if (e.key === "Escape") cancel(); }}
-          style={{ flex: 1, margin: 0, fontSize: 20, fontWeight: 600, padding: "2px 8px" }}
         />
-        <button onClick={save} disabled={saving} style={{ padding: "4px 12px" }}>
+        <button onClick={save} disabled={saving}>
           {saving ? "…" : "Save"}
         </button>
-        <button className="secondary" onClick={cancel} style={{ padding: "4px 10px" }}>
+        <button className="secondary" onClick={cancel}>
           Cancel
         </button>
       </div>
@@ -271,14 +270,9 @@ function GroupNameEditor({
   }
 
   return (
-    <div className="row" style={{ gap: 8, alignItems: "center" }}>
-      <h3 style={{ margin: 0 }}>{group.description || "(unnamed group)"}</h3>
-      <button
-        className="secondary"
-        title="Edit group name"
-        onClick={open}
-        style={{ padding: "2px 7px", fontSize: 13, lineHeight: 1, border: "none", background: "none", cursor: "pointer", color: "var(--dim)" }}
-      >
+    <div className="row gap-2 items-center">
+      <h3 className="m-0">{group.description || "(unnamed group)"}</h3>
+      <button className="icon-button" title="Edit group name" onClick={open}>
         ✏
       </button>
     </div>
@@ -306,17 +300,17 @@ export function GroupCard({
   });
   return (
     <div className="card">
-      <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+      <div className="row between items-center">
         <GroupNameEditor group={group} onRenamed={onRenamed} />
-        <span className="badge blue" style={{ flexShrink: 0 }}>
+        <span className="badge blue shrink-0">
           {wallet ? "Zcash wallet" : "Signing group (Ed25519)"}
         </span>
       </div>
-      <p style={{ marginBottom: 4 }}>
+      <p className="mb-1">
         {group.threshold} of {group.num_participants} members must approve each {wallet ? "payment" : "signature"}.
       </p>
       {wallet && privacy.data && (
-        <p className="dim" style={{ marginTop: 0 }}>
+        <p className="dim mt-0">
           {privacy.data.private
             ? "Its balance and payments are visible only to its members."
             : "Anyone who knows its group ID can see its balance and payments. Make it private from its wallet on Home."}
@@ -328,7 +322,7 @@ export function GroupCard({
         </Link>
       )}
 
-      <h4 style={{ marginBottom: 6 }}>Members</h4>
+      <h4 className="mb-2">Members</h4>
       <div className="member-list">
         {Object.values(group.participants).map((pubkey) => {
           const p = resolveParticipant(pubkey, identity, contacts);
@@ -350,7 +344,7 @@ export function GroupCard({
 
       <ShareRepairGuide group={group} />
 
-      <div style={{ marginTop: 12 }}>
+      <div className="mt-3">
         <button
           className="danger"
           onClick={() => {
@@ -409,20 +403,19 @@ export default function Groups() {
             key={g.id}
             to={`/groups/${g.id}`}
             className="card group-pick"
-            style={{ display: "block", textDecoration: "none", color: "inherit" }}
           >
-            <div className="row" style={{ justifyContent: "space-between" }}>
-              <h3 style={{ margin: 0 }}>{g.description || "(unnamed group)"}</h3>
+            <div className="row between">
+              <h3 className="m-0">{g.description || "(unnamed group)"}</h3>
               {!isOrchard(g) && <span className="badge blue">Ed25519</span>}
             </div>
-            <p className="dim" style={{ margin: "6px 0 0" }}>
+            <p className="dim m-0 mt-2">
               {g.threshold} of {g.num_participants} must approve
             </p>
           </Link>
         ))
       ) : (
         <div className="card">
-          <p className="dim" style={{ margin: 0 }}>
+          <p className="dim m-0">
             No groups yet. Start one, or join with an invite from the person setting it up.
           </p>
         </div>
@@ -455,7 +448,7 @@ export function GroupDetail() {
 
   return (
     <div>
-      <p style={{ marginTop: 0 }}>
+      <p className="mt-0">
         <Link to="/groups">← Groups</Link>
       </p>
       <GroupCard

@@ -21,7 +21,7 @@ export default function Home() {
       <WalletPicker wallets={wallets} />
     ) : (
       <div className="card">
-        <p className="dim" style={{ margin: 0 }}>
+        <p className="dim m-0">
           None of your groups is a Zcash wallet. <Link to="/groups/new">Start a shared wallet</Link>.
         </p>
       </div>
@@ -66,8 +66,8 @@ function ApprovalsBanner() {
   const count = signingRequests(pending.data).length;
   if (count === 0) return null;
   return (
-    <div className="callout" style={{ marginBottom: 16, alignItems: "center" }}>
-      <span style={{ flex: 1 }}>
+    <div className="callout mb-4 items-center">
+      <span className="flex-1">
         <strong>
           {count === 1 ? "A payment is" : `${count} payments are`} waiting for your approval.
         </strong>
@@ -102,10 +102,10 @@ function WalletRow({ group, ticker, onOpen }: { group: GroupSummary; ticker: str
   });
   const s = status.data;
   return (
-    <div className="card row" style={{ justifyContent: "space-between" }}>
-      <div style={{ minWidth: 0 }}>
-        <div style={{ fontWeight: 600 }}>{group.description || `${group.id.slice(0, 10)}…`}</div>
-        <div className="dim" style={{ fontSize: 12, marginTop: 2 }}>
+    <div className="card row between">
+      <div className="min-w-0">
+        <div className="bold">{group.description || `${group.id.slice(0, 10)}…`}</div>
+        <div className="dim text-sm mt-1">
           {group.threshold} of {group.num_participants} must approve
           {s?.initialized &&
             ` · ${(s.total_zatoshis / 1e8).toLocaleString(undefined, { maximumFractionDigits: 8 })} ${ticker}`}

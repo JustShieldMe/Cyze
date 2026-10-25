@@ -190,3 +190,11 @@ pub async fn cancel_ceremony<R: tauri::Runtime>(app: AppHandle<R>, ceremony_id: 
     }
     Ok(())
 }
+
+/// The ceremonies still running in this process, so the UI can tell a saved
+/// one that is still going (the window reloaded) from one a lock or restart
+/// ended. A send stops being listed once it's signed and being sent.
+#[tauri::command]
+pub async fn live_ceremonies(state: tauri::State<'_, AppState>) -> AppResult<Vec<Uuid>> {
+    Ok(state.ceremonies.lock().await.keys().copied().collect())
+}

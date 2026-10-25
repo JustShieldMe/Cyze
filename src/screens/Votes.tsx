@@ -57,7 +57,7 @@ export default function Votes() {
           </button>
         )}
       </div>
-      <p className="dim" style={{ marginTop: -8 }}>
+      <p className="dim pull-up">
         Ask your group a question, or see what the Zcash community is voting on.
       </p>
 
@@ -69,7 +69,7 @@ export default function Votes() {
       ))}
       {polls.isSuccess && !open.length && !creating && (
         <div className="card">
-          <p className="dim" style={{ margin: 0 }}>
+          <p className="dim m-0">
             {groups.data?.length
               ? "No open polls. Start one to ask your group a question; every member answers for themselves."
               : "Polls are asked within a group. Join or start one first."}
@@ -117,7 +117,7 @@ function NewPoll({ groups, onDone }: { groups: GroupSummary[]; onDone: () => voi
   });
   return (
     <div className="card panel">
-      <h3 style={{ marginTop: 0 }}>New poll</h3>
+      <h3 className="mt-0">New poll</h3>
       {groups.length > 1 && (
         <>
           <label>Group</label>
@@ -136,14 +136,14 @@ function NewPoll({ groups, onDone }: { groups: GroupSummary[]; onDone: () => voi
       <textarea rows={3} value={details} maxLength={2000} onChange={(e) => setDetails(e.target.value)} />
       <label>Options</label>
       {options.map((o, i) => (
-        <div className="row" key={i} style={{ marginBottom: 6 }}>
+        <div className="row mb-2" key={i}>
           <input
             type="text"
             value={o}
             maxLength={100}
             placeholder={`Option ${i + 1}`}
             onChange={(e) => setOptions(options.map((x, j) => (j === i ? e.target.value : x)))}
-            style={{ margin: 0 }}
+            className="m-0"
           />
           {options.length > 2 && (
             <button className="link-button" onClick={() => setOptions(options.filter((_, j) => j !== i))} aria-label={`Remove option ${i + 1}`}>
@@ -157,7 +157,7 @@ function NewPoll({ groups, onDone }: { groups: GroupSummary[]; onDone: () => voi
           Add an option
         </button>
       )}
-      <label style={{ marginTop: 12 }}>Open for</label>
+      <label className="mt-3">Open for</label>
       <select value={duration} onChange={(e) => setDuration(Number(e.target.value))}>
         {DURATIONS.map((d) => (
           <option key={d.secs} value={d.secs}>
@@ -166,7 +166,7 @@ function NewPoll({ groups, onDone }: { groups: GroupSummary[]; onDone: () => voi
         ))}
       </select>
       {create.error && <div className="error">{errText(create.error)}</div>}
-      <div className="row" style={{ marginTop: 10 }}>
+      <div className="row mt-3">
         <button onClick={() => create.mutate()} disabled={!title.trim() || filled.length < 2 || create.isPending}>
           {create.isPending ? "Asking…" : "Ask the group"}
         </button>
@@ -211,7 +211,7 @@ function PollCard({ poll, groupName }: { poll: PollView; groupName: string }) {
           {name(poll.author)} asked · {poll.closed ? `closed ${relative(poll.closes_at)}` : `closes ${relative(poll.closes_at)}`}
         </span>
       </div>
-      <h3 style={{ margin: "8px 0 4px" }}>{poll.title}</h3>
+      <h3 className="m-0 mt-2 mb-1">{poll.title}</h3>
       {poll.details && <p className="dim poll-details">{poll.details}</p>}
       <div className="poll-options">
         {poll.options.map((option, i) => {
@@ -225,7 +225,7 @@ function PollCard({ poll, groupName }: { poll: PollView; groupName: string }) {
               <span className="poll-option-label">
                 <span>
                   {option}
-                  {poll.agreed === i && <span className="badge green" style={{ marginLeft: 8 }}>agreed</span>}
+                  {poll.agreed === i && <span className="badge green ml-2">agreed</span>}
                 </span>
                 {names.length > 0 && <span className="dim poll-voters">{names.join(", ")}</span>}
               </span>
@@ -263,15 +263,15 @@ function CommunitySection({ groups }: { groups: GroupSummary[] }) {
   const votes = useQuery({ queryKey: ["community-votes"], queryFn: communityVotes, staleTime: 5 * 60_000, retry: false });
   const d = votes.data;
   return (
-    <div className="card community" style={{ marginTop: 18 }}>
-      <h3 style={{ marginTop: 0 }}>Zcash community votes</h3>
+    <div className="card community mt-5">
+      <h3 className="mt-0">Zcash community votes</h3>
       <p className="dim">
         Coinholders vote on proposals for the network with what they held at a snapshot, privately. A group wallet's
         weight is its balance then.
       </p>
       {votes.isLoading && <p className="dim">Checking…</p>}
       {votes.isError && <p className="dim">Couldn't check: {errText(votes.error)}</p>}
-      {d && !d.open.length && <p style={{ marginBottom: 0 }}>No community vote is open right now.</p>}
+      {d && !d.open.length && <p className="mb-0">No community vote is open right now.</p>}
       {d?.open.map((r) => <OpenRound key={r.id} round={r} groups={groups} />)}
       {d && d.recent.length > 0 && (
         <details className="recent-rounds">
@@ -300,14 +300,14 @@ function OpenRound({ round, groups }: { round: CommunityRound; groups: GroupSumm
   });
   return (
     <div className="round">
-      <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
+      <div className="row between items-baseline">
         <strong>{round.title}</strong>
         <span className="dim">
           {round.status === "pending" ? "opens soon" : `closes ${relative(round.vote_end_time)}`}
         </span>
       </div>
       {round.description && <p className="dim poll-details">{round.description}</p>}
-      <p className="dim" style={{ fontSize: 12 }}>
+      <p className="dim text-sm">
         {round.proposals.length} proposal{round.proposals.length === 1 ? "" : "s"} · weight from block{" "}
         {round.snapshot_height.toLocaleString()}
         {round.discussion_url && (
@@ -325,7 +325,7 @@ function OpenRound({ round, groups }: { round: CommunityRound; groups: GroupSumm
         </button>
       ) : (
         <div className="panel-inset">
-          <p className="dim" style={{ marginTop: 0 }}>Ask your group how to vote: one poll per proposal, closing an hour before the vote does.</p>
+          <p className="dim mt-0">Ask your group how to vote: one poll per proposal, closing an hour before the vote does.</p>
           {wallets.length > 1 && (
             <select value={groupId} onChange={(e) => setGroupId(e.target.value)}>
               {wallets.map((g) => (
@@ -351,7 +351,7 @@ function OpenRound({ round, groups }: { round: CommunityRound; groups: GroupSumm
             </label>
           ))}
           {ask.error && <div className="error">{errText(ask.error)}</div>}
-          <div className="row" style={{ marginTop: 8 }}>
+          <div className="row mt-2">
             <button onClick={() => ask.mutate()} disabled={!picked.size || !groupId || ask.isPending}>
               {ask.isPending ? "Asking…" : `Ask the group (${picked.size})`}
             </button>
@@ -361,7 +361,7 @@ function OpenRound({ round, groups }: { round: CommunityRound; groups: GroupSumm
           </div>
         </div>
       )}
-      <p className="dim" style={{ fontSize: 12, marginBottom: 0 }}>
+      <p className="dim text-sm mb-0">
         Casting the group's vote from Cyze comes in a later version, once it's been tested on a live round. Until then,
         polls help the group agree on how it would vote.
       </p>
@@ -374,7 +374,7 @@ function FinishedRound({ round }: { round: CommunityRound }) {
   const shown = all ? round.proposals : round.proposals.slice(0, 3);
   return (
     <div className="round">
-      <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
+      <div className="row between items-baseline">
         <strong>{round.title}</strong>
         <span className="dim">{round.status === "tallying" ? "counting" : `closed ${relative(round.vote_end_time)}`}</span>
       </div>
@@ -409,7 +409,7 @@ function ProposalResult({ proposal }: { proposal: CommunityRound["proposals"][nu
           );
         })
       ) : (
-        <div className="dim" style={{ fontSize: 12 }}>No results yet.</div>
+        <div className="dim text-sm">No results yet.</div>
       )}
     </div>
   );

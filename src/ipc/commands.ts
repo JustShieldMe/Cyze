@@ -304,6 +304,29 @@ export interface DraftTransaction {
    *  on-chain; only readable with the recipient's viewing key. Null for
    *  unshield transfers (transparent outputs carry no memo). */
   memo: string | null;
+  /** How long the group has to approve it, as of when it was built. */
+  approval_window: ApprovalWindow | null;
+}
+
+/** How long a transaction can wait for approvals before it can't be sent
+ *  (wallet::ApprovalWindow). Payments keep the standard ~50-minute expiry, so
+ *  they look like any other wallet's on-chain. */
+export interface ApprovalWindow {
+  expiry_height: number;
+  /** Blocks still to come before it's too late; 0 once it is. */
+  blocks_left: number;
+  /** When that's expected (epoch ms). Null on a local devnet. */
+  closes_at_ms: number | null;
+}
+
+/** What wallet_send started: the ceremony, and the transaction as built. */
+export interface SendStarted {
+  ceremony_id: string;
+  amount_zatoshis: number;
+  fee_zatoshis: number;
+  sighash_hex: string;
+  /** When approvals are needed by (epoch ms, estimated). */
+  closes_at_ms: number;
 }
 export const walletPrepareSend = (
   groupId: string,
@@ -343,8 +366,9 @@ export interface ZnsResolution {
 export const resolveZnsName = (name: string) =>
   invoke<ZnsResolution | null>("resolve_zns_name", { name });
 
-/** Build, FROST-sign, and (next) broadcast a transfer. Returns the ceremony id;
- *  progress arrives via send:progress / send:complete / send:failed events. */
+/** Build, FROST-sign, and broadcast a transfer. Progress arrives via
+ *  send:progress / send:complete / send:failed events; a send that runs out of
+ *  time fails with `expired: true`. */
 export const walletSend = (args: {
   group_id: string;
   recipient: string;
@@ -356,7 +380,7 @@ export const walletSend = (args: {
   from_old_address?: boolean;
   /** Send everything spendable to the recipient (the amount is ignored). */
   send_max?: boolean;
-}) => invoke<string>("wallet_send", { args });
+}) => invoke<SendStarted>("wallet_send", { args });
 /** Like walletPrepareSend, paying everything spendable; the fee comes out of it. */
 export const walletPrepareSendMax = (groupId: string, recipient: string, memo?: string) =>
   invoke<DraftTransaction>("wallet_prepare_send_max", { groupId, recipient, memo: memo ?? null });
@@ -482,6 +506,8 @@ export interface PendingSession {
 export const startDkg = (args: StartDkgArgs) => invoke<string>("start_dkg", { args });
 export const cancelCeremony = (ceremonyId: string) =>
   invoke<void>("cancel_ceremony", { ceremonyId });
+/** Ceremonies still running in the backend (see live_ceremonies). */
+export const liveCeremonies = () => invoke<string[] | null>("live_ceremonies");
 export const createSigningSession = (args: {
   group_id: string;
   message_hex: string;

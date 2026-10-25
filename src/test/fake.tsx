@@ -82,6 +82,49 @@ const defaults: Record<string, Handler> = {
   community_votes: () => ({ open: [], recent: [] }),
 };
 
+/** What wallet_send returns: the ceremony, the transaction as built, and
+ *  approvals due in 45 minutes. */
+export const started = (ceremonyId: string, amount = 250_000_000) => ({
+  ceremony_id: ceremonyId,
+  amount_zatoshis: amount,
+  fee_zatoshis: 15_000,
+  sighash_hex: "9f".repeat(32),
+  closes_at_ms: Date.now() + 45 * 60_000,
+});
+
+export const PAYEE = "u1payee0example0address0000000000000000000000000000000000000000";
+
+/** Saved history with one send waiting for approvals, as ceremony `id`. */
+export const savedSend = (id: string) =>
+  JSON.stringify({
+    version: 0,
+    state: {
+      activeDkgId: null,
+      activeSigningId: null,
+      txSigners: {},
+      activeSendByGroup: { [GROUP_ID]: id },
+      ceremonies: {
+        [id]: {
+          kind: "send",
+          phase: "waiting_for_shares",
+          done: false,
+          failed: false,
+          groupId: GROUP_ID,
+          startedAt: Date.now() - 60_000,
+          send: {
+            groupId: GROUP_ID,
+            recipient: PAYEE,
+            amountZatoshis: 100_000_000,
+            feeZatoshis: 15_000,
+            sighashHex: "9f".repeat(32),
+            signers: [ME, ALICE],
+            closesAtMs: Date.now() + 30 * 60_000,
+          },
+        },
+      },
+    },
+  });
+
 /** Install the fake backend, with `overrides` replacing default commands. */
 export function fakeBackend(overrides: Record<string, Handler> = {}) {
   const calls: { cmd: string; args: Args }[] = [];
