@@ -156,9 +156,9 @@ export default function WalletSettings() {
   return (
     <div>
       <div className="card">
-        <h3 style={{ marginTop: 0 }}>{showNetworks ? "Network" : "Sync server"}</h3>
+        <h3 className="mt-0">{showNetworks ? "Network" : "Sync server"}</h3>
         {showNetworks && (
-          <div className="row" style={{ marginBottom: 14, alignItems: "center", flexWrap: "wrap" }}>
+          <div className="row mb-4 items-center wrap">
             {NETWORKS.map((n) => (
               <button
                 key={n.id}
@@ -212,7 +212,7 @@ export default function WalletSettings() {
           </select>
         )}
         {automatic ? (
-          <p className="dim" style={{ marginTop: -2 }}>
+          <p className="dim pull-up">
             {autoInUse?.auto_latency_ms != null
               ? `Using ${hostOf(autoInUse.lightwalletd_url)}, which answered in ${autoInUse.auto_latency_ms} ms. If it stops answering, the app switches to another.`
               : "The app measures the known servers and uses the quickest that's up to date."}
@@ -225,7 +225,7 @@ export default function WalletSettings() {
             onChange={(e) => setUrl(e.target.value)}
           />
         )}
-        {!automatic && <p className="dim" style={{ marginTop: -6 }}>
+        {!automatic && <p className="dim pull-up">
           {isDevnet ? (
             <>
               Plain <span className="code-inline">http://</span> is allowed only for{" "}
@@ -239,23 +239,23 @@ export default function WalletSettings() {
           )}
         </p>}
 
-        <div className="row" style={{ marginTop: 4, alignItems: "center" }}>
+        <div className="row mt-1 items-center">
           <button onClick={() => save.mutate()} disabled={save.isPending}>
             {save.isPending ? "Saving…" : "Save"}
           </button>
           <button className="secondary" onClick={test} disabled={testing}>
             {testing ? "Connecting…" : "Test connection"}
           </button>
-          {unsaved && <span className="dim" style={{ fontSize: 12 }}>Unsaved changes</span>}
+          {unsaved && <span className="dim text-sm">Unsaved changes</span>}
         </div>
         {save.error && (
-          <div className="error" style={{ marginTop: 10 }}>
+          <div className="error mt-3">
             {(save.error as unknown as AppError).message ?? String(save.error)}
           </div>
         )}
 
         {info && (
-          <div className="callout" style={{ marginTop: 14 }}>
+          <div className="callout mt-4">
             <span>
               Connected to <strong>{info.chain_name}</strong> · block height{" "}
               <strong>{info.block_height.toLocaleString()}</strong>
@@ -271,7 +271,7 @@ export default function WalletSettings() {
           </div>
         )}
         {info && !infoIsDevnet && info.branch_supported === false && (
-          <div className="callout warn" style={{ marginTop: 10 }}>
+          <div className="callout warn mt-3">
             <span>
               <strong>⚠ Network upgrade mismatch — sends will be rejected.</strong>{" "}
               This node expects consensus branch{" "}
@@ -287,14 +287,14 @@ export default function WalletSettings() {
           </div>
         )}
         {info && infoIsDevnet && !isDevnet && (
-          <div className="callout warn" style={{ marginTop: 10 }}>
+          <div className="callout warn mt-3">
             <span>
               This endpoint is a local devnet. Select <strong>Local devnet</strong> above
               before saving it.
             </span>
           </div>
         )}
-        {testErr && <div className="error" style={{ marginTop: 10 }}>{testErr}</div>}
+        {testErr && <div className="error mt-3">{testErr}</div>}
       </div>
 
       {!isDevnet && <TorCard />}
@@ -322,27 +322,27 @@ function TorCard() {
   const on = !!settings.data?.use_tor;
   const s = status.data;
   return (
-    <div className="card" style={{ marginTop: 18 }}>
-      <h3 style={{ marginTop: 0 }}>Privacy</h3>
-      <label className="row" style={{ gap: 8, alignItems: "center", margin: 0 }}>
+    <div className="card mt-5">
+      <h3 className="mt-0">Privacy</h3>
+      <label className="row gap-2 items-center m-0">
         <input
           type="checkbox"
-          style={{ width: "auto", margin: 0 }}
+          className="w-auto m-0"
           checked={on}
           disabled={toggle.isPending || settings.isLoading}
           onChange={(e) => toggle.mutate(e.target.checked)}
         />
         <strong>Connect through Tor</strong>
       </label>
-      <p className="dim" style={{ marginBottom: 0 }}>
+      <p className="dim mb-0">
         The sync server, and anyone watching your network, can't tie your wallet's activity or the payments you send
         to your IP address. Syncing is slower. Connecting to your group's server isn't affected.
       </p>
       {on && s?.state === "starting" && <p className="dim">Connecting to Tor… The wallet waits for it.</p>}
       {on && s?.state === "ready" && <p className="ok">Connected through Tor.</p>}
       {on && s?.state === "failed" && (
-        <div className="callout warn" style={{ marginTop: 10, alignItems: "center" }}>
-          <span style={{ flex: 1 }}>Tor didn't start: {s.error}. The wallet won't connect until it does, or you turn it off.</span>
+        <div className="callout warn mt-3 items-center">
+          <span className="flex-1">Tor didn't start: {s.error}. The wallet won't connect until it does, or you turn it off.</span>
           <button onClick={() => toggle.mutate(true)} disabled={toggle.isPending}>
             Try again
           </button>
@@ -385,7 +385,7 @@ function DevnetPanel({
 
   return (
     <div className="devnet-panel">
-      <p className="dim" style={{ marginTop: 0 }}>
+      <p className="dim mt-0">
         Point Cyze at a local{" "}
         <a
           href="https://github.com/zcashlabs/thus-spoke-zakura"
@@ -400,7 +400,7 @@ function DevnetPanel({
         amounts show as <strong>rZEC</strong>. None of it is real money.
       </p>
 
-      <div className="row" style={{ alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+      <div className="row items-center gap-3 wrap">
         <button className="secondary" onClick={onDetect} disabled={detecting}>
           {detecting ? "Looking…" : "Detect local devnet"}
         </button>
@@ -414,7 +414,7 @@ function DevnetPanel({
       </div>
 
       {status && !status.running && (
-        <div className="callout warn" style={{ marginTop: 10 }}>
+        <div className="callout warn mt-3">
           <span>
             {status.detail}
             {!status.installed && (
@@ -422,7 +422,7 @@ function DevnetPanel({
                 <br />
                 Install it (Linux / macOS, needs Docker), then run{" "}
                 <span className="code-inline">thus-spoke-zakura</span>:
-                <span className="row" style={{ gap: 8, marginTop: 6, alignItems: "center" }}>
+                <span className="row gap-2 mt-2 items-center">
                   <code className="mono devnet-cmd">{INSTALL_CMD}</code>
                   <button className="secondary" onClick={copyInstall}>
                     {copied ? "Copied!" : "Copy"}
@@ -434,7 +434,7 @@ function DevnetPanel({
         </div>
       )}
       {status?.dashboard && (
-        <p className="dim" style={{ fontSize: 12, margin: "8px 0 0" }}>
+        <p className="dim text-sm m-0 mt-2">
           Faucet and mining controls:{" "}
           <a
             href={status.dashboard}
@@ -448,7 +448,7 @@ function DevnetPanel({
         </p>
       )}
 
-      <label style={{ marginTop: 14 }}>Network upgrade on this chain</label>
+      <label className="mt-4">Network upgrade on this chain</label>
       <select
         value={upgradeChoice}
         onChange={(e) => onUpgrade(e.target.value as RegtestUpgrade | "auto")}
@@ -462,12 +462,12 @@ function DevnetPanel({
           </option>
         ))}
       </select>
-      <p className="dim" style={{ marginTop: -6, fontSize: 12 }}>
+      <p className="dim pull-up text-sm">
         Must match the node: it decides the transaction format and proof circuit. Auto reads it
         from the node on Detect or Test connection.
       </p>
       {!devnetCanSend(effectiveUpgrade) && (
-        <div className="callout warn" style={{ marginTop: 4 }}>
+        <div className="callout warn mt-1">
           <span>
             <strong>Sending needs NU6.3 or later; this devnet runs {upgradeLabel(effectiveUpgrade)}.</strong>{" "}
             Cyze builds only Ironwood-era transactions. Syncing, receiving, and balances

@@ -44,8 +44,8 @@ export function ReviewNotesTab({
         : { cls: "", label: "pending" };
 
   return (
-    <div className="card" style={{ marginTop: 14, background: "var(--bg-elevated)" }}>
-      <h3 style={{ marginTop: 0 }}>Notes in this wallet</h3>
+    <div className="card inset mt-4">
+      <h3 className="mt-0">Notes in this wallet</h3>
       {notes.isLoading ? (
         <p className="dim">Loading notes…</p>
       ) : list.length === 0 ? (
@@ -55,7 +55,7 @@ export function ReviewNotesTab({
         </p>
       ) : (
         <>
-          <p className="dim" style={{ marginTop: 0 }}>
+          <p className="dim mt-0">
             Your balance is made of <strong>{spendable.length}</strong> spendable
             note{spendable.length === 1 ? "" : "s"}
             {pending.length > 0 && <> (plus {pending.length} pending)</>}, totalling{" "}
@@ -68,14 +68,14 @@ export function ReviewNotesTab({
           </p>
 
           {spendable.length >= 2 && (
-            <div className="callout" style={{ marginBottom: 12 }}>
+            <div className="callout mb-3">
               <span>
                 <strong>Consolidate</strong> merges these {spendable.length} notes
                 into a single note with one self-send to the group's own address.
                 Future transactions then need only one signing round. It costs a
                 small network fee and one signing ceremony now.
               </span>
-              <div style={{ marginTop: 8 }}>
+              <div className="mt-2">
                 <button
                   onClick={onConsolidate}
                   disabled={!canConsolidate || consolidatePending}
@@ -85,7 +85,7 @@ export function ReviewNotesTab({
                     : `Consolidate ${spendable.length} notes → 1`}
                 </button>
                 {disabledReason && (
-                  <span className="dim" style={{ marginLeft: 10, fontSize: 12 }}>
+                  <span className="dim ml-3 text-sm">
                     {disabledReason}
                   </span>
                 )}
@@ -93,15 +93,13 @@ export function ReviewNotesTab({
             </div>
           )}
 
-          <table className="participants" style={{ width: "100%" }}>
+          <table className="participants w-full">
             <thead>
               <tr>
-                <th style={{ textAlign: "left", paddingBottom: 6 }}>Value</th>
-                <th style={{ textAlign: "left", paddingBottom: 6 }}>Status</th>
-                <th style={{ textAlign: "right", paddingBottom: 6 }}>Confirmations</th>
-                <th style={{ textAlign: "left", paddingBottom: 6, paddingLeft: 12 }}>
-                  From tx
-                </th>
+                <th>Value</th>
+                <th>Status</th>
+                <th className="text-right">Confirmations</th>
+                <th className="gutter">From tx</th>
               </tr>
             </thead>
             <tbody>
@@ -109,21 +107,21 @@ export function ReviewNotesTab({
                 const b = badge(n.status);
                 return (
                   <tr key={n.received_txid + i}>
-                    <td style={{ fontWeight: 600, whiteSpace: "nowrap" }}>
+                    <td className="bold nowrap">
                       {zec(n.value_zatoshis)} {unit(network)}
                     </td>
                     <td>
                       <span className={`badge ${b.cls}`}>{b.label}</span>
                       {n.is_change && (
-                        <span className="dim" style={{ fontSize: 11, marginLeft: 6 }}>
+                        <span className="dim text-xs ml-2">
                           change
                         </span>
                       )}
                     </td>
-                    <td style={{ textAlign: "right" }}>
+                    <td className="text-right">
                       {n.status === "pending" ? "—" : n.confirmations}
                     </td>
-                    <td className="dim mono" style={{ fontSize: 11, paddingLeft: 12 }}>
+                    <td className="dim mono text-xs gutter">
                       {n.received_txid.slice(0, 12)}…
                     </td>
                   </tr>

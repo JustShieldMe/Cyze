@@ -107,8 +107,8 @@ export function WalletTxHistory({ group, network }: { group: GroupSummary; netwo
   const hasAny = pendingRows.length > 0 || onchainRows.length > 0;
 
   return (
-    <div className="card" style={{ marginTop: 16 }}>
-      <h3 style={{ marginTop: 0 }}>Activity</h3>
+    <div className="card mt-4">
+      <h3 className="mt-0">Activity</h3>
 
       {history.isLoading && <p className="dim">Loading…</p>}
       {history.isError && (
@@ -124,20 +124,20 @@ export function WalletTxHistory({ group, network }: { group: GroupSummary; netwo
       )}
 
       {hasAny && (
-        <table className="participants" style={{ tableLayout: "fixed", width: "100%" }}>
+        <table className="tx-table">
           <colgroup>
-            <col style={{ width: "24%" }} />
-            <col style={{ width: "22%" }} />
-            <col style={{ width: "20%" }} />
-            <col style={{ width: "26%" }} />
-            <col style={{ width: "8%" }} />
+            <col className="col-date" />
+            <col className="col-type" />
+            <col className="col-amount" />
+            <col className="col-with" />
+            <col className="col-toggle" />
           </colgroup>
           <thead>
             <tr>
-              <th style={{ textAlign: "left", paddingBottom: 6, fontWeight: 500 }}>Date</th>
-              <th style={{ textAlign: "left", paddingBottom: 6, fontWeight: 500 }}>Type</th>
-              <th style={{ textAlign: "right", paddingBottom: 6, paddingRight: 12, fontWeight: 500 }}>Amount</th>
-              <th style={{ textAlign: "left", paddingBottom: 6, fontWeight: 500 }}>With</th>
+              <th>Date</th>
+              <th>Type</th>
+              <th className="num">Amount</th>
+              <th>With</th>
               <th />
             </tr>
           </thead>
@@ -174,7 +174,7 @@ export function WalletTxHistory({ group, network }: { group: GroupSummary; netwo
       )}
 
       {onchainRows.length > 50 && (
-        <p className="dim" style={{ marginTop: 8, fontSize: 12 }}>
+        <p className="dim mt-2 text-sm">
           Showing 50 most recent of {onchainRows.length} transactions.
         </p>
       )}
@@ -265,7 +265,7 @@ export function TxDetail({
             return (
               <span key={pk}>
                 {i > 0 ? ", " : ""}
-                <span style={{ color: p.isSelf ? "#4ade80" : undefined }}>{p.label}</span>
+                <span className={p.isSelf ? "ok-text" : undefined}>{p.label}</span>
               </span>
             );
           })}
@@ -276,28 +276,20 @@ export function TxDetail({
 
   return (
     <tr>
-      <td
-        colSpan={colSpan}
-        style={{ padding: "0 0 12px 0", background: "var(--bg-elevated)" }}
-      >
-        <div style={{ padding: "8px 12px 4px", overflow: "hidden" }}>
-          <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+      <td colSpan={colSpan} className="tx-detail-cell">
+        <div className="tx-detail">
+          <table>
             <tbody>
               {rows.map(({ label, value, mono }) => (
                 <tr key={label}>
-                  <td style={{ color: "var(--fg-muted)", whiteSpace: "nowrap", paddingRight: 12, paddingBottom: 5, verticalAlign: "top", width: "120px" }}>
-                    {label}
-                  </td>
-                  <td style={{ paddingBottom: 5, verticalAlign: "top", wordBreak: "break-all", overflowWrap: "anywhere" }}
-                    className={mono ? "mono" : undefined}>
-                    {value}
-                  </td>
+                  <td className="tx-detail-label">{label}</td>
+                  <td className={mono ? "mono" : undefined}>{value}</td>
                 </tr>
               ))}
               {error && (
                 <tr>
-                  <td style={{ color: "var(--fg-muted)", whiteSpace: "nowrap", paddingRight: 12, paddingBottom: 5, verticalAlign: "top" }}>Error</td>
-                  <td style={{ color: "var(--danger)", paddingBottom: 5 }}>{error}</td>
+                  <td className="tx-detail-label">Error</td>
+                  <td className="danger-text">{error}</td>
                 </tr>
               )}
             </tbody>
@@ -315,21 +307,10 @@ export type PendingRow = CeremonyState & { id: string };
 export function MemoRow({ memo }: { memo: string }) {
   return (
     <tr>
-      <td colSpan={5} style={{ padding: "0 8px 6px 8px", borderTop: "none" }}>
-        <div
-          style={{
-            display: "flex",
-            gap: 6,
-            alignItems: "baseline",
-            fontSize: 11,
-            color: "var(--fg-muted)",
-          }}
-        >
+      <td colSpan={5} className="tx-memo-cell">
+        <div className="flex gap-2 items-baseline text-xs muted">
           <span className="dim">Memo</span>
-          <span
-            style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
-            title={memo}
-          >
+          <span className="truncate" title={memo}>
             {memo}
           </span>
         </div>
@@ -359,36 +340,26 @@ export function PendingTxRow({
   const isUnshield = meta?.isUnshield;
   const dateStr = row.startedAt ? fmtDate(new Date(row.startedAt)) : "—";
   const addrDisplay = meta?.recipient ? meta.recipient.slice(0, 10) + "…" : "—";
-  // Yellow text for in-flight / broadcast-but-unconfirmed rows.
-  const pendingColor = !row.failed ? "#facc15" : undefined;
-
   return (
     <>
-      <tr className="tx-row" onClick={onToggle}>
-        <td style={{ maxWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12, color: pendingColor ?? "var(--fg-muted)" }}>{dateStr}</td>
-        <td style={{ maxWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+      {/* In flight or sent but unconfirmed reads in the pending colour. */}
+      <tr className={row.failed ? "tx-row" : "tx-row pending"} onClick={onToggle}>
+        <td>{dateStr}</td>
+        <td>
           {row.failed ? (
-            <span style={{ color: "var(--danger)", fontSize: 12 }}>✕ Failed</span>
+            <span className="danger-text">✕ Failed</span>
           ) : !row.txid ? (
-            <span style={{ color: pendingColor, fontSize: 12 }}>↑ Sending…</span>
+            "↑ Sending…"
           ) : isUnshield ? (
-            <span style={{ color: pendingColor, fontSize: 12 }}>⇲ Unshield</span>
+            "⇲ Unshield"
           ) : (
-            <span style={{ color: pendingColor, fontSize: 12 }}>↑ Sent</span>
+            "↑ Sent"
           )}
         </td>
-        <td style={{ textAlign: "right", paddingRight: 12, maxWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12, color: pendingColor }}>
-          {meta ? `−${zec(meta.amountZatoshis)} ${unit(network)}` : "—"}
-        </td>
-        <td className="mono-cell" style={{ maxWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 11, color: pendingColor ?? "var(--fg-muted)" }}>
-          {addrDisplay}
-        </td>
-        <td style={{ textAlign: "center" }}>
-          <button
-            className="secondary"
-            style={{ padding: "2px 6px", fontSize: 11, lineHeight: 1 }}
-            title={isExpanded ? "Collapse" : "Expand"}
-          >
+        <td className="num">{meta ? `−${zec(meta.amountZatoshis)} ${unit(network)}` : "—"}</td>
+        <td className="mono-cell tx-with">{addrDisplay}</td>
+        <td className="tx-toggle-cell">
+          <button className="secondary tx-toggle" title={isExpanded ? "Collapse" : "Expand"}>
             {isExpanded ? "−" : "+"}
           </button>
         </td>
@@ -451,33 +422,27 @@ export function OnchainTxRow({
   return (
     <>
       <tr className="tx-row" onClick={onToggle}>
-        <td className="dim" style={{ maxWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12 }}>{dateDisplay}</td>
-        <td style={{ maxWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        <td className="dim text-sm">{dateDisplay}</td>
+        <td>
           {isReceive ? (
-            <span style={{ color: "#4ade80", fontSize: 12 }}>↓ Received</span>
+            <span className="ok-text">↓ Received</span>
           ) : isMove ? (
-            <span className="dim" style={{ fontSize: 12 }} title="Moved from the old address to the private one">
+            <span className="dim text-sm" title="Moved from the old address to the private one">
               ⇄ Made private
             </span>
           ) : (
-            <span style={{ color: "var(--accent)", fontSize: 12 }}>↑ Sent</span>
+            <span className="accent">↑ Sent</span>
           )}
         </td>
-        <td style={{ textAlign: "right", paddingRight: 12, maxWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12 }}>
-          <span style={{ color: isReceive ? "#4ade80" : undefined }}>
+        <td className="num">
+          <span className={isReceive ? "ok-text" : undefined}>
             {isReceive ? "+" : isMove ? "" : "−"}
             {zec(tx.amount_zatoshis)} {unit(network)}
           </span>
         </td>
-        <td className="dim mono-cell" style={{ maxWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 11 }}>
-          {addrDisplay}
-        </td>
-        <td style={{ textAlign: "center" }}>
-          <button
-            className="secondary"
-            style={{ padding: "2px 6px", fontSize: 11, lineHeight: 1 }}
-            title={isExpanded ? "Collapse" : "Expand"}
-          >
+        <td className="dim mono-cell tx-with">{addrDisplay}</td>
+        <td className="tx-toggle-cell">
+          <button className="secondary tx-toggle" title={isExpanded ? "Collapse" : "Expand"}>
             {isExpanded ? "−" : "+"}
           </button>
         </td>

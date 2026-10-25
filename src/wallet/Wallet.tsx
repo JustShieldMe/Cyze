@@ -170,7 +170,7 @@ export function GroupWallet({ group, network }: { group: GroupSummary; network: 
             <button onClick={() => forceSync()}>Retry</button>
           </>
         ) : (
-          <p className="dim" style={{ margin: 0 }}>Setting up the wallet…</p>
+          <p className="dim m-0">Setting up the wallet…</p>
         )}
       </div>
     );
@@ -188,7 +188,7 @@ export function GroupWallet({ group, network }: { group: GroupSummary; network: 
               {zec(pool.total_zatoshis)} <span className="balance-unit">{unit(network)}</span>
             </div>
             {pool.pending_zatoshis > 0 && (
-              <div className="dim" style={{ fontSize: 13 }}>
+              <div className="dim text-md">
                 {zec(pool.spendable_zatoshis)} spendable · {zec(pool.pending_zatoshis)} waiting for confirmations
               </div>
             )}
@@ -225,8 +225,8 @@ export function GroupWallet({ group, network }: { group: GroupSummary; network: 
         </div>
         {syncErr && <SyncErrorView text={syncErr} />}
         {livePool === "ironwood" && s.orchard.spendable_zatoshis > SELF_SEND_FEE_BUFFER && !sendInProgress && (
-          <div className="callout" style={{ marginTop: 12, alignItems: "center" }}>
-            <span style={{ flex: 1 }}>
+          <div className="callout mt-3 items-center">
+            <span className="flex-1">
               {zec(s.orchard.spendable_zatoshis)} {unit(network)} is in an older format. Move it so it stays spendable.
             </span>
             <button onClick={() => selfSend.mutate("migration")} disabled={selfSend.isPending}>
@@ -370,7 +370,7 @@ function EnterSend({
 
   return (
     <div className="card panel">
-      <h3 style={{ marginTop: 0 }}>Send</h3>
+      <h3 className="mt-0">Send</h3>
       <label>To</label>
       <input
         type="text"
@@ -378,35 +378,35 @@ function EnterSend({
         value={recipient}
         onChange={(e) => setRecipient(e.target.value)}
       />
-      {check.error && <div className="error" style={{ marginTop: -4 }}>{check.error}</div>}
+      {check.error && <div className="error pull-up">{check.error}</div>}
       {check.transparent && !check.error && (
-        <p className="dim" style={{ marginTop: -4, fontSize: 12 }}>
+        <p className="dim pull-up text-sm">
           A transparent address: the amount and recipient will be public.
         </p>
       )}
       {isName && network === "main" && (
-        <p className="dim" style={{ marginTop: -4, fontSize: 12 }}>
+        <p className="dim pull-up text-sm">
           ZcashNames lookups are off on mainnet until there's a production directory. Paste the address instead.
         </p>
       )}
       {isName && network !== "main" &&
         (zns ? (
-          <div className="callout" style={{ marginBottom: 12, display: "block" }}>
+          <div className="callout mb-3 block">
             <div className="dim">{zns.name}.zcash is this address. Check it before sending:</div>
-            <div className="mono-cell" style={{ wordBreak: "break-all", marginTop: 4 }}>{zns.address}</div>
+            <div className="mono-cell break-all mt-1">{zns.address}</div>
             {zns.listing && (
-              <div className="error" style={{ marginBottom: 0 }}>
+              <div className="error mb-0">
                 This name is for sale, so its owner and address may change.
               </div>
             )}
           </div>
         ) : (
-          <button className="secondary" style={{ marginBottom: 12 }} onClick={() => resolve.mutate()} disabled={resolve.isPending}>
+          <button className="secondary mb-3" onClick={() => resolve.mutate()} disabled={resolve.isPending}>
             {resolve.isPending ? "Looking up…" : "Look up name"}
           </button>
         ))}
 
-      <div className="row" style={{ justifyContent: "space-between" }}>
+      <div className="row between">
         <label>Amount ({unit(network)})</label>
         {spendable > 0 && !all && (
           <button className="link-button" onClick={() => setAll(true)}>
@@ -424,7 +424,7 @@ function EnterSend({
           setAmount(e.target.value);
         }}
       />
-      <p className="dim" style={{ marginTop: -6, fontSize: 12 }}>
+      <p className="dim pull-up text-sm">
         {all
           ? "Everything available. The network fee comes out of it."
           : tooMuch
@@ -446,7 +446,7 @@ function EnterSend({
       )}
 
       {err && <SyncErrorView text={err} />}
-      {blocked && <p className="dim" style={{ fontSize: 12 }}>{blocked}</p>}
+      {blocked && <p className="dim text-sm">{blocked}</p>}
       <button
         onClick={() => prepare.mutate()}
         disabled={
@@ -542,7 +542,7 @@ function ReviewSend({
 
   return (
     <div className="card panel">
-      <h3 style={{ marginTop: 0 }}>{title}</h3>
+      <h3 className="mt-0">{title}</h3>
       {kind === "migration" && (
         <p className="dim">Sends these funds back to this wallet in the current format.</p>
       )}
@@ -557,7 +557,7 @@ function ReviewSend({
         <tbody>
           <tr>
             <td>To</td>
-            <td className="mono-cell" style={{ wordBreak: "break-all" }}>{kind === "move" ? "This wallet's private address" : selfSend ? "This wallet" : draft.recipient}</td>
+            <td className="mono-cell break-all">{kind === "move" ? "This wallet's private address" : selfSend ? "This wallet" : draft.recipient}</td>
           </tr>
           <tr>
             <td>Amount</td>
@@ -574,20 +574,20 @@ function ReviewSend({
           {draft.memo && (
             <tr>
               <td>Memo</td>
-              <td style={{ wordBreak: "break-word" }}>{draft.memo}</td>
+              <td className="break-word">{draft.memo}</td>
             </tr>
           )}
         </tbody>
       </table>
       {draft.is_unshield && !selfSend && (
-        <p className="dim" style={{ fontSize: 12 }}>To a transparent address: the amount and recipient will be public.</p>
+        <p className="dim text-sm">To a transparent address: the amount and recipient will be public.</p>
       )}
 
-      <label style={{ marginTop: 14 }}>
+      <label className="mt-4">
         Ask to approve ({group.threshold} of {group.num_participants} needed)
       </label>
       {members.map((m) => (
-        <label key={m.pubkey} className="member-pick" style={{ marginBottom: 6 }}>
+        <label key={m.pubkey} className="member-pick mb-2">
           <input
             type="checkbox"
             checked={signers.has(m.pubkey)}
@@ -603,19 +603,19 @@ function ReviewSend({
         </label>
       ))}
       {signers.size < group.threshold && (
-        <p className="dim" style={{ fontSize: 12 }}>
+        <p className="dim text-sm">
           Choose {group.threshold - signers.size} more. Each must be online to approve.
         </p>
       )}
 
       {needsCheck && (
-        <label className="row confirm" style={{ alignItems: "flex-start", marginTop: 10 }}>
-          <input type="checkbox" style={{ width: "auto", marginTop: 3 }} checked={checked} onChange={(e) => setChecked(e.target.checked)} />
+        <label className="row confirm items-start mt-3">
+          <input type="checkbox" className="w-auto mt-1" checked={checked} onChange={(e) => setChecked(e.target.checked)} />
           <span>The recipient is correct. A payment can't be undone.</span>
         </label>
       )}
 
-      <div className="row" style={{ marginTop: 12 }}>
+      <div className="row mt-3">
         <button className="secondary" onClick={onBack} disabled={send.isPending}>
           Back
         </button>
@@ -626,13 +626,13 @@ function ReviewSend({
           {send.isPending ? "Starting…" : "Request approvals"}
         </button>
       </div>
-      <details style={{ marginTop: 14 }}>
-        <summary className="dim" style={{ cursor: "pointer", fontSize: 12 }}>Technical details</summary>
+      <details className="mt-4">
+        <summary className="dim clickable text-sm">Technical details</summary>
         <table className="participants">
           <tbody>
             <tr>
               <td>Signature hash</td>
-              <td className="dim mono-cell" style={{ wordBreak: "break-all" }}>{draft.sighash_hex}</td>
+              <td className="dim mono-cell break-all">{draft.sighash_hex}</td>
             </tr>
             <tr>
               <td>Inputs</td>

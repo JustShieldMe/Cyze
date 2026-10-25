@@ -40,7 +40,7 @@ export default function JoinGroup() {
       <h2>Join with an invite</h2>
       <YourContactCode />
       <div className="card">
-        <h3 style={{ marginTop: 0 }}>2. Paste the invite they send back</h3>
+        <h3 className="mt-0">2. Paste the invite they send back</h3>
         <textarea
           rows={3}
           placeholder={`${PREFIX}…`}
@@ -70,7 +70,7 @@ function YourContactCode() {
   });
   return (
     <div className="card">
-      <h3 style={{ marginTop: 0 }}>1. Send the organizer your contact code</h3>
+      <h3 className="mt-0">1. Send the organizer your contact code</h3>
       {!username ? (
         <div className="row">
           <input type="text" placeholder="Your name, as the others will see it" value={name} onChange={(e) => setName(e.target.value)} />
@@ -82,8 +82,7 @@ function YourContactCode() {
         <>
           <div className="mono">{contact.data.text}</div>
           <button
-            className="secondary"
-            style={{ marginTop: 8 }}
+            className="secondary mt-2"
             onClick={async () => {
               await navigator.clipboard.writeText(contact.data.text);
               setCopied(true);
@@ -92,7 +91,7 @@ function YourContactCode() {
           >
             {copied ? "Copied" : "Copy"}
           </button>
-          <p className="dim" style={{ fontSize: 12, marginBottom: 0 }}>They need it to add you before they make the invite.</p>
+          <p className="dim text-sm mb-0">They need it to add you before they make the invite.</p>
         </>
       ) : (
         <p className="dim">Loading…</p>
@@ -130,7 +129,7 @@ function InviteReview({
   if (!invite.for_you) {
     return (
       <div className="card">
-        <p className="error" style={{ margin: 0 }}>
+        <p className="error m-0">
           This invite doesn't include you. Send {memberLabel(invite.organizer)} your contact code and ask for a new one.
         </p>
       </div>
@@ -139,8 +138,8 @@ function InviteReview({
 
   return (
     <div className="card">
-      <h3 style={{ marginTop: 0 }}>{invite.name}</h3>
-      <p style={{ marginTop: 0 }}>
+      <h3 className="mt-0">{invite.name}</h3>
+      <p className="mt-0">
         {invite.threshold} of {invite.members.length} members must approve each payment. Organized by{" "}
         <strong>{memberLabel(invite.organizer)}</strong>.
       </p>
@@ -161,8 +160,8 @@ function InviteReview({
       </div>
 
       {fresh.length > 0 && (
-        <label className="row confirm" style={{ alignItems: "flex-start", marginTop: 12 }}>
-          <input type="checkbox" style={{ width: "auto", marginTop: 3 }} checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />
+        <label className="row confirm items-start mt-3">
+          <input type="checkbox" className="w-auto mt-1" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />
           <span>
             {fresh.length === 1
               ? `Add ${fresh[0].name} to my contacts. Their key comes from ${memberLabel(invite.organizer)}'s invite; if you can, compare it with them.`
@@ -171,12 +170,12 @@ function InviteReview({
         </label>
       )}
       {invite.cert_fingerprint && (
-        <p className="dim" style={{ fontSize: 12 }}>
+        <p className="dim text-sm">
           The server uses its own certificate ({invite.cert_fingerprint.slice(0, 23)}…). Joining trusts it.
         </p>
       )}
 
-      <label style={{ marginTop: 12 }}>Your name for this wallet</label>
+      <label className="mt-3">Your name for this wallet</label>
       <input type="text" value={name} onChange={(e) => setName(e.target.value)} />
       {join.error && <div className="error">{(join.error as unknown as AppError).message}</div>}
       <button disabled={(fresh.length > 0 && !confirmed) || join.isPending} onClick={() => join.mutate()}>

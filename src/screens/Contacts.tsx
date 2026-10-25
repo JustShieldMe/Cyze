@@ -25,7 +25,7 @@ function AliasCell({ contact, onSaved }: { contact: ContactDto; onSaved: () => v
 
   if (editing) {
     return (
-      <div className="row" style={{ gap: 6 }}>
+      <div className="row gap-2 inline-edit">
         <input
           type="text"
           autoFocus
@@ -36,9 +36,8 @@ function AliasCell({ contact, onSaved }: { contact: ContactDto; onSaved: () => v
             if (e.key === "Enter") save();
             if (e.key === "Escape") setEditing(false);
           }}
-          style={{ marginBottom: 0, padding: "4px 8px" }}
         />
-        <button onClick={save} style={{ padding: "5px 10px" }}>
+        <button onClick={save}>
           Save
         </button>
       </div>
@@ -46,7 +45,7 @@ function AliasCell({ contact, onSaved }: { contact: ContactDto; onSaved: () => v
   }
 
   return (
-    <div className="row" style={{ gap: 6 }}>
+    <div className="row gap-2">
       <span className={contact.alias ? undefined : "dim"}>
         {contact.alias || "—"}
       </span>
@@ -98,7 +97,7 @@ function ContactRow({
             {checking ? "Close" : c.verified ? "Show" : "Check"}
           </button>
         </td>
-        <td style={{ textAlign: "right" }}>
+        <td className="text-right">
           <button
             className="link-button danger-link"
             onClick={() => {
@@ -113,26 +112,26 @@ function ContactRow({
         <tr>
           <td colSpan={4}>
             <div className="safety-check">
-              <p style={{ marginTop: 0 }}>
+              <p className="mt-0">
                 Ask {c.alias || c.name} to read you their safety code, by phone or in person. It should be:
               </p>
               <div className="safety-code">{c.safety_code}</div>
               {ownCode && (
-                <p className="dim" style={{ fontSize: 12 }}>
+                <p className="dim text-sm">
                   Yours, for them to check: <span className="code-inline">{ownCode}</span>
                 </p>
               )}
-              <label className="row confirm" style={{ margin: 0 }}>
+              <label className="row confirm m-0">
                 <input
                   type="checkbox"
-                  style={{ width: "auto", margin: 0 }}
+                  className="w-auto m-0"
                   checked={c.verified}
                   disabled={verify.isPending}
                   onChange={(e) => verify.mutate(e.target.checked)}
                 />
                 <span>It matches</span>
               </label>
-              <p className="dim" style={{ fontSize: 12, marginBottom: 0 }}>
+              <p className="dim text-sm mb-0">
                 If it doesn't, the contact code you have may not be theirs. Remove it and ask them again.
               </p>
             </div>
@@ -176,7 +175,7 @@ export default function Contacts() {
   });
 
   return (
-    <section style={{ marginTop: 28 }}>
+    <section className="mt-6">
       <h2>Contacts</h2>
       <div className="card">
         {contacts.data?.length ? (
@@ -204,7 +203,7 @@ export default function Contacts() {
             </tbody>
           </table>
         ) : (
-          <p className="dim" style={{ margin: 0 }}>
+          <p className="dim m-0">
             No contacts yet. Swap contact codes with the people you'll share a wallet with.
           </p>
         )}
@@ -229,16 +228,15 @@ export default function Contacts() {
             </button>
           </div>
           {identity.data?.safety_code && (
-            <p className="dim" style={{ fontSize: 12 }}>
+            <p className="dim text-sm">
               Your safety code: <span className="code-inline">{identity.data.safety_code}</span>
             </p>
           )}
           {myContact && (
-            <div style={{ marginTop: 12 }}>
+            <div className="mt-3">
               <div className="mono">{myContact.text}</div>
               <button
-                className="secondary"
-                style={{ marginTop: 8 }}
+                className="secondary mt-2"
                 onClick={async () => {
                   await navigator.clipboard.writeText(myContact.text);
                   setCopied(true);

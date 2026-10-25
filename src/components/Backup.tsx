@@ -21,8 +21,8 @@ export function BackupReminder() {
   const { status, save } = useBackup();
   if (!status || !status.has_groups || status.up_to_date) return null;
   return (
-    <div className="callout warn" style={{ marginBottom: 16, alignItems: "center" }}>
-      <span style={{ flex: 1 }}>
+    <div className="callout warn mb-4 items-center">
+      <span className="flex-1">
         <strong>
           {status.last_backup_at ? "Your backup is missing a newer group." : "Back up your key shares."}
         </strong>{" "}
@@ -42,9 +42,9 @@ export function BackupCard() {
   const { status, save } = useBackup();
   const last = status?.last_backup_at ? new Date(status.last_backup_at * 1000) : null;
   return (
-    <div className="card" style={{ marginTop: 18 }}>
-      <h3 style={{ marginTop: 0 }}>Key backup</h3>
-      <p className="dim" style={{ marginTop: 0 }}>
+    <div className="card mt-5">
+      <h3 className="mt-0">Key backup</h3>
+      <p className="dim mt-0">
         {last
           ? `Last backed up ${last.toLocaleDateString()}${status?.up_to_date ? "." : ", before your newest group: back up again."}`
           : "Not backed up yet."}{" "}

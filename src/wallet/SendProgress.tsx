@@ -68,10 +68,10 @@ export function SessionParticipants({
   }).length;
 
   return (
-    <div style={{ marginTop: 14 }}>
+    <div className="mt-4">
       <label>
         Approvals{" "}
-        <span className="dim" style={{ fontWeight: 400 }}>
+        <span className="dim normal-weight">
           {approvedCount} of {signers.length}
         </span>
       </label>
@@ -84,10 +84,10 @@ export function SessionParticipants({
             const badge = badgeFor(status);
             return (
               <tr key={pubkey}>
-                <td style={{ color: p.isSelf ? "var(--ok)" : undefined }}>
+                <td className={p.isSelf ? "ok-text" : undefined}>
                   {p.label} <span className="dim code-inline">{p.shortPubkey}</span>
                 </td>
-                <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                <td className="text-right nowrap">
                   <span className={`badge ${badge.cls}`}>{badge.label}</span>
                 </td>
               </tr>
@@ -139,7 +139,7 @@ export function SendSessionPanel({
 
   return (
     <div className="card panel">
-      <h3 style={{ marginTop: 0 }}>{done ? "Payment sent" : failed ? "Payment failed" : "Payment in progress"}</h3>
+      <h3 className="mt-0">{done ? "Payment sent" : failed ? "Payment failed" : "Payment in progress"}</h3>
       {meta && (
         <table className="participants">
           <tbody>
@@ -149,7 +149,7 @@ export function SendSessionPanel({
             </tr>
             <tr>
               <td>To</td>
-              <td className="mono-cell" style={{ wordBreak: "break-all" }}>
+              <td className="mono-cell break-all">
                 {meta.isConsolidation ? "This wallet" : meta.recipient}
               </td>
             </tr>
@@ -160,7 +160,7 @@ export function SendSessionPanel({
             {meta.memo && (
               <tr>
                 <td>Memo</td>
-                <td style={{ wordBreak: "break-word" }}>{meta.memo}</td>
+                <td className="break-word">{meta.memo}</td>
               </tr>
             )}
           </tbody>
@@ -191,14 +191,14 @@ export function SendSessionPanel({
       </ol>
 
       {!done && !failed && elapsedMin >= 10 && (
-        <div className="callout warn" style={{ marginTop: 4 }}>
+        <div className="callout warn mt-1">
           <span>Waiting {elapsedMin} minutes. A member may be offline; you can cancel and try again later.</span>
         </div>
       )}
       {done && <p className="ok">It confirms on the network in a few minutes.</p>}
       {failed && <div className="error">{ceremony.error ?? "Something went wrong."}</div>}
 
-      <div className="row" style={{ marginTop: 12, flexWrap: "wrap", gap: 8 }}>
+      <div className="row mt-3 wrap gap-2">
         <button className={done || failed ? "" : "secondary"} onClick={onDismiss}>
           {done || failed ? "Done" : "Hide"}
         </button>
@@ -209,9 +209,9 @@ export function SendSessionPanel({
         )}
       </div>
 
-      <details style={{ marginTop: 14 }}>
-        <summary className="dim" style={{ cursor: "pointer", fontSize: 12 }}>Technical details</summary>
-        <p className="dim" style={{ fontSize: 12 }}>
+      <details className="mt-4">
+        <summary className="dim clickable text-sm">Technical details</summary>
+        <p className="dim text-sm">
           Members approve in <Link to="/inbox">Approvals</Link>. Someone signing with the command-line
           tools needs the session ID{ceremony.groupId ? " and group key" : ""}.
         </p>

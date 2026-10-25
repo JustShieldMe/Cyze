@@ -112,7 +112,7 @@ export default function NewSigningSession() {
               <p className="ok">Signature complete and verified.</p>
               <label>Signature (hex)</label>
               <div className="mono">{ceremony.signatureHex}</div>
-              <div className="row" style={{ marginTop: 10 }}>
+              <div className="row mt-3">
                 <button
                   onClick={async () => {
                     await navigator.clipboard.writeText(ceremony.signatureHex!);
@@ -168,10 +168,10 @@ export default function NewSigningSession() {
               not need to be one of them)
             </label>
             {participantsWithNames.map((p) => (
-              <div key={p.pubkey} className="row" style={{ marginBottom: 6 }}>
+              <div key={p.pubkey} className="row mb-2">
                 <input
                   type="checkbox"
-                  style={{ width: "auto" }}
+                  className="w-auto"
                   checked={selected.has(p.pubkey)}
                   onChange={(e) => {
                     const next = new Set(selected);
@@ -185,8 +185,8 @@ export default function NewSigningSession() {
               </div>
             ))}
 
-            <label style={{ marginTop: 12 }}>Message</label>
-            <div className="row" style={{ marginBottom: 8 }}>
+            <label className="mt-3">Message</label>
+            <div className="row mb-2">
               <button
                 className={messageMode === "text" ? "" : "secondary"}
                 onClick={() => setMessageMode("text")}

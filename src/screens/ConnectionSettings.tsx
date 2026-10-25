@@ -40,7 +40,7 @@ export function isEphemeralServer(url: string): boolean {
  *  because a tunnel or TLS proxy is in front. */
 function TransportSecurityNote() {
   return (
-    <p className="dim" style={{ fontSize: 12, marginTop: 12 }}>
+    <p className="dim text-sm mt-3">
       Whichever you pick, messages stay end-to-end encrypted and members are
       checked by their keys.
     </p>
@@ -75,11 +75,11 @@ export default function ConnectionSettings() {
   return (
     <div>
       {configured && (
-        <p className="dim" style={{ marginTop: 0 }}>
+        <p className="dim mt-0">
           You're set up as {savedRole === "participant" ? "a member joining" : "the organizer"}. Change it below.
         </p>
       )}
-      <div className="row" style={{ gap: 12, marginTop: 16, flexWrap: "wrap" }}>
+      <div className="row gap-3 mt-4 wrap">
         <RoleCard
           active={effectiveRole === "coordinator"}
           onClick={() => setRole("coordinator")}
@@ -114,21 +114,9 @@ function RoleCard({
   desc: string;
 }) {
   return (
-    <button
-      onClick={onClick}
-      className="card"
-      style={{
-        flex: "1 1 260px",
-        textAlign: "left",
-        cursor: "pointer",
-        border: active ? "1px solid var(--accent)" : "1px solid var(--border)",
-        background: active ? "var(--bg-elevated)" : "var(--bg-card)",
-      }}
-    >
-      <div style={{ fontWeight: 600, color: active ? "var(--accent)" : "var(--text)" }}>
-        {title}
-      </div>
-      <div className="dim" style={{ fontSize: 13, marginTop: 6 }}>
+    <button onClick={onClick} className={active ? "card option active" : "card option"}>
+      <div className="option-title">{title}</div>
+      <div className="dim text-md mt-2">
         {desc}
       </div>
     </button>
@@ -189,8 +177,8 @@ function CoordinatorPath({ savedExposure }: { savedExposure: string | null }) {
   const port = sidecar.data?.port ?? 2744;
 
   return (
-    <div className="card" style={{ marginTop: 18 }}>
-      <h3 style={{ marginTop: 0 }}>Step 1 — Start the server</h3>
+    <div className="card mt-5">
+      <h3 className="mt-0">Step 1 — Start the server</h3>
       {error && <div className="error">{error}</div>}
 
       {running ? (
@@ -204,7 +192,7 @@ function CoordinatorPath({ savedExposure }: { savedExposure: string | null }) {
               who reach it through a tunnel or reverse proxy rather than over the
               LAN, so exposing 0.0.0.0 bought almost nothing and widened the
               attack surface for anyone who ticked it without needing it. */}
-          <p className="dim" style={{ fontSize: 12, marginTop: 0 }}>
+          <p className="dim text-sm mt-0">
             Members reach it the way you choose in step 2.
           </p>
           <button onClick={() => start.mutate()} disabled={start.isPending}>
@@ -214,15 +202,15 @@ function CoordinatorPath({ savedExposure }: { savedExposure: string | null }) {
       )}
 
       {running && (
-        <div className="row" style={{ gap: 8, marginTop: 8 }}>
+        <div className="row gap-2 mt-2">
           <button className="secondary" onClick={() => stop.mutate()}>
             Stop server
           </button>
         </div>
       )}
 
-      <h3 style={{ marginTop: 24 }}>Step 2 — Choose how members reach it</h3>
-      <div className="row" style={{ gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+      <h3 className="mt-6">Step 2 — Choose how members reach it</h3>
+      <div className="row gap-2 wrap mb-2">
         <ExposureTab active={exposure === "tunnel"} onClick={() => setExposure("tunnel")} label="Public link (Cloudflare)" />
         <ExposureTab active={exposure === "tailscale"} onClick={() => setExposure("tailscale")} label="Tailscale" />
         <ExposureTab active={exposure === "direct"} onClick={() => setExposure("direct")} label="Direct address" />
@@ -264,22 +252,16 @@ function CoordinatorPath({ savedExposure }: { savedExposure: string | null }) {
 
       <TransportSecurityNote />
 
-      <div
-        style={{
-          marginTop: 18,
-          borderTop: "1px solid var(--border)",
-          paddingTop: 14,
-        }}
-      >
+      <div className="section-rule mt-5">
         <button onClick={() => saveConfig.mutate()} disabled={saveConfig.isPending}>
           {saveConfig.isPending ? "Saving…" : "Save this configuration"}
         </button>
         {saved && (
-          <span className="ok" style={{ marginLeft: 10 }}>
+          <span className="ok ml-3">
             Saved ✓
           </span>
         )}
-        <p className="dim" style={{ fontSize: 12, marginTop: 6 }}>
+        <p className="dim text-sm mt-2">
           Remembered for next time.
         </p>
       </div>
@@ -297,18 +279,7 @@ function ExposureTab({
   label: string;
 }) {
   return (
-    <button
-      onClick={onClick}
-      style={{
-        background: "none",
-        border: "none",
-        borderBottom: active ? "2px solid var(--accent)" : "2px solid transparent",
-        color: active ? "var(--accent)" : "inherit",
-        padding: "6px 12px",
-        cursor: "pointer",
-        fontWeight: active ? 600 : 400,
-      }}
-    >
+    <button onClick={onClick} className={active ? "tab active" : "tab"}>
       {label}
     </button>
   );
@@ -331,7 +302,7 @@ function DirectExposure({
 }) {
   return (
     <div>
-      <p className="dim" style={{ marginTop: 0 }}>
+      <p className="dim mt-0">
         Give participants the server URL, the certificate fingerprint (to verify),
         and the certificate itself (it's self-signed, so they must trust it once).
       </p>
@@ -353,7 +324,7 @@ function DirectExposure({
 
       {lanAddresses.length > 0 && (
         <>
-          <label style={{ marginTop: 8 }}>LAN addresses participants can use</label>
+          <label className="mt-2">LAN addresses participants can use</label>
           {lanAddresses.map((ip) => (
             <div className="mono" key={ip}>
               https://{ip}:{port}
@@ -364,21 +335,21 @@ function DirectExposure({
 
       {fingerprint && (
         <>
-          <label style={{ marginTop: 8 }}>Certificate fingerprint (SHA-256)</label>
+          <label className="mt-2">Certificate fingerprint (SHA-256)</label>
           <div className="mono">{fingerprint}</div>
           <CopyButton text={fingerprint} label="Copy fingerprint" />
         </>
       )}
 
-      <div style={{ marginTop: 12 }}>
+      <div className="mt-3">
         <button className="secondary" onClick={onExportCert}>
           Export certificate (PEM)
         </button>
       </div>
       {cert && (
         <>
-          <label style={{ marginTop: 8 }}>Certificate — share with participants</label>
-          <textarea rows={6} readOnly value={cert} style={{ width: "100%" }} />
+          <label className="mt-2">Certificate — share with participants</label>
+          <textarea rows={6} readOnly value={cert} className="w-full" />
           <CopyButton text={cert} label="Copy certificate" />
         </>
       )}
@@ -401,7 +372,7 @@ function TunnelExposure({
 }) {
   return (
     <div>
-      <p className="dim" style={{ marginTop: 0 }}>
+      <p className="dim mt-0">
         Auto-provisions a public <span className="mono">*.trycloudflare.com</span>{" "}
         URL that reaches this server through NAT with no router setup. Cloudflare
         terminates public TLS with a trusted certificate, so participants connect
@@ -412,15 +383,15 @@ function TunnelExposure({
           <div>
             <span className="badge green">tunnel up</span>
           </div>
-          <label style={{ marginTop: 8 }}>Public URL — share with participants</label>
+          <label className="mt-2">Public URL — share with participants</label>
           <div className="mono">{publicUrl}</div>
-          <div className="row" style={{ gap: 8, marginTop: 8 }}>
+          <div className="row gap-2 mt-2">
             <CopyButton text={publicUrl} label="Copy URL" />
             <button className="secondary" onClick={onClose}>
               Close tunnel
             </button>
           </div>
-          <div className="callout warn" style={{ marginTop: 10 }}>
+          <div className="callout warn mt-3">
             <span>
               While the tunnel is open, the server is reachable from the public
               internet. Close it when the ceremony is done.
@@ -465,20 +436,20 @@ server {
 
   return (
     <div>
-      <p className="dim" style={{ marginTop: 0 }}>
+      <p className="dim mt-0">
         Front the loopback server with your own NGINX + domain + TLS certificate.
         Keep the server bound to loopback (Step 1 unchecked) and run NGINX on the
         same host. Participants connect to your domain with system-trusted TLS —
         no cert-trust step.
       </p>
-      <ol className="dim" style={{ fontSize: 13, paddingLeft: 18 }}>
+      <ol className="dim guide-list">
         <li>Point a domain's DNS at this host.</li>
         <li>Obtain a TLS certificate (e.g. Let's Encrypt / certbot).</li>
         <li>Drop the config below into <span className="mono">/etc/nginx/sites-enabled/</span> and reload NGINX.</li>
         <li>Share <span className="mono">https://your-domain</span> with participants.</li>
       </ol>
       <label>nginx site config</label>
-      <textarea rows={16} readOnly value={conf} style={{ width: "100%", fontFamily: "var(--mono)", fontSize: 12 }} />
+      <textarea rows={16} readOnly value={conf} />
       <CopyButton text={conf} label="Copy config" />
     </div>
   );
@@ -545,8 +516,8 @@ function ParticipantPath() {
   });
 
   return (
-    <div className="card" style={{ marginTop: 18 }}>
-      <h3 style={{ marginTop: 0 }}>Connect to the coordinator's server</h3>
+    <div className="card mt-5">
+      <h3 className="mt-0">Connect to the coordinator's server</h3>
       {error && <div className="error">{error}</div>}
       {status && <div className="callout"><span>{status}</span></div>}
 
@@ -555,22 +526,14 @@ function ParticipantPath() {
         value={manualUrl}
         onChange={(e) => setManualUrl(e.target.value)}
         placeholder="https://…"
-        style={{ width: "100%" }}
+        className="w-full"
       />
-      <div className="dim" style={{ fontSize: 12, marginTop: 6 }}>
-        <p style={{ margin: "0 0 8px" }}>
+      <div className="dim text-sm mt-2">
+        <p className="m-0 mb-2">
           Paste the address the coordinator is sharing right now. It looks like
           one of:
         </p>
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "auto 1fr",
-            columnGap: 12,
-            rowGap: 6,
-            alignItems: "baseline",
-          }}
-        >
+        <div className="address-examples">
           <span className="mono">https://frost.example.com</span>
           <span>a domain / NGINX server</span>
           <span className="mono">https://203.0.113.7:2744</span>
@@ -580,7 +543,7 @@ function ParticipantPath() {
           <span className="mono">https://their-machine.tailnet.ts.net</span>
           <span>a Tailscale address (you must be on the same tailnet)</span>
         </div>
-        <p style={{ margin: "10px 0 0", lineHeight: 1.6 }}>
+        <p className="m-0 mt-3 leading-relaxed">
           A Cloudflare tunnel URL is <strong>disposable</strong>: the coordinator
           gets a new one each time they restart it, so always use the latest. A
           Tailscale <span className="mono">.ts.net</span> address is{" "}
@@ -588,7 +551,7 @@ function ParticipantPath() {
         </p>
       </div>
 
-      <div className="row" style={{ gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+      <div className="row gap-2 mt-3 wrap">
         <button className="secondary" onClick={() => test.mutate()} disabled={!url || test.isPending}>
           {test.isPending ? "Testing…" : "Test connection"}
         </button>
@@ -597,11 +560,11 @@ function ParticipantPath() {
         </button>
       </div>
 
-      <details style={{ marginTop: 16 }}>
-        <summary className="dim" style={{ cursor: "pointer" }}>
+      <details className="mt-4">
+        <summary className="dim clickable">
           Self-signed server? Trust its certificate
         </summary>
-        <p className="dim" style={{ fontSize: 13 }}>
+        <p className="dim text-md">
           Only needed for a Direct-URL coordinator (not for a Cloudflare tunnel, a
           Tailscale address, or an NGINX/domain server, which use publicly trusted
           TLS). Paste the
@@ -613,7 +576,7 @@ function ParticipantPath() {
           value={certPem}
           onChange={(e) => setCertPem(e.target.value)}
           placeholder="-----BEGIN CERTIFICATE-----"
-          style={{ width: "100%" }}
+          className="w-full"
         />
         <button
           className="secondary"
@@ -624,15 +587,11 @@ function ParticipantPath() {
         </button>
       </details>
 
-      <div className="callout" style={{ marginTop: 16 }}>
+      <div className="callout mt-4">
         <span>
-          Once connected, incoming DKG and signing requests appear in your{" "}
-          <button
-            className="link"
-            style={{ all: "unset", cursor: "pointer", color: "var(--accent)" }}
-            onClick={() => navigate("/inbox")}
-          >
-            Inbox
+          Once connected, incoming DKG and signing requests appear in{" "}
+          <button className="link-button inline" onClick={() => navigate("/inbox")}>
+            Approvals
           </button>
           .
         </span>

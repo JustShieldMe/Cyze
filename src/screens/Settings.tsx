@@ -54,8 +54,8 @@ function ChangePassphrase() {
   });
   const mismatch = confirm.length > 0 && next !== confirm;
   return (
-    <div className="card" style={{ marginTop: 18 }}>
-      <h3 style={{ marginTop: 0 }}>Passphrase</h3>
+    <div className="card mt-5">
+      <h3 className="mt-0">Passphrase</h3>
       <p className="dim">Your recovery code keeps working after a change.</p>
       <input type="password" placeholder="Current passphrase" value={current} onChange={(e) => setCurrent(e.target.value)} />
       <input type="password" placeholder="New passphrase" value={next} onChange={(e) => setNext(e.target.value)} />
@@ -79,7 +79,7 @@ export function AboutSettings() {
   const notices = useQuery({ queryKey: ["third-party-notices"], queryFn: thirdPartyNotices, enabled: show, staleTime: Infinity });
   return (
     <div className="card">
-      <h3 style={{ marginTop: 0 }}>Cyze {version.data ?? ""}</h3>
+      <h3 className="mt-0">Cyze {version.data ?? ""}</h3>
       <p className="dim">
         Threshold signing for shared Zcash wallets. Open source under the MIT license. Beta software that hasn't been
         independently audited yet: use small amounts.
@@ -105,8 +105,8 @@ export function AdvancedSettings() {
     <div>
       <AdvancedCard enabled={advanced} />
       {advanced && (
-        <div className="card" style={{ marginTop: 18 }}>
-          <h3 style={{ marginTop: 0 }}>Sign a message</h3>
+        <div className="card mt-5">
+          <h3 className="mt-0">Sign a message</h3>
           <p className="dim">Ask a group to sign arbitrary bytes, outside any wallet.</p>
           <Link to="/sign">
             <button className="secondary">New signing request</button>
@@ -127,18 +127,18 @@ function AdvancedCard({ enabled }: { enabled: boolean }) {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["settings"] }),
   });
   return (
-    <div className="card" style={{ marginTop: 18 }}>
-      <label className="row" style={{ gap: 8, alignItems: "center", margin: 0 }}>
+    <div className="card mt-5">
+      <label className="row gap-2 items-center m-0">
         <input
           type="checkbox"
-          style={{ width: "auto", margin: 0 }}
+          className="w-auto m-0"
           checked={enabled}
           disabled={toggle.isPending}
           onChange={(e) => toggle.mutate(e.target.checked)}
         />
         <strong>Show advanced options</strong>
       </label>
-      <p className="dim" style={{ fontSize: 12, margin: "6px 0 0" }}>
+      <p className="dim text-sm m-0 mt-2">
         Test networks and local devnet, diagnostics log, Ed25519 groups, and raw-message
         signing.
       </p>
@@ -187,20 +187,20 @@ function LogsCard() {
   };
 
   return (
-    <div className="card" style={{ marginTop: 18 }}>
-      <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-        <h3 style={{ margin: 0 }}>Diagnostics log</h3>
-        <span className="dim" style={{ fontSize: 12 }}>
+    <div className="card mt-5">
+      <div className="row between items-center">
+        <h3 className="m-0">Diagnostics log</h3>
+        <span className="dim text-sm">
           {lines.length} line{lines.length === 1 ? "" : "s"} · this session
         </span>
       </div>
-      <p className="dim" style={{ fontSize: 12, marginTop: 6 }}>
+      <p className="dim text-sm mt-2">
         What the app has logged while running (sync timing, errors, ceremony
         steps). Kept in memory only and cleared on restart — copy it here to share
         for troubleshooting.
       </p>
 
-      <div className="row" style={{ gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+      <div className="row gap-2 wrap mb-2">
         <button className="secondary" onClick={() => copyAll()} disabled={lines.length === 0}>
           {copied ? "Copied!" : "Copy all"}
         </button>
@@ -210,7 +210,7 @@ function LogsCard() {
         <button className="secondary" onClick={() => clear.mutate()} disabled={lines.length === 0}>
           Clear
         </button>
-        <label className="row" style={{ gap: 6, alignItems: "center", fontSize: 13 }}>
+        <label className="row gap-2 items-center text-md">
           <input type="checkbox" checked={live} onChange={(e) => setLive(e.target.checked)} />
           Live
         </label>
@@ -219,20 +219,7 @@ function LogsCard() {
       <pre
         ref={preRef}
         onScroll={onScroll}
-        className="mono"
-        style={{
-          margin: 0,
-          maxHeight: 320,
-          overflow: "auto",
-          fontSize: 11.5,
-          lineHeight: 1.5,
-          whiteSpace: "pre-wrap",
-          wordBreak: "break-word",
-          background: "var(--bg-elevated, rgba(0,0,0,0.04))",
-          border: "1px solid var(--border)",
-          borderRadius: 6,
-          padding: 10,
-        }}
+        className="mono log-view"
       >
         {lines.length ? lines.join("\n") : "No log output yet."}
       </pre>

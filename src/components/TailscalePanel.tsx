@@ -93,7 +93,7 @@ export default function TailscalePanel({
 
   return (
     <div>
-      <p className="dim" style={{ marginTop: 0 }}>
+      <p className="dim mt-0">
         Publishes this server to your <strong>tailnet</strong> at a{" "}
         <strong>stable</strong> <span className="mono">*.ts.net</span> address with
         an automatic, publicly-trusted TLS certificate — so the URL can be saved
@@ -119,19 +119,19 @@ export default function TailscalePanel({
             <span className="badge green">serving on tailnet</span>
           </div>
           {s?.detail && (
-            <p className="ok" style={{ fontSize: 12, marginTop: 8 }}>
+            <p className="ok text-sm mt-2">
               ✓ {s.detail}
             </p>
           )}
-          <label style={{ marginTop: 8 }}>Tailnet URL — share with members</label>
+          <label className="mt-2">Tailnet URL — share with members</label>
           <div className="mono">{url}</div>
-          <div className="row" style={{ gap: 8, marginTop: 8 }}>
+          <div className="row gap-2 mt-2">
             <CopyButton text={url} label="Copy URL" />
             <button className="secondary" onClick={() => stopServe.mutate()}>
               Stop serving
             </button>
           </div>
-          <div className="callout" style={{ marginTop: 10 }}>
+          <div className="callout mt-3">
             <span>
               This address is stable — save it as the group's server and reuse it
               next time. Participants must be on your tailnet to reach it.
@@ -141,7 +141,7 @@ export default function TailscalePanel({
       ) : s?.available ? (
         <>
           {s.dns_name && (
-            <p className="dim" style={{ fontSize: 12, marginTop: 0 }}>
+            <p className="dim text-sm mt-0">
               This machine: <span className="mono">https://{s.dns_name}</span>
             </p>
           )}
@@ -152,14 +152,14 @@ export default function TailscalePanel({
       ) : s?.installed ? (
         // Installed but not signed in / not online: offer one-click sign-in.
         <div>
-          <div className="callout warn" style={{ marginBottom: 8 }}>
+          <div className="callout warn mb-2">
             <span>{s?.detail ?? "Tailscale isn't connected yet."}</span>
           </div>
           <button onClick={() => signIn.mutate()} disabled={signIn.isPending}>
             {signIn.isPending ? "Signing in…" : "Sign in to Tailscale"}
           </button>
           {loginUrl && (
-            <p className="dim" style={{ fontSize: 12, marginTop: 8 }}>
+            <p className="dim text-sm mt-2">
               Finish signing in in your browser:{" "}
               <a
                 href={loginUrl}
@@ -174,12 +174,12 @@ export default function TailscalePanel({
             </p>
           )}
           {signInNote && (
-            <p className="dim" style={{ fontSize: 12, marginTop: 8 }}>
+            <p className="dim text-sm mt-2">
               {signInNote}
             </p>
           )}
           {browser.failedUrl && (
-            <p className="dim" style={{ fontSize: 12, marginTop: 8 }}>
+            <p className="dim text-sm mt-2">
               Couldn't open your browser automatically. Copy this link:{" "}
               <span className="mono">{browser.failedUrl}</span>{" "}
               <CopyButton text={browser.failedUrl} label="Copy link" />
@@ -189,11 +189,11 @@ export default function TailscalePanel({
       ) : (
         // Not installed: link to the download.
         <div>
-          <div className="callout warn" style={{ marginBottom: 8 }}>
+          <div className="callout warn mb-2">
             <span>{s?.detail ?? "Tailscale isn't installed on this machine."}</span>
           </div>
           <button onClick={() => browser.open(DOWNLOAD_URL)}>Get Tailscale</button>
-          <p className="dim" style={{ fontSize: 12, marginTop: 8 }}>
+          <p className="dim text-sm mt-2">
             {browser.failedUrl
               ? "Couldn't open your browser automatically. Copy this link:"
               : "Or open this link:"}{" "}

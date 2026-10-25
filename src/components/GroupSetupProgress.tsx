@@ -61,8 +61,8 @@ export function GroupSetupProgress({ ceremonyId }: { ceremonyId: string }) {
           </>
         )}
         {!ceremony.done && (
-          <div className="row" style={{ marginTop: 8 }}>
-            <span className="dim" style={{ flex: 1, fontSize: 12 }}>
+          <div className="row mt-2">
+            <span className="dim flex-1 text-sm">
               You can leave this page; setup carries on in the background.
             </span>
             <button
@@ -106,12 +106,12 @@ function InviteCard({ ceremonyId }: { ceremonyId: string }) {
 
   return (
     <div className="card">
-      <h3 style={{ marginTop: 0 }}>Send this invite to {listNames(names)}</h3>
+      <h3 className="mt-0">Send this invite to {listNames(names)}</h3>
       {invite ? (
         <>
           <div className="mono invite-code">{invite}</div>
           <button
-            style={{ marginTop: 10 }}
+            className="mt-3"
             onClick={async () => {
               await navigator.clipboard.writeText(invite);
               setCopied(true);
@@ -120,7 +120,7 @@ function InviteCard({ ceremonyId }: { ceremonyId: string }) {
           >
             {copied ? "Copied" : "Copy invite"}
           </button>
-          <p className="dim" style={{ fontSize: 12, marginBottom: 0 }}>
+          <p className="dim text-sm mb-0">
             They choose <strong>Join with invite</strong> and paste it. It only works for the people you chose.
           </p>
         </>

@@ -57,7 +57,7 @@ function RecoveryBackup({
           ))}
         </div>
 
-        <div className="row" style={{ marginTop: 12 }}>
+        <div className="row mt-3">
           <button
             className="secondary"
             onClick={async () => {
@@ -291,7 +291,7 @@ export default function Unlock() {
             </button>
           </div>
         </form>
-        <p className="dim" style={{ marginTop: 16 }}>
+        <p className="dim mt-4">
           {exists && effectiveMode === "unlock" && (
             <a href="#" onClick={() => setMode("recover")}>
               Forgot your passphrase? Recover with your code
