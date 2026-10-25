@@ -13,6 +13,19 @@ breaking changes. Cyze is beta, unaudited software (see the README).
   - **Zcash community votes:** the coinholder rounds run through Shielded Vote,
     with **Decide together** to turn a round's proposals into group polls.
     Casting the group's vote comes later.
+  - Records from a newer version of Cyze are kept and skipped, so members on
+    different versions stay in sync.
+- **Payees:** a shared list of the addresses a group pays, by name.
+  - Pick one in the send form, or save a typed address with **Save as a group
+    payee**.
+  - Approvers see the payee's name, looked up in their own app from the
+    address the transaction verifiably pays.
+  - Only the member who added a payee can change or remove it, and no two
+    payees share a name or an address.
+- **Reasons:** say what a payment is for, for the group only.
+  - Approvers see it with the request, attributed to the member who asked.
+  - Once sent, every member's **Activity** shows it. Any member can add
+    theirs to any transaction, received ones too.
 - **Approval deadlines.** A payment keeps the standard expiry (about 50
   minutes), so it looks like any other wallet's on-chain.
   - The sender sees how long approvers will have, then when approvals are
