@@ -1017,3 +1017,9 @@ button.icon-button {
 .gap-2 { gap: var(--space-2) !important; }
 .gap-3 { gap: var(--space-3) !important; }
 .gap-4 { gap: var(--space-4) !important; }
+
+/* Group payees: a payee's name above its address, the picker beside the
+   send form's "To", and what a requester says a payment is for. */
+.payee-name { font-size: 13px; font-weight: 600; word-break: normal; margin-bottom: 2px; }
+select.payee-pick { width: auto; max-width: 60%; padding: 4px 8px; font-size: 13px; margin-bottom: 6px; }
+.reason-claim { font-size: 13px; margin: 0 0 10px; padding: 8px 10px; border-left: 3px solid var(--border); background: var(--bg-input); border-radius: 0 6px 6px 0; word-break: break-word; }

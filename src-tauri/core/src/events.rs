@@ -47,6 +47,10 @@ pub struct SigningContext {
     /// sighash commits to instead of trusting the fields above.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pczt: Option<String>,
+    /// What the coordinator says the payment is for, for the group's eyes
+    /// only: not in the transaction, so a claim, never verified.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -114,7 +118,7 @@ pub enum ParticipantEvent {
     AwaitingApproval {
         message_hex: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        context: Option<SigningContext>,
+        context: Option<Box<SigningContext>>,
         /// The re-randomization the share would be produced with (hex), for
         /// RedPallas spends.
         #[serde(skip_serializing_if = "Option::is_none")]

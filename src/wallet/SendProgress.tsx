@@ -5,6 +5,7 @@ import {
   cancelCeremony,
   getIdentity,
   listContacts,
+  setPaymentReason,
   walletRebroadcast,
   walletSend,
   AppError,
@@ -39,6 +40,7 @@ export async function requestApprovals(meta: SendMeta): Promise<string> {
     memo: meta.memo ?? null,
     from_old_address: !!meta.fromOldAddress,
     send_max: !!meta.sendMax,
+    reason: meta.reason ?? null,
   });
   useCeremonies.getState().startSend(started.ceremony_id, {
     ...meta,
@@ -143,7 +145,14 @@ export function SendSessionPanel({
   });
   const onComplete = useCeremonies((s) => s.onComplete);
   const sendAgain = useMutation({
-    mutationFn: () => walletRebroadcast(ceremony.send!.groupId, ceremonyId),
+    mutationFn: async () => {
+      const meta = ceremony.send!;
+      const txid = await walletRebroadcast(meta.groupId, ceremonyId);
+      // Sent now, so the group can learn what it was for (the first try
+      // never got that far).
+      if (meta.reason) await setPaymentReason(meta.groupId, txid, meta.reason).catch(() => {});
+      return txid;
+    },
     onSuccess: (txid) => onComplete("send", { ceremony_id: ceremonyId, txid }),
   });
   const actionError = (askAgain.error ?? sendAgain.error) as AppError | null;

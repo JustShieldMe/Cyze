@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { fireEvent, waitFor } from "@testing-library/react";
 import { emit } from "@tauri-apps/api/event";
-import { ALICE, fakeBackend, GROUP_ID, ME, renderApp, started } from "./fake";
+import { ALICE, BOB, fakeBackend, GROUP_ID, ME, payee, renderApp, started } from "./fake";
 
 const PAYEE = "u1payee0example0address0000000000000000000000000000000000000000";
 
@@ -28,6 +28,7 @@ test("a payment is entered, reviewed, and sent for approval", async () => {
   fireEvent.change(ui.getByPlaceholderText(/u1… address/), { target: { value: PAYEE } });
   fireEvent.change(ui.getByPlaceholderText("0.00"), { target: { value: "2.5" } });
   fireEvent.change(ui.getByPlaceholderText(/Only the recipient can read it/), { target: { value: "March invoice" } });
+  fireEvent.change(ui.getByPlaceholderText(/Only your group sees this/), { target: { value: " Audit, invoice 12 " } });
   fireEvent.click(ui.getByRole("button", { name: "Review payment" }));
 
   // Step 2: the prepared transaction, who approves, and the mainnet check.
@@ -36,6 +37,7 @@ test("a payment is entered, reviewed, and sent for approval", async () => {
     { groupId: GROUP_ID, recipient: PAYEE, amountZatoshis: 250_000_000, memo: "March invoice" },
   ]);
   expect(ui.getByText("2.50015 ZEC")).toBeTruthy(); // amount plus fee
+  expect(ui.getByText("Audit, invoice 12")).toBeTruthy(); // the reason, for the group
   expect(request.disabled).toBe(true); // one more approver, and the recipient check
   await ui.findByRole("checkbox", { name: /me \(You\)/, checked: true });
   fireEvent.click(ui.getByRole("checkbox", { name: /Alice/ }));
@@ -56,9 +58,54 @@ test("a payment is entered, reviewed, and sent for approval", async () => {
           memo: "March invoice",
           from_old_address: false,
           send_max: false,
+          reason: "Audit, invoice 12",
         },
       },
     ]),
+  );
+});
+
+test("a group payee is paid by picking its name", async () => {
+  const backend = fakeBackend({
+    list_payees: () => [payee("Auditor", PAYEE, BOB), payee("Rent", "u1rent", ME)],
+    wallet_prepare_send: ({ recipient, amountZatoshis }) => ({
+      pczt_hex: "00",
+      sighash_hex: "9f".repeat(32),
+      spends: [{ pool: "ironwood", index: 0, alpha_hex: "00" }],
+      fee_zatoshis: 15_000,
+      amount_zatoshis: amountZatoshis,
+      recipient,
+      memo: null,
+      is_unshield: false,
+    }),
+  });
+  const ui = await renderApp("/");
+  await ui.findByText("12.345");
+  fireEvent.click(ui.getByRole("button", { name: "Send" }));
+  fireEvent.change(await ui.findByRole("combobox", { name: "Pay a saved payee" }), { target: { value: "id-Auditor" } });
+  expect((ui.getByPlaceholderText(/u1… address/) as HTMLInputElement).value).toBe(PAYEE);
+  expect(ui.getByText("Auditor · a group payee, added by Bob")).toBeTruthy();
+  expect(ui.queryByRole("button", { name: "Save as a group payee" })).toBeNull();
+  fireEvent.change(ui.getByPlaceholderText("0.00"), { target: { value: "1" } });
+  fireEvent.click(ui.getByRole("button", { name: "Review payment" }));
+
+  // The review names the payee above its address.
+  await ui.findByRole("button", { name: "Request approvals" });
+  expect(document.querySelector(".payee-name")?.textContent).toBe("Auditor · group payee, added by Bob");
+  expect(backend.calls("wallet_prepare_send")[0]).toMatchObject({ recipient: PAYEE });
+});
+
+test("a typed address is saved as a group payee from the send form", async () => {
+  const backend = fakeBackend({ save_payee: () => "new-id" });
+  const ui = await renderApp("/");
+  await ui.findByText("12.345");
+  fireEvent.click(ui.getByRole("button", { name: "Send" }));
+  fireEvent.change(ui.getByPlaceholderText(/u1… address/), { target: { value: PAYEE } });
+  fireEvent.click(ui.getByRole("button", { name: "Save as a group payee" }));
+  fireEvent.change(ui.getByPlaceholderText("e.g. Auditor"), { target: { value: "Auditor" } });
+  fireEvent.click(ui.getByRole("button", { name: "Save payee" }));
+  await waitFor(() =>
+    expect(backend.calls("save_payee")).toEqual([{ groupId: GROUP_ID, payeeId: null, name: "Auditor", address: PAYEE }]),
   );
 });
 

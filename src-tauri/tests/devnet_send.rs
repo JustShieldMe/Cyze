@@ -1,8 +1,10 @@
 //! A real send on a local devnet, end to end. A RedPallas DKG creates the
 //! group; the devnet faucet funds it and the background service syncs Alice's
-//! wallet. Alice then coordinates a 2-of-2 send with a memo. Bob's app verifies
-//! the transaction itself before he approves. Cyze applies the signature,
-//! proves, and broadcasts; the devnet mines it.
+//! wallet. Alice saves the recipient as a group payee, then coordinates a
+//! 2-of-2 send with a memo and a reason for the group. Bob's app verifies the
+//! transaction itself before he approves, and recognises the payee from his
+//! own copy of the group's payees. Cyze applies the signature, proves, and
+//! broadcasts; the devnet mines it, and Bob's app learns what it was for.
 //!
 //! Needs thus-spoke-zakura 0.3.x (NU6.3 from block 1) or 0.4.x (NU7 from block
 //! 1, with `CYZE_DEVNET_UPGRADE=nu7`). Ignored by default; run in release mode,
@@ -19,7 +21,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use common::{dkg, pair, start_server, UserApp};
+use common::{dkg, pair, start_server, until, UserApp};
 use frost_app_core::ciphersuite::Suite;
 use frost_app_core::wallet::{RegtestUpgrade, WalletNetwork};
 use frost_app_lib::commands;
@@ -115,8 +117,17 @@ async fn a_two_of_two_send_is_verified_signed_and_mined() {
     };
     eprintln!("spendable after sync: {funded} zatoshis");
 
-    // Alice coordinates a send; Bob's app verifies it before he approves.
+    // Alice saves the recipient as a group payee, and Bob's app gets it.
     let recipient = outside_recipient();
+    commands::payees::save_payee(p.alice.app.handle().clone(), group_id.clone(), None, "Auditor".into(), recipient.clone())
+        .await
+        .unwrap();
+    until(&p, &group_id, "Bob never got the payee", async || {
+        !commands::payees::list_payees(bob.clone(), group_id.clone()).await.unwrap().is_empty()
+    })
+    .await;
+
+    // Alice coordinates a send; Bob's app verifies it before he approves.
     let txid = send_with_bobs_approval(
         &p,
         commands::wallet::WalletSendArgs {
@@ -127,11 +138,22 @@ async fn a_two_of_two_send_is_verified_signed_and_mined() {
             memo: Some("cyze end-to-end".into()),
             from_old_address: false,
             send_max: false,
+            reason: Some("Audit, invoice 12".into()),
         },
         Some(50_000_000),
     )
     .await;
     eprintln!("broadcast txid {txid}");
+
+    // Every member's history says what it was for, Bob's too.
+    until(&p, &group_id, "Bob never learned what the payment was for", async || {
+        commands::payees::list_payment_reasons(bob.clone(), group_id.clone())
+            .await
+            .unwrap()
+            .iter()
+            .any(|r| r.txid == txid.to_lowercase() && r.text == "Audit, invoice 12" && r.author == p.alice_pubkey)
+    })
+    .await;
 
     // Mined, and in the group's history once synced.
     ths(&["mine", "2"]);
@@ -172,6 +194,7 @@ async fn a_two_of_two_send_is_verified_signed_and_mined() {
             memo: Some("everything".into()),
             from_old_address: false,
             send_max: true,
+            reason: None,
         },
         None,
     )
@@ -198,6 +221,8 @@ async fn a_two_of_two_send_is_verified_signed_and_mined() {
 async fn send_with_bobs_approval(p: &common::Pair, args: commands::wallet::WalletSendArgs, amount: Option<u64>) -> String {
     let bob = p.bob.app.state::<AppState>();
     let (group_id, recipient, memo) = (args.group_id.clone(), args.recipient.clone(), args.memo.clone());
+    let reason = args.reason.clone();
+    let payees = commands::payees::list_payees(bob.clone(), group_id.clone()).await.unwrap();
     let bob_events = record(&p.bob, &["signing:progress", "signing:failed"]);
     let alice_events = record(&p.alice, &["send:progress", "send:complete", "send:failed"]);
     commands::wallet::wallet_send(p.alice.app.handle().clone(), args).await.unwrap();
@@ -216,7 +241,8 @@ async fn send_with_bobs_approval(p: &common::Pair, args: commands::wallet::Walle
             panic!("Bob's signing failed: {v}");
         }
         for s in commands::signing::list_pending_sessions(bob.clone(), None).await.unwrap_or_default() {
-            if joined.insert(s.session_id) {
+            // Group records (the payment's reason) aren't signing requests.
+            if s.kind != "group_message" && joined.insert(s.session_id) {
                 commands::signing::join_signing_session(
                     p.bob.app.handle().clone(),
                     commands::signing::JoinSigningSessionArgs {
@@ -246,6 +272,11 @@ async fn send_with_bobs_approval(p: &common::Pair, args: commands::wallet::Walle
             assert_eq!(payments.len(), 1, "{verified}");
             assert_eq!(payments[0]["address"], recipient.as_str());
             assert_eq!(payments[0]["memo"].as_str(), memo.as_deref());
+            // What Alice says it's for reaches Bob as she wrote it, and Bob's
+            // own copy of the group's payees names the address he verified.
+            assert_eq!(event["context"]["reason"].as_str(), reason.as_deref(), "{event}");
+            let paid = payments[0]["address"].as_str().unwrap().to_string();
+            assert!(payees.iter().any(|p| p.forms.contains(&paid)), "the recipient is a payee: {paid}");
             match amount {
                 Some(amount) => assert_eq!(payments[0]["value_zatoshis"], amount),
                 None => {

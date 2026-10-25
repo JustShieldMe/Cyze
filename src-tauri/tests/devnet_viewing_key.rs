@@ -127,6 +127,7 @@ async fn an_older_group_goes_private_and_moves_its_funds() {
             memo: None,
             from_old_address: true,
             send_max: false,
+            reason: None,
         },
     )
     .await

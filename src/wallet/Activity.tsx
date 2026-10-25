@@ -1,18 +1,22 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   getIdentity,
   listContacts,
+  setPaymentReason,
   walletGroupStatus,
   walletHistory,
   AppError,
   TxRecord,
   ContactDto,
   GroupSummary,
+  Payee,
+  PaymentReason,
   WalletNetwork,
 } from "../ipc/commands";
 import { unit } from "../network";
 import { resolveParticipant } from "../lib/participants";
+import { MAX_REASON, payeeFor, reasonsFor, useMemberName, usePayees, usePaymentReasons } from "../lib/payees";
 import {
   useCeremonies,
   type CeremonyState,
@@ -56,6 +60,8 @@ export function WalletTxHistory({ group, network }: { group: GroupSummary; netwo
   });
   const contacts = useQuery({ queryKey: ["contacts"], queryFn: listContacts });
   const identity = useQuery({ queryKey: ["identity"], queryFn: getIdentity });
+  const payees = usePayees(group.id);
+  const reasons = usePaymentReasons(group.id);
   const groupAddress = walletStatus.data?.address ?? null;
 
   // Pending / recently-completed sends not yet confirmed on-chain.
@@ -147,6 +153,7 @@ export function WalletTxHistory({ group, network }: { group: GroupSummary; netwo
               <PendingTxRow
                 key={row.id}
                 row={row}
+                payee={payeeFor(payees.data, row.send?.recipient)}
                 contacts={contacts.data ?? []}
                 groupAddress={groupAddress}
                 myPubkey={identity.data?.pubkey ?? undefined}
@@ -160,6 +167,9 @@ export function WalletTxHistory({ group, network }: { group: GroupSummary; netwo
               <OnchainTxRow
                 key={tx.txid}
                 tx={tx}
+                groupId={group.id}
+                payee={tx.direction === "send" ? payeeFor(payees.data, tx.recipient) : undefined}
+                reasons={reasonsFor(reasons.data, tx.txid)}
                 contacts={contacts.data ?? []}
                 groupAddress={groupAddress}
                 signers={txSigners[tx.txid]}
@@ -193,7 +203,11 @@ export function TxDetail({
   fee,
   fromAddress,
   recipient,
+  payee,
   memo,
+  reasons,
+  pendingReason,
+  groupId,
   signers,
   contacts,
   myPubkey,
@@ -209,13 +223,24 @@ export function TxDetail({
   fee?: number | null;
   fromAddress?: string | null;
   recipient?: string | null;
+  /** The group payee it was paid to, if any. */
+  payee?: Payee;
   memo?: string | null;
+  /** What members say it was for. */
+  reasons?: PaymentReason[];
+  /** What it's for, while it's still being sent (from this device's send). */
+  pendingReason?: string;
+  /** With `txid`, lets this member say what it was for. */
+  groupId?: string;
   signers?: string[];
   contacts?: ContactDto[];
   myPubkey?: string;
   error?: string;
   network: WalletNetwork;
 }) {
+  const memberName = useMemberName();
+  const [editingReason, setEditingReason] = useState(false);
+  const mine = reasons?.find((r) => r.author === myPubkey);
   const dateStr = timestamp
     ? fmtDate(new Date(timestamp * 1000))
     : blockHeight != null
@@ -251,9 +276,51 @@ export function TxDetail({
     rows.push({ label: "From", value: fromAddress, mono: true });
   }
   if (recipient) {
-    rows.push({ label: "To", value: recipient, mono: true });
+    rows.push({
+      label: "To",
+      value: payee ? (
+        <>
+          <div className="payee-name">
+            {payee.name} <span className="dim">· group payee</span>
+          </div>
+          {recipient}
+        </>
+      ) : (
+        recipient
+      ),
+      mono: true,
+    });
   }
   if (memo) rows.push({ label: "Memo", value: memo });
+  if (pendingReason) rows.push({ label: "Reason", value: pendingReason });
+  const editable = !!(groupId && txid);
+  if (reasons?.length || editable) {
+    rows.push({
+      label: "Reason",
+      value: (
+        <>
+          {reasons?.map((r) => (
+            <div key={r.author}>
+              {r.text} <span className="dim">· {memberName(r.author)}</span>
+            </div>
+          ))}
+          {editable &&
+            (editingReason ? (
+              <ReasonEditor
+                groupId={groupId!}
+                txid={txid!}
+                current={mine?.text}
+                onDone={() => setEditingReason(false)}
+              />
+            ) : (
+              <button className="link-button" onClick={() => setEditingReason(true)}>
+                {mine ? "Change yours" : reasons?.length ? "Add yours" : "Say what it was for"}
+              </button>
+            ))}
+        </>
+      ),
+    });
+  }
   if (signers && signers.length > 0 && contacts) {
     const identityObj = myPubkey ? { pubkey: myPubkey, username: null, safety_code: null } : undefined;
     rows.push({
@@ -302,14 +369,59 @@ export function TxDetail({
 
 export type PendingRow = CeremonyState & { id: string };
 
-/** A full-width sub-row under a transaction, showing its memo inline so it is
- *  readable in the history list without expanding the row. */
-export function MemoRow({ memo }: { memo: string }) {
+/** Tell the group what a transaction was for, change what this member said,
+ *  or (emptied) take it back. */
+function ReasonEditor({
+  groupId,
+  txid,
+  current,
+  onDone,
+}: {
+  groupId: string;
+  txid: string;
+  current?: string;
+  onDone: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const [text, setText] = useState(current ?? "");
+  const save = useMutation({
+    mutationFn: () => setPaymentReason(groupId, txid, text),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["payment-reasons", groupId] });
+      onDone();
+    },
+  });
+  return (
+    <div className="mt-1">
+      <textarea
+        aria-label="Reason"
+        placeholder="What it was for. Only your group sees this."
+        value={text}
+        maxLength={MAX_REASON}
+        rows={2}
+        onChange={(e) => setText(e.target.value)}
+      />
+      {save.error && <div className="error">{(save.error as unknown as AppError).message}</div>}
+      <div className="row">
+        <button onClick={() => save.mutate()} disabled={save.isPending || (!current && !text.trim())}>
+          {save.isPending ? "Saving…" : "Save"}
+        </button>
+        <button className="secondary" onClick={onDone} disabled={save.isPending}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** A full-width sub-row under a transaction, showing its memo (or what it was
+ *  for) inline so it is readable in the history list without expanding it. */
+export function MemoRow({ memo, label = "Memo" }: { memo: string; label?: string }) {
   return (
     <tr>
       <td colSpan={5} className="tx-memo-cell">
         <div className="flex gap-2 items-baseline text-xs muted">
-          <span className="dim">Memo</span>
+          <span className="dim">{label}</span>
           <span className="truncate" title={memo}>
             {memo}
           </span>
@@ -321,6 +433,7 @@ export function MemoRow({ memo }: { memo: string }) {
 
 export function PendingTxRow({
   row,
+  payee,
   contacts,
   groupAddress,
   myPubkey,
@@ -329,6 +442,7 @@ export function PendingTxRow({
   network,
 }: {
   row: PendingRow;
+  payee?: Payee;
   contacts: ContactDto[];
   groupAddress: string | null;
   myPubkey?: string;
@@ -339,7 +453,7 @@ export function PendingTxRow({
   const meta = row.send;
   const isUnshield = meta?.isUnshield;
   const dateStr = row.startedAt ? fmtDate(new Date(row.startedAt)) : "—";
-  const addrDisplay = meta?.recipient ? meta.recipient.slice(0, 10) + "…" : "—";
+  const addrDisplay = payee ? payee.name : meta?.recipient ? meta.recipient.slice(0, 10) + "…" : "—";
   return (
     <>
       {/* In flight or sent but unconfirmed reads in the pending colour. */}
@@ -357,7 +471,7 @@ export function PendingTxRow({
           )}
         </td>
         <td className="num">{meta ? `−${zec(meta.amountZatoshis)} ${unit(network)}` : "—"}</td>
-        <td className="mono-cell tx-with">{addrDisplay}</td>
+        <td className={payee ? "tx-with" : "mono-cell tx-with"}>{addrDisplay}</td>
         <td className="tx-toggle-cell">
           <button className="secondary tx-toggle" title={isExpanded ? "Collapse" : "Expand"}>
             {isExpanded ? "−" : "+"}
@@ -365,11 +479,14 @@ export function PendingTxRow({
         </td>
       </tr>
       {meta?.memo && !isExpanded && <MemoRow memo={meta.memo} />}
+      {meta?.reason && !isExpanded && <MemoRow label="Reason" memo={meta.reason} />}
       {isExpanded && (
         <TxDetail
           colSpan={5}
           network={network}
           txid={row.txid}
+          payee={payee}
+          pendingReason={meta?.reason}
           blockHeight={undefined}
           direction={isUnshield ? "send" : "send"}
           amount={meta?.amountZatoshis}
@@ -389,6 +506,9 @@ export function PendingTxRow({
 
 export function OnchainTxRow({
   tx,
+  groupId,
+  payee,
+  reasons,
   contacts,
   groupAddress,
   signers,
@@ -398,6 +518,9 @@ export function OnchainTxRow({
   network,
 }: {
   tx: TxRecord;
+  groupId?: string;
+  payee?: Payee;
+  reasons?: PaymentReason[];
   contacts: ContactDto[];
   groupAddress: string | null;
   signers?: string[];
@@ -410,9 +533,11 @@ export function OnchainTxRow({
   const isMove = tx.direction === "move";
   const addrDisplay = isReceive || isMove
     ? "—"
-    : tx.recipient
-      ? tx.recipient.slice(0, 10) + "…"
-      : "—";
+    : payee
+      ? payee.name
+      : tx.recipient
+        ? tx.recipient.slice(0, 10) + "…"
+        : "—";
   const dateDisplay = tx.timestamp != null
     ? fmtDate(new Date(tx.timestamp * 1000))
     : tx.block_height != null
@@ -440,7 +565,7 @@ export function OnchainTxRow({
             {zec(tx.amount_zatoshis)} {unit(network)}
           </span>
         </td>
-        <td className="dim mono-cell tx-with">{addrDisplay}</td>
+        <td className={payee ? "tx-with" : "dim mono-cell tx-with"}>{addrDisplay}</td>
         <td className="tx-toggle-cell">
           <button className="secondary tx-toggle" title={isExpanded ? "Collapse" : "Expand"}>
             {isExpanded ? "−" : "+"}
@@ -450,11 +575,17 @@ export function OnchainTxRow({
       {/* Memo, shown inline so it is readable without expanding the row. Hidden
           when expanded, where the detail panel shows the full text. */}
       {tx.memo && !isExpanded && <MemoRow memo={tx.memo} />}
+      {!!reasons?.length && !isExpanded && (
+        <MemoRow label="Reason" memo={reasons.map((r) => r.text).join(" · ")} />
+      )}
       {isExpanded && (
         <TxDetail
           colSpan={5}
           network={network}
           txid={tx.txid}
+          groupId={groupId}
+          payee={payee}
+          reasons={reasons}
           timestamp={tx.timestamp}
           blockHeight={tx.block_height}
           direction={tx.direction}

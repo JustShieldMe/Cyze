@@ -3,6 +3,7 @@
 //! away in settings.
 
 use frost_app_core::ciphersuite::Suite;
+use frost_app_core::polls::RecordBody;
 use frost_app_core::signing::{run_coordinator, CoordinatorParams};
 use frost_app_core::wallet::{self, LightwalletdInfo, RegtestUpgrade, WalletNetwork, WalletStatus};
 use frost_client::api::PublicKey;
@@ -867,6 +868,10 @@ pub struct WalletSendArgs {
     /// ([`wallet_prepare_send_max`]); `amount_zatoshis` is then ignored.
     #[serde(default)]
     pub send_max: bool,
+    /// What the payment is for, for the group: shown to approvers, and to
+    /// every member in its history once it's sent. Never on chain.
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 /// What `wallet_send` started: the ceremony, and the transaction as it was
@@ -926,6 +931,7 @@ pub async fn wallet_send<R: tauri::Runtime>(
     let state = app.state::<AppState>();
     let (network, url, _ufvk) = group_wallet_ctx(&state, &args.group_id).await?;
     let db_key = state.wallet_db_key(&args.group_id).await?;
+    let reason = args.reason.as_deref().map(crate::commands::payees::payment_reason).transpose()?.flatten();
 
     // 1. Build the unsigned transaction (refreshes the chain tip so the expiry
     //    is anchored to the live tip). A signed move off the old address waits
@@ -1062,6 +1068,7 @@ pub async fn wallet_send<R: tauri::Runtime>(
     let ctx_memo = draft.memo.clone();
     let ctx_is_unshield = draft.is_unshield;
     let ctx_network = network.as_str().to_string();
+    let ctx_reason = reason.clone();
     let plan_id = ceremony_id.to_string();
     tauri::async_runtime::spawn(async move {
         let fail = |error: String| {
@@ -1110,6 +1117,7 @@ pub async fn wallet_send<R: tauri::Runtime>(
                         spend_total: total as u32,
                         tx_sighash: sighash_hex.clone(),
                         pczt: Some(signer_pczt.clone()),
+                        reason: ctx_reason.clone(),
                     })
                     .unwrap_or_default();
                     let params = CoordinatorParams {
@@ -1219,6 +1227,13 @@ pub async fn wallet_send<R: tauri::Runtime>(
                         "signed_pczt_hex": signed_pczt_hex,
                     }),
                 );
+                // Every member's history says what it was for.
+                if let Some(text) = reason {
+                    let body = RecordBody::PaymentReason { txid: txid.to_lowercase(), text };
+                    if let Err(e) = crate::commands::polls::write(&task_app, &group_id, body).await {
+                        tracing::warn!("couldn't record what the payment was for: {}", e.message);
+                    }
+                }
             }
             Err(e) => {
                 // Leave the pending record in place and tell the UI it can retry.

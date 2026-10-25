@@ -15,6 +15,7 @@ pub mod events;
 pub mod invite;
 pub mod keystore;
 pub mod neterr;
+pub mod payees;
 pub mod polls;
 pub mod redact;
 pub mod safety;
