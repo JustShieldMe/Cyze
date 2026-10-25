@@ -187,10 +187,10 @@ current build depends on them.
 
 ## Wallet (Zcash)
 
-- [ ] **Auto-sync polish** — auto-sync runs every 10s (see `GroupWallet` in
-      `src/screens/Groups.tsx`), and a manual **Sync Now** button sits in the
-      sync box because auto-sync can still lag or stall. Once auto-sync is proven
-      reliable in the field, reconsider whether the manual button is still needed.
+- [x] **Auto-sync polish** — the backend sync service keeps the active wallet
+      current, so Home no longer shows a permanent **Sync Now**: it offers
+      **Retry now** after a failed sync and **Restart** after a minute without
+      progress (`useSyncStalled` in `src/wallet/Wallet.tsx`).
 - [x] **Send history (client-side)** — the "Transaction history" panel
       (`SendHistory` in `src/screens/Groups.tsx`) now lists this device's past
       send ceremonies from the persisted store (time, amount, recipient, status

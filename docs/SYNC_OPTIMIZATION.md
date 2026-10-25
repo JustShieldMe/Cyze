@@ -304,8 +304,9 @@ What it changed for Cyze:
 from unlock to lock. Before it, the wallet page drove sync on a 10 s timer, so
 nothing synced unless that page was open. Each pass sets up the account if
 needed, checks the chain tip (one RPC on the shared connection), and syncs only
-when there is something new. Failures back off from 10 s to 5 min. "Sync Now", a
-wallet switch, a network change, or a finished signing ceremony wake it at
+when there is something new. Failures back off from 10 s to 5 min. Home's
+"Retry now" / "Restart" (shown only after a failure or a minute without
+progress), a wallet switch, a network change, or a finished signing ceremony wake it at
 once. The UI follows `wallet:sync` / `wallet:updated` events instead of polling.
 `tests/sync_service_live.rs` (ignored by default; needs the network) runs it end
 to end against mainnet after a real DKG.

@@ -35,6 +35,22 @@ import { SEND_MAX_SCAN_LAG, SyncErrorView, zec } from "./common";
  *  moving legacy funds): generous for up to ~20 inputs. */
 const SELF_SEND_FEE_BUFFER = 100_000;
 
+/** How long a running sync can go without scanning a block before the wallet
+ *  offers to restart it. Batches take a few seconds, so this is well past slow. */
+const SYNC_STALL_MS = 60_000;
+
+/** True once a running sync has gone SYNC_STALL_MS without scanning further. */
+function useSyncStalled(running: boolean, scanned: number): boolean {
+  const [stalled, setStalled] = useState(false);
+  useEffect(() => {
+    setStalled(false);
+    if (!running) return;
+    const t = setTimeout(() => setStalled(true), SYNC_STALL_MS);
+    return () => clearTimeout(t);
+  }, [running, scanned]);
+  return stalled;
+}
+
 type Panel = "receive" | "send" | "notes";
 
 /** What a prepared transaction is for, which changes how it's reviewed:
@@ -93,6 +109,8 @@ export function GroupWallet({ group, network }: { group: GroupSummary; network: 
   // backend re-checks against the live tip when it builds the transaction.
   const caughtUp = tipHeight > 0 && blocksRemaining <= SEND_MAX_SCAN_LAG;
   const catchingUp = sync?.state === "syncing" && blocksRemaining > 0;
+  // The backend syncs by itself, so restarting is only offered when it's stuck.
+  const stalled = useSyncStalled(sync?.state === "syncing", scannedHeight);
 
   const [panel, setPanel] = useState<Panel | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -137,8 +155,8 @@ export function GroupWallet({ group, network }: { group: GroupSummary; network: 
   const activeSendId = useCeremonies((s) => s.activeSendByGroup[group.id]);
   const sendInProgress = !!activeSend && !activeSend.done;
 
-  /** "Sync now": restart the backend sync (abandoning a stalled one) and re-read
-   *  every wallet panel. */
+  /** Restart the backend sync (abandoning a stalled one) and re-read every
+   *  wallet panel. */
   const forceSync = useCallback(async () => {
     for (const key of ["wallet-status", "wallet-history", "wallet-notes"]) {
       queryClient.invalidateQueries({ queryKey: [key, group.id] });
@@ -212,15 +230,15 @@ export function GroupWallet({ group, network }: { group: GroupSummary; network: 
           ) : (
             <>Waiting for the first sync…</>
           )}
-          <button className="link-button" onClick={() => forceSync()}>
-            {catchingUp ? "Restart" : "Sync now"}
-          </button>
+          {(syncErr || stalled) && (
+            <button className="link-button" onClick={() => forceSync()}>
+              {syncErr ? "Retry now" : "Restart"}
+            </button>
+          )}
           {advanced && (
-            <>
-              <button className="link-button" onClick={() => toggle("notes")}>
-                Notes
-              </button>
-            </>
+            <button className="link-button" onClick={() => toggle("notes")}>
+              Notes
+            </button>
           )}
         </div>
         {syncErr && <SyncErrorView text={syncErr} />}

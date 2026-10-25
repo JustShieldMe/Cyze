@@ -284,7 +284,7 @@ The transaction then appears under **Activity** on both sides, with its fee and
 memo shown inline.
 
 **What to verify:** the txid confirms on a block explorer, and the sender's
-balance and history update (use **Sync Now** on Home if needed).
+balance and history update.
 
 ### Make an older group private
 
@@ -376,9 +376,10 @@ never connects directly: if Tor can't start, the wallet waits and says so until
 it does or you turn it off. Connecting to your group's coordination server
 isn't affected, and name lookups (testnet) are off while Tor is on.
 
-**Sync.** The active wallet syncs in the background from unlock to lock, and Home shows the current block height. If it
-looks stalled, press **Sync Now** — it restarts the sync from scratch and
-refreshes every panel (balances, pending/settled, notes, and history).
+**Sync.** The active wallet syncs in the background from unlock to lock, and
+Home shows whether it's up to date. If a sync fails, Home says so and offers
+**Retry now**; if one stops making progress for a minute, it offers
+**Restart**, which restarts the sync and refreshes every panel.
 
 **Active wallet.** With more than one group, Cyze works on **one wallet at a
 time**. Use the switcher at the top of the window to change wallets; selecting one makes it
