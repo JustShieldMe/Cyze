@@ -47,19 +47,17 @@ mkdir -p "$OLDPWD/src-tauri/binaries"
 cp "target/release/frostd" "$OLDPWD/src-tauri/binaries/frostd-$TRIPLE"
 ```
 
-For local dev you also need a matching `cloudflared` for your host triple, which
-CI downloads automatically for releases. To fetch it locally:
+For local dev you also need a matching `cloudflared` for your host triple.
+`scripts/fetch-cloudflared.sh` downloads the release pinned in
+`scripts/CLOUDFLARED_VERSION` and checks it against `scripts/cloudflared.sha256`;
+a download that doesn't match fails. CI uses the same script for releases.
 
 ```bash
 TRIPLE=$(rustc -vV | sed -n 's/host: //p')
-# pick the asset for your OS/arch (linux-amd64 shown):
-curl -fL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
-  -o src-tauri/binaries/cloudflared-$TRIPLE
-chmod +x src-tauri/binaries/cloudflared-$TRIPLE
+scripts/fetch-cloudflared.sh "$TRIPLE" "src-tauri/binaries/cloudflared-$TRIPLE"
 ```
 
-(macOS assets are `.tgz` — extract and copy the inner `cloudflared`. Windows is
-`cloudflared-windows-amd64.exe`, keep the `.exe` suffix on the destination.)
+`scripts/build-sidecar.sh` runs both steps for your host.
 
 ## Local build
 
@@ -86,9 +84,10 @@ matching `frostd` sidecar for each, and attaches the installers to a **draft**
 GitHub Release:
 
 ```bash
-# bump version in src-tauri/tauri.conf.json + package.json first, then:
-git tag v0.1.0
-git push origin v0.1.0
+# bump the version in package.json, src-tauri/tauri.conf.json (and its
+# numeric MSI version) and src-tauri/Cargo.toml first, then:
+git tag v0.3.0
+git push origin v0.3.0
 ```
 
 Review and publish the draft release in the GitHub UI.
@@ -167,12 +166,10 @@ cd src-tauri && npx tauri icon app-icon.svg
 
 ## Caveats / first-run notes
 
-- The macOS and Windows jobs have not been executed from the primary dev
-  environment (Linux-only here); the first CI run on those OSes may need minor
-  iteration (e.g. Perl/NASM availability for vendored OpenSSL). The Linux path
-  and all app config are verified.
+- All four targets build in CI; v0.3.0-rc.2 was the first release built on
+  every platform.
 - Building `frostd` from source on every release is slower but keeps the sidecar
   locked to the app's `frost-client` protocol revision.
-- Before a **mainnet** release, see the mainnet-readiness items tracked
-  separately (consensus-branch/NU cadence, participant-side sighash
-  verification, passphrase/zeroization hardening).
+- Before a general **mainnet** release: an independent security audit, code
+  signing for macOS and Windows (above), and signed auto-updates, so the next
+  network upgrade can reach users before it activates.
