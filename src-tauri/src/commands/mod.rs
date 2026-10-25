@@ -6,6 +6,7 @@ pub mod groups;
 pub mod invite;
 pub mod keystore;
 pub mod notify;
+pub mod polls;
 pub mod server;
 pub mod signing;
 pub mod tor;

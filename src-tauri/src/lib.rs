@@ -62,6 +62,7 @@ pub fn run() {
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(run_auto_lock_monitor(handle));
             sync_service::spawn(app.handle().clone());
+            commands::polls::spawn(app.handle().clone());
             commands::tor::start_if_enabled(app.handle());
             Ok(())
         })
@@ -70,6 +71,14 @@ pub fn run() {
             commands::about::third_party_notices,
             commands::notify::notify,
             commands::tor::tor_status,
+            commands::polls::list_polls,
+            commands::polls::create_poll,
+            commands::polls::vote_poll,
+            commands::polls::close_poll,
+            commands::polls::receive_group_messages,
+            commands::polls::refresh_polls,
+            commands::polls::community_votes,
+            commands::polls::poll_community_round,
             commands::tor::set_use_tor,
             commands::backup::backup_status,
             commands::backup::export_backup,
@@ -114,7 +123,6 @@ pub fn run() {
             commands::wallet::wallet_new_receive_address,
             commands::wallet::wallet_prepare_send,
             commands::wallet::wallet_prepare_send_max,
-            commands::wallet::wallet_prepare_vote,
             commands::wallet::resolve_zns_name,
             commands::wallet::wallet_send,
             commands::wallet::wallet_rebroadcast,

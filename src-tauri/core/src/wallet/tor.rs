@@ -89,6 +89,13 @@ pub async fn start(dir: &Path) -> Result<(), CoreError> {
     }
 }
 
+/// The Tor client for an HTTPS request the app makes besides sync-server
+/// connections (community votes): `None` to go directly, while Tor is off;
+/// an error while it's on but can't carry traffic.
+pub fn for_https() -> Result<Option<Client>, CoreError> {
+    route("https://example.invalid")
+}
+
 /// The Tor client to reach `url` through: `None` to connect directly, either
 /// because Tor is off or because `url` is on this computer. An error while Tor
 /// is on but can't carry traffic, so nothing goes out directly by mistake.

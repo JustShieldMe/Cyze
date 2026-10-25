@@ -432,8 +432,9 @@ pub async fn respond_to_signing(
 #[derive(Serialize)]
 pub struct PendingSession {
     pub session_id: Uuid,
-    /// `"signing"`, or `"viewing_key"` for agreeing on a group's private
-    /// viewing key (which the app joins by itself; see `commands::viewing`).
+    /// `"signing"`; `"viewing_key"` for agreeing on a group's private viewing
+    /// key (`commands::viewing`); or `"group_message"` for group polls
+    /// (`commands::polls`). The app joins the last two by itself.
     pub kind: &'static str,
     /// Contact name of the coordinator if known.
     pub coordinator: Option<String>,
@@ -489,10 +490,14 @@ pub async fn list_pending_sessions(
 
     let dkg_sessions = state.dkg_sessions.lock().map(|s| s.clone()).unwrap_or_default();
     let viewing_key_sessions = state.viewing_key_sessions.lock().map(|s| s.clone()).unwrap_or_default();
+    let group_message_sessions = state.group_message_sessions.lock().map(|s| s.clone()).unwrap_or_default();
     let mut pending = Vec::new();
     for session_id in client.list_sessions().await?.session_ids {
         // A key-generation or viewing-key session the organizer hasn't closed yet.
-        if dkg_sessions.contains(&session_id) || viewing_key_sessions.contains(&session_id) {
+        if dkg_sessions.contains(&session_id)
+            || viewing_key_sessions.contains(&session_id)
+            || group_message_sessions.contains(&session_id)
+        {
             continue;
         }
         let info = client
@@ -524,10 +529,10 @@ pub async fn list_pending_sessions(
             .collect();
         pending.push(PendingSession {
             session_id,
-            kind: if info.message_count == frost_app_core::viewing::NEW_VIEWING_KEY_SESSION {
-                "viewing_key"
-            } else {
-                "signing"
+            kind: match info.message_count {
+                frost_app_core::viewing::NEW_VIEWING_KEY_SESSION => "viewing_key",
+                frost_app_core::polls::GROUP_MESSAGE_SESSION => "group_message",
+                _ => "signing",
             },
             coordinator,
             coordinator_pubkey: hex::encode(&info.coordinator_pubkey.0),
