@@ -39,6 +39,17 @@ When the organizer makes their server reachable through a **Cloudflare tunnel**
 or **Tailscale**, that provider carries the (still end-to-end encrypted)
 traffic and sees the same kind of connection details.
 
+### Polls and community votes
+
+- **Group polls** travel through your group's coordination server like
+  everything else members send each other: end-to-end encrypted, so the server
+  sees only that members exchanged messages, not the questions or answers.
+- **Zcash community votes**: to show what's being voted on, the app reads the
+  public round list and results from ValarGroup's voting config at
+  `voting.valargroup.org` and the vote servers it lists. The requests are the
+  same for everyone and say nothing about your wallet; they go through Tor
+  while it's on.
+
 ### Other
 
 - **Name lookups** (ZcashNames, testnet only): the name you type is sent to the

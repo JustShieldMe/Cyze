@@ -310,7 +310,46 @@ who knows the group ID.
 
 ---
 
-## 7. Settings & configuration
+## 7. Votes
+
+**Votes** in the sidebar has two kinds, open ones first. A red **!** means a
+poll is waiting for your answer.
+
+### Group polls
+
+Ask your group a question: a signal, a decision to coordinate, anything you'd
+otherwise settle in a chat.
+
+1. Click **New poll**, choose the group if you're in more than one, and write
+   the question, any details, and the options (Yes / No to start; up to 10).
+2. Choose how long it stays open, then **Ask the group**. Every member's app
+   shows it, with a system notification if Cyze isn't in front.
+3. Each member picks an option and clicks **Vote**. You can **Change vote**
+   until it closes. Everyone in the group sees who chose what.
+4. An option is marked **agreed** once as many members choose it as the group
+   needs to approve a payment (for a 2-of-3 group, two). The member who asked
+   can **Close poll** early.
+
+Polls go through the group's coordination server, encrypted so only members
+can read them, and nothing goes on chain. A member who was offline gets what
+they missed the next time their app and a member who has it are online
+together.
+
+### Zcash community votes
+
+Zcash coinholders vote on proposals for the network through
+[Shielded Vote](https://valargroup.gitbook.io/shielded-vote-docs): privately,
+with the balance they held at the round's snapshot. Votes shows what's open
+(mainnet rounds on mainnet, test rounds on testnet) and recent results.
+
+- **Decide together** turns the proposals you pick into group polls, closing an
+  hour before the vote does, so the group can agree on how it would vote.
+- Casting the group's vote with its balance from Cyze comes in a later version,
+  once it's been tested on a live round.
+
+---
+
+## 8. Settings & configuration
 
 Network and light-client endpoint are set in **Settings → Wallet**.
 
