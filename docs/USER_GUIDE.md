@@ -331,9 +331,9 @@ otherwise settle in a chat.
    can **Close poll** early.
 
 Polls go through the group's coordination server, encrypted so only members
-can read them, and nothing goes on chain. A member who was offline gets what
-they missed the next time their app and a member who has it are online
-together.
+can read them, and nothing goes on chain. A member who was offline gets each
+member's polls and votes once that member's app has been online too.
+[Voting in Cyze](VOTING.md) covers polls and community votes in full.
 
 ### Zcash community votes
 
