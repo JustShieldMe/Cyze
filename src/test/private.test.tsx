@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { fireEvent, waitFor } from "@testing-library/react";
-import { ALICE, BOB, fakeBackend, GROUP_ID, ME, renderApp } from "./fake";
+import { ALICE, BOB, fakeBackend, GROUP_ID, ME, renderApp, started } from "./fake";
 
 test("an older group's members are offered a private viewing key", async () => {
   let started = false;
@@ -43,7 +43,7 @@ test("funds left at the old address are moved with the group's approval", async 
       memo: null,
       is_unshield: false,
     }),
-    wallet_send: () => "send-2",
+    wallet_send: () => started("send-2"),
   });
   const ui = await renderApp("/");
   await ui.findByText(/is still at the old address/);

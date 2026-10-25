@@ -81,3 +81,39 @@ test("a request the backend refused says why and can't be approved", async () =>
   expect(ui.getByText(/^The coordinator says it pays 2.5 to u1payee, but it pays 12 to u1thief$/)).toBeTruthy();
   expect(ui.queryByRole("button", { name: "Approve and sign" })).toBeNull();
 });
+
+const verified = {
+  sighash_hex: "9f".repeat(32),
+  expiry_height: 3_500_040,
+  payments: [{ address: "u1payee", value_zatoshis: 250_000_000, transparent: false, memo: null }],
+  spent_zatoshis: 1_000_000_000,
+  change_zatoshis: 749_985_000,
+  fee_zatoshis: 15_000,
+};
+
+test("a request shows when it must be approved by, and once expired can only be dismissed", async () => {
+  const backend = fakeBackend({
+    list_pending_sessions: () => [request, { ...request, session_id: "s2" }],
+    join_signing_session: ({ args }) => ((args as { session_id: string }).session_id === "s1" ? "c3" : "c4"),
+    respond_to_signing: () => null,
+  });
+  const ui = await renderApp("/inbox");
+  await waitFor(() => expect(joinedAs("s2")).toBe("c4"));
+  const event = (ceremony_id: string, window: object) =>
+    emit("signing:progress", {
+      ceremony_id,
+      event: { phase: "awaiting_approval", message_hex: "9f".repeat(32), context, auto_approved: false, verified, window },
+    });
+
+  // Still open: approve by the time the approver's own sync server implies.
+  await event("c3", { expiry_height: 3_500_040, blocks_left: 20, closes_at_ms: Date.now() + 25 * 60_000 });
+  await ui.findByText("Approve by");
+  expect(ui.getAllByRole("button", { name: "Approve and sign" })).toHaveLength(1);
+
+  // Past its expiry: nothing to sign, only to dismiss.
+  await event("c4", { expiry_height: 3_500_040, blocks_left: 0, closes_at_ms: Date.now() - 60_000 });
+  await ui.findByText("This request expired before it was approved. Nothing was signed.");
+  expect(ui.getAllByRole("button", { name: "Approve and sign" })).toHaveLength(1);
+  fireEvent.click(ui.getByRole("button", { name: "Dismiss" }));
+  await waitFor(() => expect(backend.calls("respond_to_signing")).toEqual([{ ceremonyId: "c4", approve: false }]));
+});

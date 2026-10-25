@@ -9,10 +9,12 @@ import {
   signingRequests,
   respondToSigning,
   AppError,
+  ApprovalWindow,
 } from "../ipc/commands";
 import { useCeremonies } from "../stores/ceremonies";
 import { asNetwork, networkLabel, unit } from "../network";
 import { resolveParticipant } from "../lib/participants";
+import { clock, useNow } from "../lib/time";
 
 /** Signer-side ceremony phases, as a human would say them. */
 const SIGNER_PHASES: Record<string, string> = {
@@ -70,7 +72,14 @@ function formatZec(zatoshis: number, network: string): string {
   })} ${unit(asNetwork(network))}`;
 }
 
-function ApproveReject({ ceremonyId }: { ceremonyId: string }) {
+/** Whether a request's transaction can no longer be sent, by the approver's
+ *  own sync server (at verification) and the clock since. */
+function hasExpired(approval: ApprovalWindow | null | undefined, now: number): boolean {
+  if (!approval) return false;
+  return approval.blocks_left === 0 || (approval.closes_at_ms !== null && now >= approval.closes_at_ms);
+}
+
+function ApproveReject({ ceremonyId, expired = false }: { ceremonyId: string; expired?: boolean }) {
   const [error, setError] = useState<string | null>(null);
   const respond = async (approve: boolean) => {
     setError(null);
@@ -82,12 +91,23 @@ function ApproveReject({ ceremonyId }: { ceremonyId: string }) {
   };
   return (
     <>
-      <div className="row mt-3">
-        <button onClick={() => respond(true)}>Approve and sign</button>
-        <button className="danger" onClick={() => respond(false)}>
-          Reject
-        </button>
-      </div>
+      {expired ? (
+        <>
+          <p className="dim mt-3">This request expired before it was approved. Nothing was signed.</p>
+          <div className="row">
+            <button className="secondary" onClick={() => respond(false)}>
+              Dismiss
+            </button>
+          </div>
+        </>
+      ) : (
+        <div className="row mt-3">
+          <button onClick={() => respond(true)}>Approve and sign</button>
+          <button className="danger" onClick={() => respond(false)}>
+            Reject
+          </button>
+        </div>
+      )}
       {error && <div className="error">{error}</div>}
     </>
   );
@@ -98,11 +118,14 @@ function VerifiedSummary({
   network,
   noteIndex,
   noteTotal,
+  closesAt,
 }: {
   tx: VerifiedTransaction;
   network: string;
   noteIndex?: number;
   noteTotal?: number;
+  /** When approvals are needed by, if this device's sync server could say. */
+  closesAt?: number | null;
 }) {
   return (
     <>
@@ -156,6 +179,12 @@ function VerifiedSummary({
             <td className="dim">Network</td>
             <td>{networkLabel(asNetwork(network))}</td>
           </tr>
+          {closesAt && (
+            <tr>
+              <td className="dim">Approve by</td>
+              <td>About {clock(closesAt)}</td>
+            </tr>
+          )}
         </tbody>
       </table>
       {(noteTotal ?? 1) > 1 && (
@@ -181,6 +210,7 @@ export default function Inbox() {
   });
 
   const [error, setError] = useState<string | null>(null);
+  const now = useNow(30_000);
 
   // Listeners are mounted globally in CeremonyListener; just read the store.
   // Requests are usually joined automatically (see useAutoJoin in App.tsx).
@@ -223,6 +253,7 @@ export default function Inbox() {
           const context = detail.context as SigningContext | undefined;
           const network = context?.network ?? "main";
           const verified = detail.verified as VerifiedTransaction | undefined;
+          const approval = detail.window as ApprovalWindow | null | undefined;
           const refused = detail.refused as string | undefined;
           const autoApproved = detail.auto_approved === true;
           const messageHex = detail.message_hex as string | undefined;
@@ -285,8 +316,9 @@ export default function Inbox() {
                     network={network}
                     noteIndex={context?.spend_index}
                     noteTotal={context?.spend_total}
+                    closesAt={approval?.closes_at_ms}
                   />
-                  <ApproveReject ceremonyId={ceremonyId} />
+                  <ApproveReject ceremonyId={ceremonyId} expired={hasExpired(approval, now)} />
                 </div>
               ) : awaiting && ceremonyId && messageHex ? (
                 <div className="mt-3">

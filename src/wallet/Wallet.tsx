@@ -11,7 +11,6 @@ import {
   walletPrepareMove,
   walletPrepareSend,
   walletPrepareSendMax,
-  walletSend,
   resolveZnsName,
   type ZnsResolution,
   AppError,
@@ -27,7 +26,7 @@ import { WalletTxHistory } from "./Activity";
 import { ReviewNotesTab } from "./Notes";
 import { ViewingKeyCallout } from "./Privacy";
 import { ReceiveShieldCard } from "./Receive";
-import { SendSessionPanel } from "./SendProgress";
+import { requestApprovals, SendSessionPanel } from "./SendProgress";
 import { ADDRESS_PLACEHOLDER, checkRecipient } from "./address";
 import { SEND_MAX_SCAN_LAG, SyncErrorView, zec } from "./common";
 
@@ -154,6 +153,8 @@ export function GroupWallet({ group, network }: { group: GroupSummary; network: 
   const activeSend = useCeremonies((s) => selectActiveSend(s, group.id));
   const activeSendId = useCeremonies((s) => s.activeSendByGroup[group.id]);
   const sendInProgress = !!activeSend && !activeSend.done;
+  // A failed payment stays up until dismissed: it may need asking again.
+  const sendNeedsAttention = sendInProgress || !!activeSend?.failed;
 
   /** Restart the backend sync (abandoning a stalled one) and re-read every
    *  wallet panel. */
@@ -263,7 +264,7 @@ export function GroupWallet({ group, network }: { group: GroupSummary; network: 
 
       {err && <SyncErrorView text={err} />}
 
-      {activeSend && (panel === "send" || sendInProgress) ? (
+      {activeSend && (panel === "send" || sendNeedsAttention) ? (
         <SendSessionPanel
           ceremonyId={activeSendId ?? ""}
           ceremony={activeSend}
@@ -494,7 +495,6 @@ function ReviewSend({
   onBack: () => void;
   onError: (message: string | null) => void;
 }) {
-  const startSend = useCeremonies((s) => s.startSend);
   const identity = useQuery({ queryKey: ["identity"], queryFn: getIdentity });
   const contacts = useQuery({ queryKey: ["contacts"], queryFn: listContacts });
   const members = useMemo(
@@ -523,18 +523,7 @@ function ReviewSend({
 
   const send = useMutation({
     mutationFn: () =>
-      walletSend({
-        group_id: group.id,
-        recipient: draft.recipient,
-        amount_zatoshis: draft.amount_zatoshis,
-        signers: [...signers],
-        memo: draft.memo ?? null,
-        from_old_address: kind === "move",
-        send_max: kind === "max",
-      }),
-    onSuccess: (id) => {
-      onError(null);
-      startSend(id, {
+      requestApprovals({
         groupId: group.id,
         recipient: draft.recipient,
         amountZatoshis: draft.amount_zatoshis,
@@ -544,10 +533,15 @@ function ReviewSend({
         isUnshield: draft.is_unshield,
         memo: draft.memo ?? undefined,
         signers: [...signers],
-      });
-    },
+        sendMax: kind === "max",
+        fromOldAddress: kind === "move",
+      }),
+    onSuccess: () => onError(null),
     onError: (e) => onError((e as unknown as AppError).message),
   });
+  // Approvers get the standard window every wallet's transactions have.
+  const closesAt = draft.approval_window?.closes_at_ms;
+  const windowMinutes = closesAt ? Math.round((closesAt - Date.now()) / 60_000) : null;
 
   const title = {
     payment: "Review payment",
@@ -620,10 +614,15 @@ function ReviewSend({
           <span className="dim code-inline">{m.short}</span>
         </label>
       ))}
-      {signers.size < group.threshold && (
+      {signers.size < group.threshold ? (
         <p className="dim text-sm">
           Choose {group.threshold - signers.size} more. Each must be online to approve.
         </p>
+      ) : (
+        windowMinutes !== null &&
+        windowMinutes > 0 && (
+          <p className="dim text-sm">They'll have about {windowMinutes} minutes to approve.</p>
+        )
       )}
 
       {needsCheck && (

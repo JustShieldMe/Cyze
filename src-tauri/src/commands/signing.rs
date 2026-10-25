@@ -4,6 +4,7 @@ use frost_app_core::signing::{
     run_coordinator, run_participant, CoordinatorParams, ParticipantParams,
 };
 use frost_app_core::wallet::verify::{self, VerifiedTransaction};
+use frost_app_core::wallet::ApprovalWindow;
 use frost_client::api::{self, PublicKey};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -309,7 +310,7 @@ pub async fn join_signing_session<R: tauri::Runtime>(
 enum Verdict {
     /// The transaction verified; the user decides, unless it is another round
     /// of a transaction they already approved.
-    Verified { tx: VerifiedTransaction, auto_approved: bool },
+    Verified { tx: VerifiedTransaction, auto_approved: bool, window: Option<ApprovalWindow> },
     /// No transaction attached, and raw signing is allowed (advanced options).
     Raw,
     /// Refused automatically, for this reason.
@@ -320,9 +321,10 @@ impl Verdict {
     /// Add the decision to the `awaiting_approval` event the UI receives.
     fn annotate(&self, event: &mut serde_json::Value) {
         match self {
-            Verdict::Verified { tx, auto_approved } => {
+            Verdict::Verified { tx, auto_approved, window } => {
                 event["verified"] = serde_json::json!(tx);
                 event["auto_approved"] = serde_json::json!(auto_approved);
+                event["window"] = serde_json::json!(window);
             }
             Verdict::Raw => event["unverified"] = serde_json::json!(true),
             Verdict::Refused(reason) => event["refused"] = serde_json::json!(reason),
@@ -351,7 +353,7 @@ async fn gate_wallet_request<R: tauri::Runtime>(
     let verdict = match context.and_then(|c| c.pczt.as_deref().map(|pczt| (c, pczt))) {
         Some((claimed, pczt)) => verify::verify_signing_request(network, group_id, seed.as_deref(), pczt, message_hex, randomizer_hex)
             .and_then(|tx| verify::check_coordinator_claims(network, group_id, seed.as_deref(), &tx, claimed).map(|()| tx))
-            .map_or_else(|e| Verdict::Refused(e.to_string()), |tx| Verdict::Verified { tx, auto_approved: false }),
+            .map_or_else(|e| Verdict::Refused(e.to_string()), |tx| Verdict::Verified { tx, auto_approved: false, window: None }),
         None if settings.advanced_mode.unwrap_or(false) => Verdict::Raw,
         None => Verdict::Refused(
             "refused to sign: the request has no transaction attached, so there's no way to check \
@@ -360,12 +362,20 @@ async fn gate_wallet_request<R: tauri::Runtime>(
         ),
     };
 
+    let verdict = match verdict {
+        Verdict::Verified { tx, auto_approved, .. } => {
+            let window = approval_window(&state, group_id, tx.expiry_height).await;
+            Verdict::Verified { tx, auto_approved, window }
+        }
+        other => other,
+    };
+
     let mut ceremonies = state.ceremonies.lock().await;
     let Some(handle) = ceremonies.get_mut(&ceremony_id) else {
         return verdict;
     };
     match verdict {
-        Verdict::Verified { tx, .. } => {
+        Verdict::Verified { tx, window, .. } => {
             let approved_before = state
                 .approved_sighashes
                 .lock()
@@ -375,7 +385,7 @@ async fn gate_wallet_request<R: tauri::Runtime>(
             handle.gate = ApprovalGate::Verified { sighash_hex: tx.sighash_hex.clone() };
             let auto_approved = approved_before
                 && handle.approval.take().is_some_and(|approval| approval.send(true).is_ok());
-            Verdict::Verified { tx, auto_approved }
+            Verdict::Verified { tx, auto_approved, window }
         }
         Verdict::Raw => {
             handle.gate = ApprovalGate::Open;
@@ -390,6 +400,20 @@ async fn gate_wallet_request<R: tauri::Runtime>(
             Verdict::Refused(reason)
         }
     }
+}
+
+/// How long is left to approve a transaction expiring at `expiry_height`, as
+/// the sync server sees the chain. None if it can't say within a few seconds;
+/// the request is shown without a deadline then.
+async fn approval_window(state: &AppState, group_id: &str, expiry_height: u32) -> Option<ApprovalWindow> {
+    use crate::commands::wallet::{group_wallet_ctx, shared_lightwalletd};
+    let (network, url, _) = group_wallet_ctx(state, group_id).await.ok()?;
+    let tip = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        shared_lightwalletd(state, &url).await.ok()?.latest_height().await.ok()
+    })
+    .await
+    .ok()??;
+    ApprovalWindow::at(network, expiry_height, tip, frost_app_core::wallet::now_ms())
 }
 
 /// Resolve the approval gate for a participant ceremony.

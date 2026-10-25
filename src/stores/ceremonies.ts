@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { encryptedStorage } from "./encryptedStorage";
-import type { CreateInviteArgs } from "../ipc/commands";
+import { liveCeremonies, type CreateInviteArgs } from "../ipc/commands";
 import { useKeystore } from "./keystore";
 
 export type CeremonyKind = "dkg" | "signing" | "send";
@@ -14,6 +14,10 @@ export interface CeremonyEventPayload {
   signed_pczt_hex?: string;
   txid?: string;
   error?: string;
+  /** send:failed: the transaction is signed and saved, only sending it failed. */
+  retryable?: boolean;
+  /** send:failed: not enough members approved before the transaction expired. */
+  expired?: boolean;
 }
 
 /** Context for a wallet send, captured when it starts so the UI can show what
@@ -32,6 +36,13 @@ export interface SendMeta {
   memo?: string;
   /** Comm pubkeys of the participants who signed this transaction. */
   signers?: string[];
+  /** Pays everything spendable ("Send all"); the amount is worked out again
+   *  if the payment is asked again. */
+  sendMax?: boolean;
+  /** Moves the group's old address into its private one. */
+  fromOldAddress?: boolean;
+  /** When approvals are needed by (epoch ms, estimated). */
+  closesAtMs?: number;
 }
 
 export interface CeremonyState {
@@ -59,6 +70,10 @@ export interface CeremonyState {
   txid?: string;
   /** Send-only: what is being sent. */
   send?: SendMeta;
+  /** Send-only, when failed: the signed transaction can be sent again as is. */
+  retryable?: boolean;
+  /** Send-only, when failed: approvals didn't come before it expired. */
+  expired?: boolean;
   /** Send-only: for a multi-spend tx, which input is currently being signed
    *  (1-based) and how many in total. Sticky across the per-spend ceremonies. */
   spendIndex?: number;
@@ -248,19 +263,25 @@ export const useCeremonies = create<CeremoniesStore>()(
           };
         }),
       onFailed: (kind, payload) =>
-        set((s) => ({
-          ceremonies: {
-            ...s.ceremonies,
-            [payload.ceremony_id]: {
-              ...s.ceremonies[payload.ceremony_id],
-              kind,
-              phase: "failed",
-              done: true,
-              failed: true,
-              error: payload.error,
+        set((s) => {
+          const prev = s.ceremonies[payload.ceremony_id];
+          return {
+            ceremonies: {
+              ...s.ceremonies,
+              [payload.ceremony_id]: {
+                ...prev,
+                kind,
+                // A send keeps the step it failed at.
+                phase: kind === "send" ? (prev?.phase ?? "failed") : "failed",
+                done: true,
+                failed: true,
+                error: payload.error,
+                retryable: payload.retryable === true,
+                expired: payload.expired === true,
+              },
             },
-          },
-        })),
+          };
+        }),
       clear: (ceremonyId) =>
         set((s) => {
           const { [ceremonyId]: _removed, ...rest } = s.ceremonies;
@@ -288,13 +309,16 @@ export const useCeremonies = create<CeremoniesStore>()(
         activeSendByGroup: s.activeSendByGroup,
         txSigners: s.txSigners,
       }),
-      // Keep anything that arrived between unlock and loading the history.
+      // Keep anything that arrived between unlock and loading the history,
+      // on top of what was saved about the same ceremony.
       merge: (saved, current) => {
         const s = (saved ?? {}) as Partial<Persisted>;
+        const ceremonies: Record<string, CeremonyState> = { ...s.ceremonies };
+        for (const [id, c] of Object.entries(current.ceremonies)) ceremonies[id] = { ...ceremonies[id], ...c };
         return {
           ...current,
           ...s,
-          ceremonies: { ...s.ceremonies, ...current.ceremonies },
+          ceremonies,
           activeSendByGroup: { ...s.activeSendByGroup, ...current.activeSendByGroup },
           txSigners: { ...s.txSigners, ...current.txSigners },
         };
@@ -303,11 +327,42 @@ export const useCeremonies = create<CeremoniesStore>()(
   )
 );
 
+/** A saved send that isn't running any more: Cyze was locked or closed while it
+ *  waited for approvals, so nothing more comes of it; or while it was being
+ *  sent, so it may or may not have reached the network. */
+function interrupted(c: CeremonyState, live: Set<string>, id: string): CeremonyState {
+  if (c.kind !== "send" || c.done || live.has(id)) return c;
+  if (c.phase === "proving") {
+    return {
+      ...c,
+      done: true,
+      failed: true,
+      retryable: true,
+      error: "Cyze was locked or closed while sending this payment. If it isn't in your activity in a few minutes, send it again.",
+    };
+  }
+  return {
+    ...c,
+    done: true,
+    failed: true,
+    error: "Cyze was locked or closed before enough members approved. Nothing was sent.",
+  };
+}
+
 // Load the history on unlock; forget it on lock, without touching what's saved.
 useKeystore.subscribe((s, prev) => {
   if (s.unlocked === prev.unlocked) return;
   if (s.unlocked) {
-    void useCeremonies.persist.rehydrate();
+    void (async () => {
+      await useCeremonies.persist.rehydrate();
+      // Unless the window only reloaded, the backend has ended any saved send.
+      const live = new Set((await liveCeremonies().catch(() => null)) ?? []);
+      useCeremonies.setState((st) => ({
+        ceremonies: Object.fromEntries(
+          Object.entries(st.ceremonies).map(([id, c]) => [id, interrupted(c, live, id)]),
+        ),
+      }));
+    })();
   } else {
     storage.lock();
     useCeremonies.setState({ ...empty, joinedSessions: {} });

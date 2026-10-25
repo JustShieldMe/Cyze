@@ -1981,6 +1981,72 @@ pub struct DraftTransaction {
     /// on-chain; only the recipient's viewing key can decrypt it. Always None
     /// for unshield transfers (transparent outputs carry no memo).
     pub memo: Option<String>,
+    /// How long the group has to approve it, as of when it was built.
+    pub approval_window: Option<ApprovalWindow>,
+}
+
+/// Nodes refuse a transaction that would expire within this many blocks of
+/// the next one (zcashd's `TX_EXPIRING_SOON_THRESHOLD`).
+pub const EXPIRING_SOON_BLOCKS: u32 = 3;
+
+/// How long a built transaction can wait for approvals before it can't be sent.
+///
+/// Transactions keep the standard expiry every wallet uses (about 50 minutes):
+/// the expiry height is public, and a longer one would single out a group's
+/// payments on-chain. So the window is shown rather than stretched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApprovalWindow {
+    /// The last block the transaction can be mined in.
+    pub expiry_height: u32,
+    /// Blocks still to come before it's too late to send; 0 once it is.
+    pub blocks_left: u32,
+    /// When that's expected (epoch ms), from the target block spacing. None on
+    /// a local devnet, where blocks arrive when someone mines them.
+    pub closes_at_ms: Option<i64>,
+}
+
+impl ApprovalWindow {
+    /// The window of a transaction expiring at `expiry_height` with the chain
+    /// at `tip_height`. None for one that never expires (expiry height 0).
+    pub fn at(network: WalletNetwork, expiry_height: u32, tip_height: u64, now_ms: i64) -> Option<Self> {
+        if expiry_height == 0 {
+            return None;
+        }
+        // From a tip of `expiry - EXPIRING_SOON_BLOCKS`, the next block plus the
+        // margin passes the expiry.
+        let last = u64::from(expiry_height.saturating_sub(EXPIRING_SOON_BLOCKS));
+        let blocks_left = u32::try_from(last.saturating_sub(tip_height)).unwrap_or(u32::MAX);
+        let closes_at_ms = match network {
+            WalletNetwork::Regtest(_) => None,
+            _ => Some(now_ms + i64::from(blocks_left) * block_spacing_ms(network, tip_height)),
+        };
+        Some(Self { expiry_height, blocks_left, closes_at_ms })
+    }
+
+    /// Too late: a node would refuse the transaction now.
+    pub fn is_closed(&self) -> bool {
+        self.blocks_left == 0
+    }
+}
+
+/// The target time between blocks after `tip_height`: 75 s, or 25 s once NU7
+/// is active.
+fn block_spacing_ms(network: WalletNetwork, tip_height: u64) -> i64 {
+    use zcash_protocol::consensus::{NU7_POW_TARGET_SPACING_RATIO, SECONDS_PER_BLOCK};
+    let next = BlockHeight::from_u32(u32::try_from(tip_height + 1).unwrap_or(u32::MAX));
+    let seconds = if network.params().is_nu_active(NetworkUpgrade::Nu7, next) {
+        SECONDS_PER_BLOCK / NU7_POW_TARGET_SPACING_RATIO
+    } else {
+        SECONDS_PER_BLOCK
+    };
+    i64::from(seconds) * 1000
+}
+
+/// Milliseconds since the Unix epoch.
+pub fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as i64)
 }
 
 /// Build an unsigned Orchard transfer as a PCZT and return its sighash. Uses
@@ -1991,8 +2057,8 @@ pub struct DraftTransaction {
 /// transaction's expiry height is anchored to the *current* tip. Otherwise a
 /// stale tip yields an expiry that may already be in the past by broadcast time,
 /// and the node rejects the tx ("must not be mined at a block height greater
-/// than its expiry"). The signing ceremony must still complete within the
-/// ~40-block expiry window (≈50 min on testnet) of the build.
+/// than its expiry"). The group must still approve it within the standard
+/// expiry window (about 50 minutes; see [`ApprovalWindow`]).
 #[allow(clippy::too_many_arguments)]
 pub async fn prepare_send(
     data_dir: &Path,
@@ -2009,7 +2075,7 @@ pub async fn prepare_send(
     use zcash_protocol::ShieldedPool;
 
     let params = network.params();
-    let (mut db, account_id) = open_for_send(data_dir, wallet_id, network, lightwalletd_url, db_key).await?;
+    let (mut db, account_id, tip_height) = open_for_send(data_dir, wallet_id, network, lightwalletd_url, db_key).await?;
     let to = decode_recipient(network, recipient)?;
     // A transparent recipient means this is an unshield (Orchard → transparent).
     let is_unshield = matches!(to, Address::Transparent(_));
@@ -2063,7 +2129,7 @@ pub async fn prepare_send(
     })?;
 
     let memo = if is_unshield { None } else { memo.filter(|s| !s.is_empty()) };
-    draft_from_proposal(&mut db, network, account_id, &proposal, recipient, amount_zatoshis, is_unshield, memo)
+    draft_from_proposal(&mut db, network, account_id, tip_height, &proposal, recipient, amount_zatoshis, is_unshield, memo)
 }
 
 /// Build an unsigned transaction that pays everything spendable in a wallet to
@@ -2086,7 +2152,7 @@ pub async fn prepare_send_max(
     use zcash_protocol::ShieldedPool;
 
     let params = network.params();
-    let (mut db, account_id) = open_for_send(data_dir, wallet_id, network, lightwalletd_url, db_key).await?;
+    let (mut db, account_id, tip_height) = open_for_send(data_dir, wallet_id, network, lightwalletd_url, db_key).await?;
     let to = decode_recipient(network, recipient)?;
     let is_unshield = matches!(to, Address::Transparent(_));
     let memo = if is_unshield { None } else { memo.filter(|m| !m.is_empty()) };
@@ -2120,19 +2186,20 @@ pub async fn prepare_send_max(
         .ok()
         .flatten()
         .map_or(0, u64::from);
-    draft_from_proposal(&mut db, network, account_id, &proposal, recipient, amount, is_unshield, memo)
+    draft_from_proposal(&mut db, network, account_id, tip_height, &proposal, recipient, amount, is_unshield, memo)
 }
 
 /// Open a wallet to build a transaction: its chain tip refreshed from
 /// lightwalletd, so the expiry is anchored to the live tip rather than whatever
 /// sync last recorded, and scanned close enough to that tip to spend from.
+/// Returns the tip too.
 async fn open_for_send(
     data_dir: &Path,
     wallet_id: &str,
     network: WalletNetwork,
     lightwalletd_url: &str,
     db_key: &[u8],
-) -> Result<(GroupDb, <GroupDb as WalletRead>::AccountId), CoreError> {
+) -> Result<(GroupDb, <GroupDb as WalletRead>::AccountId, u64), CoreError> {
     if let WalletNetwork::Regtest(level) = network {
         if level < RegtestUpgrade::Nu6_3 {
             return Err(CoreError::Ceremony(format!(
@@ -2165,7 +2232,7 @@ async fn open_for_send(
         .map_err(|e| CoreError::Crypto(format!("wallet accounts: {e}")))?
         .first()
         .ok_or_else(|| CoreError::Crypto("wallet not initialized".into()))?;
-    Ok((db, account_id))
+    Ok((db, account_id, tip_height))
 }
 
 /// Parse a recipient address for `network`, explaining a mismatch when the
@@ -2200,6 +2267,7 @@ fn draft_from_proposal(
     db: &mut GroupDb,
     network: WalletNetwork,
     account_id: <GroupDb as WalletRead>::AccountId,
+    tip_height: u64,
     proposal: &zcash_client_backend::proposal::Proposal<StandardFeeRule, zcash_client_sqlite::ReceivedNoteId>,
     recipient: &str,
     amount_zatoshis: u64,
@@ -2233,6 +2301,7 @@ fn draft_from_proposal(
     let sighash = pczt::roles::signer::Signer::new(pczt.clone())
         .map_err(|e| CoreError::Ceremony(format!("signer: {e:?}")))?
         .shielded_sighash();
+    let approval_window = ApprovalWindow::at(network, *pczt.global().expiry_height(), tip_height, now_ms());
 
     // Read each real spend's α (the re-randomization the FROST signers must
     // use), across both the Orchard and Ironwood bundles.
@@ -2247,6 +2316,7 @@ fn draft_from_proposal(
         recipient: recipient.to_string(),
         is_unshield,
         memo,
+        approval_window,
     })
 }
 
@@ -3022,6 +3092,33 @@ mod tests {
 
         std::fs::write(pending_tx_path(dir.path(), "w1", WalletNetwork::Main, "c2"), "cafe01\n").unwrap();
         assert_eq!(load_pending_tx(dir.path(), "w1", WalletNetwork::Main, "c2", &key).unwrap(), "cafe01");
+    }
+
+    #[test]
+    fn approvals_close_once_a_node_would_refuse_the_transaction() {
+        let at = |tip| ApprovalWindow::at(WalletNetwork::Main, 1_040, tip, 0).unwrap();
+        // At a tip of 1,036 the next block is 1,037, and 1,037 + 3 still fits
+        // under the expiry; one block later it doesn't.
+        assert_eq!(at(1_000).blocks_left, 37);
+        assert_eq!(at(1_036).blocks_left, 1);
+        assert!(!at(1_036).is_closed());
+        assert!(at(1_037).is_closed());
+        assert!(at(2_000).is_closed());
+        assert_eq!(ApprovalWindow::at(WalletNetwork::Main, 0, 1_000, 0), None, "expiry 0 never expires");
+    }
+
+    #[test]
+    fn the_approval_deadline_follows_the_block_spacing() {
+        let nu7 = u64::from(u32::from(
+            WalletNetwork::Main.params().activation_height(NetworkUpgrade::Nu7).unwrap(),
+        ));
+        let before = ApprovalWindow::at(WalletNetwork::Main, 2_000_040, 2_000_000, 1_000).unwrap();
+        assert_eq!(before.closes_at_ms, Some(1_000 + 37 * 75_000));
+        let after = ApprovalWindow::at(WalletNetwork::Main, (nu7 + 220) as u32, nu7 + 100, 1_000).unwrap();
+        assert_eq!(after.closes_at_ms, Some(1_000 + 117 * 25_000));
+        // A devnet mines on demand, so only the blocks count.
+        let devnet = ApprovalWindow::at(WalletNetwork::Regtest(RegtestUpgrade::Nu7), 160, 100, 1_000).unwrap();
+        assert_eq!((devnet.blocks_left, devnet.closes_at_ms), (57, None));
     }
 
     #[test]

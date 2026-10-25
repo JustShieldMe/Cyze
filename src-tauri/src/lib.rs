@@ -157,6 +157,7 @@ pub fn run() {
             commands::server::clear_logs,
             commands::dkg::start_dkg,
             commands::dkg::cancel_ceremony,
+            commands::dkg::live_ceremonies,
             commands::signing::create_signing_session,
             commands::signing::join_signing_session,
             commands::signing::respond_to_signing,

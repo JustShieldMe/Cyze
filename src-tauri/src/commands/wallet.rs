@@ -869,16 +869,60 @@ pub struct WalletSendArgs {
     pub send_max: bool,
 }
 
-/// Build, FROST-sign, and (next phase) broadcast an Orchard transfer. Builds the
-/// PCZT, then drives the existing coordinator ceremony over the transaction
-/// sighash using each spend's α as the re-randomizer; on completion, applies the
-/// group signature to the PCZT. Emits `send:progress` / `send:complete` /
-/// `send:failed`. Returns the ceremony id.
+/// What `wallet_send` started: the ceremony, and the transaction as it was
+/// built (a "send all" amount and the fee are only final now).
+#[derive(Serialize)]
+pub struct SendStarted {
+    pub ceremony_id: Uuid,
+    pub amount_zatoshis: u64,
+    pub fee_zatoshis: u64,
+    pub sighash_hex: String,
+    /// When approvals are needed by (epoch ms, estimated from block spacing).
+    pub closes_at_ms: i64,
+}
+
+/// The longest a send waits for approvals, whatever its expiry: one that
+/// never expires, or a devnet where no one is mining, still ends.
+const MAX_SIGNING_WAIT: std::time::Duration = std::time::Duration::from_secs(2 * 60 * 60);
+
+/// How often a send waiting for approvals checks whether it has expired. The
+/// sync service checks for new blocks as often.
+const EXPIRY_POLL: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Resolve once a transaction expiring at `expiry_height` can no longer be
+/// sent, as the group's sync server sees the chain. A failed check waits for
+/// the next one: an unreachable server can't say the window closed.
+async fn until_expired<R: tauri::Runtime>(app: &AppHandle<R>, group_id: &str, expiry_height: u32) {
+    loop {
+        tokio::time::sleep(EXPIRY_POLL).await;
+        let state = app.state::<AppState>();
+        let Ok((network, url, _)) = group_wallet_ctx(&state, group_id).await else {
+            continue;
+        };
+        let Ok(conn) = shared_lightwalletd(&state, &url).await else {
+            continue;
+        };
+        if let Ok(tip) = conn.latest_height().await {
+            if wallet::ApprovalWindow::at(network, expiry_height, tip, 0).is_some_and(|w| w.is_closed()) {
+                return;
+            }
+        }
+    }
+}
+
+/// Build, FROST-sign, and broadcast an Orchard transfer. Builds the PCZT, then
+/// drives the coordinator ceremony over the transaction sighash using each
+/// spend's α as the re-randomizer; on completion, applies the group signature
+/// to the PCZT. Emits `send:progress` / `send:complete` / `send:failed`.
+///
+/// Approvals have until the transaction's standard expiry (see
+/// [`wallet::ApprovalWindow`]): once the chain gets too close to it, the send
+/// stops and `send:failed` carries `expired: true`.
 #[tauri::command]
 pub async fn wallet_send<R: tauri::Runtime>(
     app: AppHandle<R>,
     args: WalletSendArgs,
-) -> AppResult<Uuid> {
+) -> AppResult<SendStarted> {
     let state = app.state::<AppState>();
     let (network, url, _ufvk) = group_wallet_ctx(&state, &args.group_id).await?;
     let db_key = state.wallet_db_key(&args.group_id).await?;
@@ -986,6 +1030,21 @@ pub async fn wallet_send<R: tauri::Runtime>(
         }
     });
 
+    let started_at = wallet::now_ms();
+    let max_wait_ms = MAX_SIGNING_WAIT.as_millis() as i64;
+    let closes_at_ms = draft
+        .approval_window
+        .and_then(|w| w.closes_at_ms)
+        .map_or(started_at + max_wait_ms, |at| at.min(started_at + max_wait_ms));
+    let expiry_height = draft.approval_window.map(|w| w.expiry_height);
+    let started = SendStarted {
+        ceremony_id,
+        amount_zatoshis: draft.amount_zatoshis,
+        fee_zatoshis: draft.fee_zatoshis,
+        sighash_hex: draft.sighash_hex.clone(),
+        closes_at_ms,
+    };
+
     let task_app = app.clone();
     let pczt_hex = draft.pczt_hex.clone();
     let sighash_hex = draft.sighash_hex.clone();
@@ -1012,13 +1071,7 @@ pub async fn wallet_send<R: tauri::Runtime>(
             );
         };
 
-        // Budget the entire signing phase to 35 minutes. This is intentionally
-        // tighter than the Zcash tx expiry window (~40 blocks ≈ 40 min on
-        // testnet, 50 min on mainnet) so the user receives a clear timeout
-        // message instead of a cryptic "transaction expired" error at broadcast.
-        // Multi-spend transactions use this same total budget across all spends.
-        const SIGNING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(35 * 60);
-
+        let mut timed_out = false;
         let signing_result: Result<Vec<(wallet::SpendPool, usize, String)>, String> = {
             let total = spends.len();
 
@@ -1080,16 +1133,28 @@ pub async fn wallet_send<R: tauri::Runtime>(
                 }
                 Ok(signatures)
             };
-            match tokio::time::timeout(SIGNING_TIMEOUT, signing_fut).await {
-                Ok(result) => result,
-                Err(_elapsed) => {
+            // Multi-spend transactions share the one window across all spends.
+            let expired = async {
+                match expiry_height {
+                    Some(height) => until_expired(&task_app, &group_id, height).await,
+                    None => std::future::pending().await,
+                }
+            };
+            tokio::pin!(signing_fut);
+            let finished = tokio::select! {
+                result = &mut signing_fut => Some(result),
+                () = expired => None,
+                () = tokio::time::sleep(MAX_SIGNING_WAIT) => None,
+            };
+            match finished {
+                Some(result) => result,
+                None => {
+                    // Let the ceremony close its session, so the request leaves
+                    // members' Approvals.
                     cancel.cancel();
-                    Err(
-                        "Signing timed out after 35 minutes. \
-                         The transaction has expired — start a new transaction \
-                         when all signers are available."
-                        .to_string(),
-                    )
+                    let _ = tokio::time::timeout(std::time::Duration::from_secs(10), &mut signing_fut).await;
+                    timed_out = true;
+                    Err("Not enough members approved in time, so the payment expired. Nothing was sent.".to_string())
                 }
             }
         };
@@ -1104,6 +1169,13 @@ pub async fn wallet_send<R: tauri::Runtime>(
 
         let signatures = match signing_result {
             Ok(sigs) => sigs,
+            Err(error) if timed_out => {
+                let _ = task_app.emit(
+                    "send:failed",
+                    serde_json::json!({ "ceremony_id": ceremony_id, "error": error, "expired": true }),
+                );
+                return;
+            }
             Err(e) => return fail(e),
         };
 
@@ -1162,7 +1234,7 @@ pub async fn wallet_send<R: tauri::Runtime>(
         }
     });
 
-    Ok(ceremony_id)
+    Ok(started)
 }
 
 /// Re-broadcast a previously-signed transaction whose first broadcast failed,
