@@ -117,10 +117,8 @@ async fn a_two_of_two_send_is_verified_signed_and_mined() {
 
     // Alice coordinates a send; Bob's app verifies it before he approves.
     let recipient = outside_recipient();
-    let bob_events = record(&p.bob, &["signing:progress", "signing:failed"]);
-    let alice_events = record(&p.alice, &["send:progress", "send:complete", "send:failed"]);
-    commands::wallet::wallet_send(
-        p.alice.app.handle().clone(),
+    let txid = send_with_bobs_approval(
+        &p,
         commands::wallet::WalletSendArgs {
             group_id: group_id.clone(),
             recipient: recipient.clone(),
@@ -128,20 +126,91 @@ async fn a_two_of_two_send_is_verified_signed_and_mined() {
             signers: vec![p.alice_pubkey.clone(), p.bob_pubkey.clone()],
             memo: Some("cyze end-to-end".into()),
             from_old_address: false,
+            send_max: false,
         },
+        Some(50_000_000),
     )
-    .await
-    .unwrap();
+    .await;
+    eprintln!("broadcast txid {txid}");
+
+    // Mined, and in the group's history once synced.
+    ths(&["mine", "2"]);
+    let started = Instant::now();
+    loop {
+        commands::wallet::wallet_sync_now(alice.clone(), false).await.unwrap();
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let history = commands::wallet::wallet_history(alice.clone(), group_id.clone()).await.unwrap();
+        if history.iter().any(|t| t.txid == txid) {
+            break;
+        }
+        assert!(started.elapsed() < Duration::from_secs(180), "{txid} never showed up in history");
+    }
+    let after = commands::wallet::wallet_group_status(alice.clone(), group_id.clone()).await.unwrap();
+    eprintln!("total after send: {} zatoshis", after.total_zatoshis);
+    assert!(after.total_zatoshis < funded - 50_000_000 + 1, "the payment left the wallet");
+
+    // "Send all": everything spendable, with a memo, the fee coming out of it.
+    // The change from the first send needs its confirmations first.
+    ths(&["mine", "10"]);
+    let started = Instant::now();
+    loop {
+        commands::wallet::wallet_sync_now(alice.clone(), false).await.unwrap();
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let s = commands::wallet::wallet_group_status(alice.clone(), group_id.clone()).await.unwrap();
+        if s.spendable_zatoshis > 0 && s.spendable_zatoshis == s.total_zatoshis {
+            break;
+        }
+        assert!(started.elapsed() < Duration::from_secs(180), "the change never became spendable: {s:?}");
+    }
+    let txid = send_with_bobs_approval(
+        &p,
+        commands::wallet::WalletSendArgs {
+            group_id: group_id.clone(),
+            recipient: recipient.clone(),
+            amount_zatoshis: 0,
+            signers: vec![p.alice_pubkey.clone(), p.bob_pubkey.clone()],
+            memo: Some("everything".into()),
+            from_old_address: false,
+            send_max: true,
+        },
+        None,
+    )
+    .await;
+    eprintln!("sent everything in {txid}");
+    ths(&["mine", "2"]);
+    let started = Instant::now();
+    loop {
+        commands::wallet::wallet_sync_now(alice.clone(), false).await.unwrap();
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let s = commands::wallet::wallet_group_status(alice.clone(), group_id.clone()).await.unwrap();
+        let history = commands::wallet::wallet_history(alice.clone(), group_id.clone()).await.unwrap();
+        if s.total_zatoshis == 0 && history.iter().any(|t| t.txid == txid) {
+            break;
+        }
+        assert!(started.elapsed() < Duration::from_secs(180), "the wallet never emptied: {s:?}");
+    }
+}
+
+/// Alice coordinates a send; Bob's app joins each signing request, verifies
+/// it, and Bob approves. Returns the broadcast txid. With `amount`, checks the
+/// one payment Bob's app verified is that much to the recipient, with the
+/// memo; without, that it's everything spent, less the fee.
+async fn send_with_bobs_approval(p: &common::Pair, args: commands::wallet::WalletSendArgs, amount: Option<u64>) -> String {
+    let bob = p.bob.app.state::<AppState>();
+    let (group_id, recipient, memo) = (args.group_id.clone(), args.recipient.clone(), args.memo.clone());
+    let bob_events = record(&p.bob, &["signing:progress", "signing:failed"]);
+    let alice_events = record(&p.alice, &["send:progress", "send:complete", "send:failed"]);
+    commands::wallet::wallet_send(p.alice.app.handle().clone(), args).await.unwrap();
 
     let mut joined = HashSet::new();
     let mut approved = HashSet::new();
     let started = Instant::now();
-    let txid = loop {
+    loop {
         if let Some((_, v)) = alice_events.lock().unwrap().iter().find(|(n, _)| n == "send:failed") {
             panic!("send failed: {v}");
         }
         if let Some((_, v)) = alice_events.lock().unwrap().iter().find(|(n, _)| n == "send:complete") {
-            break v["txid"].as_str().unwrap().to_string();
+            return v["txid"].as_str().unwrap().to_string();
         }
         if let Some((_, v)) = bob_events.lock().unwrap().iter().find(|(n, _)| n == "signing:failed") {
             panic!("Bob's signing failed: {v}");
@@ -176,8 +245,16 @@ async fn a_two_of_two_send_is_verified_signed_and_mined() {
             let payments = verified["payments"].as_array().expect("a verified transaction");
             assert_eq!(payments.len(), 1, "{verified}");
             assert_eq!(payments[0]["address"], recipient.as_str());
-            assert_eq!(payments[0]["value_zatoshis"], 50_000_000);
-            assert_eq!(payments[0]["memo"], "cyze end-to-end");
+            assert_eq!(payments[0]["memo"].as_str(), memo.as_deref());
+            match amount {
+                Some(amount) => assert_eq!(payments[0]["value_zatoshis"], amount),
+                None => {
+                    assert_eq!(verified["change_zatoshis"], 0, "nothing comes back: {verified}");
+                    let spent = verified["spent_zatoshis"].as_u64().unwrap();
+                    let fee = verified["fee_zatoshis"].as_u64().unwrap();
+                    assert_eq!(payments[0]["value_zatoshis"].as_u64().unwrap(), spent - fee);
+                }
+            }
             if event["auto_approved"] != true {
                 commands::signing::respond_to_signing(bob.clone(), ceremony.parse().unwrap(), true)
                     .await
@@ -186,22 +263,5 @@ async fn a_two_of_two_send_is_verified_signed_and_mined() {
         }
         assert!(started.elapsed() < Duration::from_secs(900), "the send didn't complete");
         tokio::time::sleep(Duration::from_secs(1)).await;
-    };
-    eprintln!("broadcast txid {txid}");
-
-    // Mined, and in the group's history once synced.
-    ths(&["mine", "2"]);
-    let started = Instant::now();
-    loop {
-        commands::wallet::wallet_sync_now(alice.clone(), false).await.unwrap();
-        tokio::time::sleep(Duration::from_secs(3)).await;
-        let history = commands::wallet::wallet_history(alice.clone(), group_id.clone()).await.unwrap();
-        if history.iter().any(|t| t.txid == txid) {
-            break;
-        }
-        assert!(started.elapsed() < Duration::from_secs(180), "{txid} never showed up in history");
     }
-    let after = commands::wallet::wallet_group_status(alice.clone(), group_id.clone()).await.unwrap();
-    eprintln!("total after send: {} zatoshis", after.total_zatoshis);
-    assert!(after.total_zatoshis < funded - 50_000_000 + 1, "the payment left the wallet");
 }

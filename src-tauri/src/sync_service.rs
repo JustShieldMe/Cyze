@@ -25,7 +25,7 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tokio::sync::Notify;
 
 use crate::commands::wallet::{
-    init_account_of, local_status, rebuild_after_reorg, shared_lightwalletd, sync_once, wallet_ctx,
+    init_account_of, local_status, pick_server, rebuild_after_reorg, shared_lightwalletd, sync_once, wallet_ctx,
 };
 use crate::error::AppError;
 use crate::state::{AppState, WalletKind};
@@ -145,6 +145,7 @@ async fn run<R: Runtime>(app: AppHandle<R>) {
             continue;
         };
         let force = state.sync_service.force.swap(false, Ordering::SeqCst);
+        pick_server(&state, false).await;
 
         // A lock mid-pass cancels the sync: its key material is going away.
         let outcome = tokio::select! {
@@ -158,7 +159,14 @@ async fn run<R: Runtime>(app: AppHandle<R>) {
             continue;
         };
 
+        // The server picked automatically stopped answering: pick again, and
+        // sync straight away if another one is quicker now.
+        let switched = matches!(&outcome, Err((_, e)) if e.code == "connection") && pick_server(&state, true).await;
         let delay = match outcome {
+            Err(_) if switched => {
+                tracing::warn!("the sync server stopped answering; switched to another");
+                Duration::ZERO
+            }
             Ok(()) => {
                 backoff = None;
                 TIP_POLL

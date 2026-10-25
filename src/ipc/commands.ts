@@ -46,7 +46,17 @@ export interface Settings {
   active_group_id: string | null;
   /** Advanced options shown (null/false = hidden, the default). */
   advanced_mode: boolean | null;
+  /** Wallet traffic goes through Tor. */
+  use_tor?: boolean | null;
 }
+
+export interface TorStatus {
+  state: "off" | "starting" | "ready" | "failed";
+  error: string | null;
+}
+export const torStatus = () => invoke<TorStatus>("tor_status");
+/** Turn Tor on or off for wallet traffic (remembered). */
+export const setUseTor = (enabled: boolean) => invoke<void>("set_use_tor", { enabled });
 
 export interface SidecarStatus {
   running: boolean;
@@ -137,6 +147,10 @@ export interface WalletConfig {
   regtest_detected: RegtestUpgrade | null;
   /** Devnet: the level in use (override, else detected, else NU6). */
   regtest_effective: RegtestUpgrade | null;
+  /** No server was chosen: the app uses the fastest known one. */
+  automatic: boolean;
+  /** How quickly the automatically chosen server answered, once one was. */
+  auto_latency_ms: number | null;
 }
 /** What "Detect local devnet" found. */
 export interface DevnetStatus {
@@ -357,7 +371,12 @@ export const walletSend = (args: {
   /** Move everything at the group's old address to its private one instead
    *  (recipient, amount and memo are ignored). */
   from_old_address?: boolean;
+  /** Send everything spendable to the recipient (the amount is ignored). */
+  send_max?: boolean;
 }) => invoke<string>("wallet_send", { args });
+/** Like walletPrepareSend, paying everything spendable; the fee comes out of it. */
+export const walletPrepareSendMax = (groupId: string, recipient: string, memo?: string) =>
+  invoke<DraftTransaction>("wallet_prepare_send_max", { groupId, recipient, memo: memo ?? null });
 
 /** Re-broadcast a signed transaction whose first broadcast failed, without
  *  re-running the signing ceremony. Returns the broadcast txid. */

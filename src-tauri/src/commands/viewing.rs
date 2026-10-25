@@ -131,7 +131,7 @@ pub(crate) async fn prepare_move(state: &AppState, group_id: &str) -> AppResult<
     let current = wallet_ctx(state, group_id, WalletKind::Current).await?;
     let to = wallet::ufvk_default_address(current.network, &current.ufvk)?;
     let db_key = state.wallet_db_key(group_id).await?;
-    Ok(wallet::prepare_sweep(&state.data_dir, &old.dir, old.network, &to, &old.url, db_key.as_ref()).await?)
+    Ok(wallet::prepare_send_max(&state.data_dir, &old.dir, old.network, &to, None, &old.url, db_key.as_ref()).await?)
 }
 
 fn poisoned<T>(_: T) -> AppError {

@@ -8,6 +8,7 @@ pub mod keystore;
 pub mod notify;
 pub mod server;
 pub mod signing;
+pub mod tor;
 pub mod ui_state;
 pub mod viewing;
 pub mod wallet;

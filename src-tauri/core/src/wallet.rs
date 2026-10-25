@@ -18,6 +18,7 @@ use zcash_protocol::local_consensus::LocalNetwork;
 
 use crate::error::CoreError;
 
+pub mod tor;
 pub mod verify;
 
 /// Which Zcash network the wallet operates on.
@@ -192,6 +193,31 @@ impl WalletNetwork {
         }
     }
 
+    /// The servers the app picks from by itself when none is chosen: lightwalletd
+    /// endpoints known to serve Ironwood, all run by zec.rocks, one per region.
+    pub fn known_lightwalletd(self) -> &'static [&'static str] {
+        match self {
+            WalletNetwork::Main => &[
+                "https://zec.rocks:443",
+                "https://na.zec.rocks:443",
+                "https://eu.zec.rocks:443",
+                "https://ap.zec.rocks:443",
+                "https://sa.zec.rocks:443",
+            ],
+            WalletNetwork::Test => &["https://testnet.zec.rocks:443"],
+            WalletNetwork::Regtest(_) => &[],
+        }
+    }
+
+    /// The chain name lightwalletd reports for this network.
+    fn chain_name(self) -> &'static str {
+        match self {
+            WalletNetwork::Main => "main",
+            WalletNetwork::Test => "test",
+            WalletNetwork::Regtest(_) => "regtest",
+        }
+    }
+
     /// A sensible default lightwalletd endpoint for this network. For regtest
     /// this is lightwalletd's conventional local port; a devnet that picks its
     /// own port (thus-spoke-zakura) is found with devnet detection instead.
@@ -352,6 +378,15 @@ pub fn validate_endpoint_security(url: &str) -> Result<(), CoreError> {
 async fn connect(url: &str) -> Result<CompactTxStreamerClient<Channel>, CoreError> {
     validate_endpoint_security(url)?;
     let url = normalize_endpoint(url);
+    if let Some(tor) = tor::route(&url)? {
+        let uri = url
+            .parse::<tonic::transport::Uri>()
+            .map_err(|e| CoreError::Connection(format!("invalid lightwalletd URL: {e}")))?;
+        return tor
+            .connect_to_lightwalletd(uri, false)
+            .await
+            .map_err(|e| CoreError::Connection(format!("connecting to {url} through Tor: {e}")));
+    }
     let mut endpoint = Channel::from_shared(url.clone())
         .map_err(|e| CoreError::Connection(format!("invalid lightwalletd URL: {e}")))?
         // Syncing streams compact blocks for minutes at a time. Without
@@ -440,6 +475,57 @@ pub async fn lightwalletd_info(url: &str) -> Result<LightwalletdInfo, CoreError>
         wallet_branch_id: None,
         branch_supported: None,
     })
+}
+
+/// A server that answered [`fastest_lightwalletd`]'s probe.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ServerProbe {
+    pub url: String,
+    /// Connecting plus one round trip, in milliseconds.
+    pub latency_ms: u64,
+    pub height: u64,
+}
+
+/// How far behind the highest tip a probed server may be and still be chosen.
+const PROBE_MAX_LAG: u64 = 3;
+
+/// Probe `urls` at once and return the fastest that's on `network`'s chain and
+/// within a few blocks of the highest tip any of them reports, so a server
+/// that's lagging or on the wrong chain is never chosen for being quick. One
+/// that doesn't answer within `timeout` is skipped. `None` if none qualifies.
+pub async fn fastest_lightwalletd(
+    network: WalletNetwork,
+    urls: &[&str],
+    timeout: std::time::Duration,
+) -> Option<ServerProbe> {
+    let mut probes = tokio::task::JoinSet::new();
+    for url in urls {
+        let url = url.to_string();
+        probes.spawn(async move {
+            let started = std::time::Instant::now();
+            let info = tokio::time::timeout(timeout, lightwalletd_info(&url)).await.ok()?.ok()?;
+            Some((info, ServerProbe { url, latency_ms: elapsed_ms(started), height: 0 }))
+        });
+    }
+    let mut answered = Vec::new();
+    while let Some(probe) = probes.join_next().await {
+        if let Ok(Some((info, mut probe))) = probe {
+            if info.chain_name == network.chain_name() {
+                probe.height = info.block_height;
+                answered.push(probe);
+            }
+        }
+    }
+    choose_server(answered)
+}
+
+/// The quickest of the servers near the highest tip (see [`fastest_lightwalletd`]).
+fn choose_server(answered: Vec<ServerProbe>) -> Option<ServerProbe> {
+    let tip = answered.iter().map(|p| p.height).max()?;
+    answered
+        .into_iter()
+        .filter(|p| p.height + PROBE_MAX_LAG >= tip)
+        .min_by_key(|p| p.latency_ms)
 }
 
 // ---------------------------------------------------------------------------
@@ -1277,17 +1363,35 @@ impl BlockSource for MemBlockSource {
 /// before the range (needed by `scan_cached_blocks`).
 type PrefetchedBatch = (ScanRange, Vec<CompactBlock>, ChainState);
 
+/// Mainnet's 2022–23 spam: blocks so full of outputs that a normal batch of
+/// them would take gigabytes of memory. ECC's mobile SDK and Vizor scan them
+/// [`SPAM_BATCH_SIZE`] blocks at a time. Only deep rescans reach back this far.
+const MAINNET_SPAM: std::ops::Range<u32> = 1_710_000..2_050_000;
+const SPAM_BATCH_SIZE: u32 = 100;
+
+/// The spam range on `params`' network, if it has one.
+fn spam_range(params: &WalletParams) -> Option<std::ops::Range<u32>> {
+    (*params == WalletParams::Consensus(Network::MainNetwork)).then_some(MAINNET_SPAM)
+}
+
 /// Split a suggested scan range into `batch_size`-block sub-ranges, preserving
-/// priority. Ported verbatim from the upstream `sync::running` step-7 splitter so
-/// the pipelined driver scans in the exact same units as the stock driver.
-fn split_scan_range(range: ScanRange, batch_size: u32) -> Vec<ScanRange> {
+/// priority, as the upstream `sync::running` step-7 splitter does, except
+/// inside `spam` (see [`MAINNET_SPAM`]): batches stop where it starts and are
+/// [`SPAM_BATCH_SIZE`] blocks within it.
+fn split_scan_range(range: ScanRange, batch_size: u32, spam: Option<std::ops::Range<u32>>) -> Vec<ScanRange> {
     let mut acc = range;
     let mut out = Vec::new();
     loop {
         if acc.is_empty() {
             break;
         }
-        match acc.split_at(acc.block_range().start + batch_size) {
+        let start = u32::from(acc.block_range().start);
+        let len = match &spam {
+            Some(r) if r.contains(&start) => SPAM_BATCH_SIZE.min(r.end - start),
+            Some(r) if start < r.start => batch_size.min(r.start - start),
+            _ => batch_size,
+        };
+        match acc.split_at(acc.block_range().start + len) {
             Some((cur, next)) => {
                 out.push(cur);
                 acc = next;
@@ -1388,9 +1492,7 @@ async fn running_pipelined(
         match scan_ranges.first() {
             Some(sr) if sr.priority() == ScanPriority::Verify => {
                 let sr = sr.clone();
-                let blocks = download_blocks_pipelined(client, &sr).await?;
-                let chain_state =
-                    download_chain_state_pipelined(client, sr.block_range().start - 1).await?;
+                let (blocks, chain_state) = download_batch(client, &sr).await?;
                 let src = MemBlockSource(blocks);
                 if run_blocking(|| scan_batch(params, &src, db, &chain_state, &sr))? {
                     // Ranges changed; re-request and re-check for a Verify range.
@@ -1410,7 +1512,7 @@ async fn running_pipelined(
         .map_err(|e| CoreError::Crypto(format!("suggest_scan_ranges: {e}")))?;
     let batches: Vec<ScanRange> = scan_ranges
         .into_iter()
-        .flat_map(|r| split_scan_range(r, batch_size))
+        .flat_map(|r| split_scan_range(r, batch_size, spam_range(params)))
         .collect();
     if batches.is_empty() {
         return Ok(false);
@@ -1428,8 +1530,8 @@ async fn running_pipelined(
         use std::sync::atomic::Ordering::Relaxed;
         for sr in batches {
             let dl_start = std::time::Instant::now();
-            let blocks = match download_blocks_pipelined(&mut producer_client, &sr).await {
-                Ok(b) => b,
+            let (blocks, chain_state) = match download_batch(&mut producer_client, &sr).await {
+                Ok(batch) => batch,
                 Err(e) => {
                     let _ = tx.send(Err(e)).await;
                     return;
@@ -1441,18 +1543,6 @@ async fn running_pipelined(
                 sr,
                 dl_start.elapsed().as_millis()
             );
-            let chain_state = match download_chain_state_pipelined(
-                &mut producer_client,
-                sr.block_range().start - 1,
-            )
-            .await
-            {
-                Ok(cs) => cs,
-                Err(e) => {
-                    let _ = tx.send(Err(e)).await;
-                    return;
-                }
-            };
             producer_times.download_ms.fetch_add(elapsed_ms(dl_start), Relaxed);
             // If the consumer has hung up (ranges changed, or an error broke the
             // loop) stop downloading. Time spent blocked here is time the
@@ -1800,6 +1890,34 @@ async fn download_blocks_pipelined(
 
 /// Fetch the chain-state anchor at `block_height` (the tree state just before a
 /// range's first block). Ported from the upstream `download_chain_state`.
+/// Download a batch's blocks and the tree state just before them, checking that
+/// the blocks follow it, as scanning from it assumes. They can disagree when
+/// the chain reorganizes between the two requests, so a mismatch is fetched
+/// once more; a second one means the server's data is inconsistent.
+async fn download_batch(
+    client: &mut CompactTxStreamerClient<Channel>,
+    sr: &ScanRange,
+) -> Result<(Vec<CompactBlock>, ChainState), CoreError> {
+    for _ in 0..2 {
+        let blocks = download_blocks_pipelined(client, sr).await?;
+        let chain_state = download_chain_state_pipelined(client, sr.block_range().start - 1).await?;
+        if blocks_follow(&chain_state, &blocks) {
+            return Ok((blocks, chain_state));
+        }
+        tracing::info!("blocks for {sr} don't follow the tree state before them; fetching again");
+    }
+    Err(CoreError::Connection(
+        "the sync server's blocks don't match its own record of the chain. Try again, or choose another \
+         server in Settings → Wallet"
+            .into(),
+    ))
+}
+
+/// Whether `blocks` start right after the block `chain_state` describes.
+fn blocks_follow(chain_state: &ChainState, blocks: &[CompactBlock]) -> bool {
+    blocks.first().is_none_or(|b| b.prev_hash() == chain_state.block_hash())
+}
+
 async fn download_chain_state_pipelined(
     client: &mut CompactTxStreamerClient<Channel>,
     block_height: BlockHeight,
@@ -1948,15 +2066,17 @@ pub async fn prepare_send(
     draft_from_proposal(&mut db, network, account_id, &proposal, recipient, amount_zatoshis, is_unshield, memo)
 }
 
-/// Build an unsigned transaction that moves everything spendable in a wallet
-/// to `recipient` and leaves nothing behind as change: how a group that made
-/// its viewing key private empties its old address. The fee comes out of the
-/// amount moved. Notes still waiting for confirmations stay, for a later move.
-pub async fn prepare_sweep(
+/// Build an unsigned transaction that pays everything spendable in a wallet to
+/// `recipient` and leaves nothing behind as change: "send all", and how a
+/// group that made its viewing key private empties its old address. The fee
+/// comes out of the amount. Notes still waiting for confirmations stay. A memo
+/// is dropped for a transparent recipient, which can't receive one.
+pub async fn prepare_send_max(
     data_dir: &Path,
     wallet_id: &str,
     network: WalletNetwork,
     recipient: &str,
+    memo: Option<String>,
     lightwalletd_url: &str,
     db_key: &[u8],
 ) -> Result<DraftTransaction, CoreError> {
@@ -1968,9 +2088,11 @@ pub async fn prepare_sweep(
     let params = network.params();
     let (mut db, account_id) = open_for_send(data_dir, wallet_id, network, lightwalletd_url, db_key).await?;
     let to = decode_recipient(network, recipient)?;
-    if matches!(to, Address::Transparent(_)) {
-        return Err(CoreError::Ceremony("funds can only be moved to a shielded address".into()));
-    }
+    let is_unshield = matches!(to, Address::Transparent(_));
+    let memo = if is_unshield { None } else { memo.filter(|m| !m.is_empty()) };
+    let memo_bytes = memo
+        .as_deref()
+        .map(|m| m.parse::<Memo>().map(|m| m.encode()).unwrap_or_else(|_| MemoBytes::empty()));
     let proposal = propose_send_max_transfer::<_, _, _, std::convert::Infallible>(
         &mut db,
         &params,
@@ -1978,7 +2100,7 @@ pub async fn prepare_sweep(
         &[ShieldedPool::Orchard, ShieldedPool::Ironwood],
         &StandardFeeRule::Zip317,
         to.to_zcash_address(&params),
-        None, // memo
+        memo_bytes,
         MaxSpendMode::MaxSpendable,
         ConfirmationsPolicy::default(),
         &LockedInputPolicy::Exclude,
@@ -1986,9 +2108,9 @@ pub async fn prepare_sweep(
     )
     .map_err(|e| match format!("{e:?}") {
         m if m.contains("InsufficientFunds") => {
-            CoreError::Ceremony("there's too little at this address to cover the network fee".into())
+            CoreError::Ceremony("there's too little spendable to cover the network fee".into())
         }
-        m => CoreError::Ceremony(format!("couldn't build the transfer ({m})")),
+        m => CoreError::Ceremony(format!("couldn't build the payment ({m})")),
     })?;
     let amount = proposal
         .steps()
@@ -1998,7 +2120,7 @@ pub async fn prepare_sweep(
         .ok()
         .flatten()
         .map_or(0, u64::from);
-    draft_from_proposal(&mut db, network, account_id, &proposal, recipient, amount, false, None)
+    draft_from_proposal(&mut db, network, account_id, &proposal, recipient, amount, is_unshield, memo)
 }
 
 /// Open a wallet to build a transaction: its chain tip refreshed from
@@ -3120,12 +3242,55 @@ mod tests {
     /// preserving, `batch_size`-block sub-ranges that exactly cover the input and
     /// never produce an empty range.
     #[test]
+    fn the_quickest_server_near_the_tip_is_chosen() {
+        let probe = |url: &str, latency_ms, height| ServerProbe { url: url.into(), latency_ms, height };
+        // The fastest one is far behind; the next fastest that's current wins.
+        let chosen = choose_server(vec![
+            probe("lagging", 10, 1_000),
+            probe("slow", 90, 1_010),
+            probe("quick", 40, 1_008),
+        ]);
+        assert_eq!(chosen.map(|p| p.url), Some("quick".to_string()));
+        assert_eq!(choose_server(vec![]), None);
+        assert!(WalletNetwork::Main.known_lightwalletd().contains(&WalletNetwork::Main.default_lightwalletd()));
+    }
+
+    #[test]
+    fn a_batch_must_start_right_after_its_tree_state() {
+        use zcash_primitives::block::BlockHash;
+        let state = ChainState::empty(BlockHeight::from_u32(99), BlockHash([7; 32]));
+        let block = |prev: u8| CompactBlock { height: 100, prev_hash: vec![prev; 32], ..Default::default() };
+        assert!(blocks_follow(&state, &[block(7)]));
+        assert!(!blocks_follow(&state, &[block(8)]));
+        assert!(blocks_follow(&state, &[]));
+    }
+
+    /// Inside mainnet's spam range, batches are small; a batch before it stops
+    /// where it starts, and normal batches resume after it.
+    #[test]
+    fn spam_blocks_are_scanned_in_small_batches() {
+        let h = BlockHeight::from_u32;
+        let spam = Some(1_000..1_250);
+        let range = ScanRange::from_parts(h(400)..h(1_800), ScanPriority::Historic);
+        let lens: Vec<(u32, u32)> = split_scan_range(range, 500, spam)
+            .iter()
+            .map(|b| (u32::from(b.block_range().start), b.len() as u32))
+            .collect();
+        assert_eq!(
+            lens,
+            vec![(400, 500), (900, 100), (1_000, 100), (1_100, 100), (1_200, 50), (1_250, 500), (1_750, 50)]
+        );
+        assert_eq!(spam_range(&WalletNetwork::Main.params()), Some(MAINNET_SPAM));
+        assert_eq!(spam_range(&WalletNetwork::Test.params()), None);
+    }
+
+    #[test]
     fn split_scan_range_matches_upstream_batching() {
         let h = BlockHeight::from_u32;
         let range = ScanRange::from_parts(h(100)..h(1050), ScanPriority::Historic);
 
         // An evenly-plus-remainder range → full batches then a short tail.
-        let batches = split_scan_range(range.clone(), 400);
+        let batches = split_scan_range(range.clone(), 400, None);
         assert_eq!(batches.len(), 3);
         assert_eq!(*batches[0].block_range(), h(100)..h(500));
         assert_eq!(*batches[1].block_range(), h(500)..h(900));
@@ -3142,13 +3307,13 @@ mod tests {
 
         // A range smaller than one batch → a single batch equal to the input.
         let small = ScanRange::from_parts(h(10)..h(30), ScanPriority::ChainTip);
-        let one = split_scan_range(small.clone(), 5000);
+        let one = split_scan_range(small.clone(), 5000, None);
         assert_eq!(one.len(), 1);
         assert_eq!(*one[0].block_range(), h(10)..h(30));
 
         // A range that is an exact multiple of the batch size → no empty tail.
         let exact = ScanRange::from_parts(h(0)..h(1000), ScanPriority::Historic);
-        let even = split_scan_range(exact, 500);
+        let even = split_scan_range(exact, 500, None);
         assert_eq!(even.len(), 2);
         assert_eq!(*even[1].block_range(), h(500)..h(1000));
     }

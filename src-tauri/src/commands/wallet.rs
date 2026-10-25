@@ -44,20 +44,29 @@ pub struct WalletConfig {
     pub regtest_detected: Option<String>,
     /// Regtest: the level actually in use (override, else detected, else NU6).
     pub regtest_effective: Option<String>,
+    /// No server was chosen: the app uses the fastest known one (`pick_server`).
+    pub automatic: bool,
+    /// How quickly the automatically chosen server answered, once one was.
+    pub auto_latency_ms: Option<u64>,
 }
 
-/// Resolve the effective wallet config, filling in the network's default
-/// lightwalletd endpoint when none is saved.
+/// Resolve the effective wallet config. With no lightwalletd endpoint saved,
+/// that's the server picked automatically (`pick_server`), or the network's
+/// default until one is.
 pub(crate) fn resolve_config(state: &AppState) -> WalletConfig {
     let s = state.load_settings();
     // Mainnet is the default: it is where the wallet is actually used, and the
     // mainnet guardrails (badge, confirmation modal, address checks) make the
     // active network unmissable. Testnet remains one click away in settings.
     let net = configured_network(&s);
-    let lightwalletd_url = s
-        .lightwalletd_url
-        .clone()
-        .filter(|u| !u.trim().is_empty())
+    let saved = s.lightwalletd_url.clone().filter(|u| !u.trim().is_empty());
+    let automatic = saved.is_none() && !net.known_lightwalletd().is_empty();
+    let auto = automatic
+        .then(|| state.auto_lightwalletd.lock().ok()?.get(net.as_str()).cloned())
+        .flatten();
+    let auto_latency_ms = auto.as_ref().map(|p| p.latency_ms);
+    let lightwalletd_url = saved
+        .or(auto.map(|p| p.url))
         .unwrap_or_else(|| net.default_lightwalletd().to_string());
     let regtest_effective = match net {
         WalletNetwork::Regtest(level) => Some(level.as_str().to_string()),
@@ -69,7 +78,33 @@ pub(crate) fn resolve_config(state: &AppState) -> WalletConfig {
         regtest_upgrade: s.regtest_upgrade.clone(),
         regtest_detected: s.regtest_detected.clone(),
         regtest_effective,
+        automatic,
+        auto_latency_ms,
     }
+}
+
+/// With no server chosen, pick the fastest of the known ones on the network
+/// (see `wallet::fastest_lightwalletd`): once a session, and again with
+/// `again` after the one in use stopped answering. Returns whether the server
+/// in use changed.
+pub(crate) async fn pick_server(state: &AppState, again: bool) -> bool {
+    let cfg = resolve_config(state);
+    if !cfg.automatic || (cfg.auto_latency_ms.is_some() && !again) {
+        return false;
+    }
+    let net = configured_network(&state.load_settings());
+    // Each probe through Tor builds a circuit first.
+    let timeout = std::time::Duration::from_secs(if wallet::tor::is_on() { 30 } else { 5 });
+    let Some(best) = wallet::fastest_lightwalletd(net, net.known_lightwalletd(), timeout).await else {
+        tracing::warn!("none of the known sync servers answered");
+        return false;
+    };
+    tracing::info!(url = %best.url, latency_ms = best.latency_ms, "using the fastest sync server");
+    let changed = best.url != cfg.lightwalletd_url;
+    if let Ok(mut picks) = state.auto_lightwalletd.lock() {
+        picks.insert(net.as_str(), best);
+    }
+    changed
 }
 
 #[tauri::command]
@@ -764,6 +799,21 @@ pub async fn wallet_prepare_send(
     .await?)
 }
 
+/// Like [`wallet_prepare_send`], but paying everything spendable, with the
+/// fee coming out of it: what "Send all" reviews.
+#[tauri::command]
+pub async fn wallet_prepare_send_max(
+    state: State<'_, AppState>,
+    group_id: String,
+    recipient: String,
+    memo: Option<String>,
+) -> AppResult<wallet::DraftTransaction> {
+    let (network, url, _ufvk) = group_wallet_ctx(&state, &group_id).await?;
+    let db_key = state.wallet_db_key(&group_id).await?;
+    let wid = state.wallet_dir_id(&group_id).await?;
+    Ok(wallet::prepare_send_max(&state.data_dir, &wid, network, &recipient, memo, &url, db_key.as_ref()).await?)
+}
+
 /// One answer in a cast vote, as sent from the UI. Maps to
 /// `frost_app_core::voting::VoteEntry`.
 #[derive(Deserialize)]
@@ -852,6 +902,13 @@ pub async fn resolve_zns_name(
     state: State<'_, AppState>,
     name: String,
 ) -> AppResult<Option<frost_app_core::zns::ResolveResult>> {
+    // Lookups go to the indexer over a plain HTTPS client, not through Tor.
+    if wallet::tor::is_on() {
+        return Err(AppError::new(
+            "config",
+            "name lookups don't go through Tor, so they're off while Tor is on. Paste the address instead",
+        ));
+    }
     let mainnet = match configured_network(&state.load_settings()) {
         WalletNetwork::Main => true,
         WalletNetwork::Test => false,
@@ -881,6 +938,10 @@ pub struct WalletSendArgs {
     /// and `memo` are then ignored.
     #[serde(default)]
     pub from_old_address: bool,
+    /// Send everything spendable to `recipient`, the fee coming out of it
+    /// ([`wallet_prepare_send_max`]); `amount_zatoshis` is then ignored.
+    #[serde(default)]
+    pub send_max: bool,
 }
 
 /// Build, FROST-sign, and (next phase) broadcast an Orchard transfer. Builds the
@@ -903,6 +964,9 @@ pub async fn wallet_send<R: tauri::Runtime>(
     let wid = state.wallet_dir_id(&args.group_id).await?;
     let draft = if args.from_old_address {
         crate::commands::viewing::prepare_move(&state, &args.group_id).await?
+    } else if args.send_max {
+        wallet::prepare_send_max(&state.data_dir, &wid, network, &args.recipient, args.memo, &url, db_key.as_ref())
+            .await?
     } else {
         wallet::prepare_send(
             &state.data_dir,

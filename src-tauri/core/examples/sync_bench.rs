@@ -28,7 +28,8 @@ Usage: sync_bench [options]
   --batch-size N                blocks per batch (default: the app's default)
   --resyncs K                   re-syncs to time once caught up (default: 3)
   --fresh-connection            reconnect and refetch subtree roots on every re-sync
-                                (how the app behaved before connections were reused)";
+                                (how the app behaved before connections were reused)
+  --tor                         connect through Tor (state kept in a temporary directory)";
 
 struct Args {
     network: WalletNetwork,
@@ -37,6 +38,7 @@ struct Args {
     batch_size: Option<u32>,
     resyncs: u32,
     fresh_connection: bool,
+    tor: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -47,6 +49,7 @@ fn parse_args() -> Result<Args, String> {
         batch_size: None,
         resyncs: 3,
         fresh_connection: false,
+        tor: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(flag) = it.next() {
@@ -67,6 +70,7 @@ fn parse_args() -> Result<Args, String> {
             }
             "--resyncs" => args.resyncs = value()?.parse().map_err(|e| format!("--resyncs: {e}"))?,
             "--fresh-connection" => args.fresh_connection = true,
+            "--tor" => args.tor = true,
             "-h" | "--help" => return Err(String::new()),
             other => return Err(format!("unknown option '{other}'")),
         }
@@ -144,6 +148,15 @@ async fn main() {
 
 async fn run(args: Args) -> Result<(), frost_app_core::CoreError> {
     let network = args.network;
+    let _tor_dir = if args.tor {
+        let dir = tempfile::tempdir()?;
+        let started = Instant::now();
+        wallet::tor::start(dir.path()).await?;
+        println!("tor                {:>8} ms to bootstrap", started.elapsed().as_millis());
+        Some(dir)
+    } else {
+        None
+    };
     let url = args
         .url
         .clone()

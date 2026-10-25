@@ -10,7 +10,13 @@ yanked = "deny"
 # upstream can replace them.
 unmaintained = "workspace"
 # Anything listed here must say why it is safe to ignore and when to revisit.
-ignore = []
+ignore = [
+    # rsa (Marvin attack): key recovery through timing of RSA *private-key*
+    # operations. It comes in through arti (optional Tor for wallet traffic),
+    # which as a client only verifies RSA signatures, with public keys. No
+    # fixed release exists; revisit when arti drops rsa or one does.
+    { id = "RUSTSEC-2023-0071", reason = "only RSA public-key verification is used (arti client)" },
+]
 
 [licenses]
 # What Cyze accepts in what it ships, kept in step with about.toml (which

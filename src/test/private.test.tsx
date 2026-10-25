@@ -50,6 +50,7 @@ test("funds left at the old address are moved with the group's approval", async 
   fireEvent.click(ui.getByRole("button", { name: "Move funds" }));
   await ui.findByText("Review: move to the private address");
   expect(ui.getByText("This wallet's private address")).toBeTruthy();
+  await ui.findByRole("checkbox", { name: /me \(You\)/, checked: true });
   fireEvent.click(ui.getByRole("checkbox", { name: /Alice/ }));
   fireEvent.click(ui.getByRole("button", { name: "Request approvals" }));
   await waitFor(() =>
@@ -62,6 +63,7 @@ test("funds left at the old address are moved with the group's approval", async 
           signers: [ME, ALICE],
           memo: null,
           from_old_address: true,
+          send_max: false,
         },
       },
     ]),
