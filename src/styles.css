@@ -819,3 +819,35 @@ button.link-button.danger-link { color: var(--danger); }
   color: var(--text-dim);
   font-size: 13px;
 }
+
+/* Votes */
+.poll-meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; }
+.poll-details { white-space: pre-wrap; margin: 4px 0 10px; }
+.poll-options { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
+.poll-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 30% 2.5em;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin: 0;
+  color: var(--text);
+  cursor: pointer;
+}
+.poll-option.picked { border-color: var(--accent); }
+.poll-option input { width: auto; margin: 0; }
+.poll-option-label { display: flex; flex-direction: column; gap: 2px; }
+.poll-voters { font-size: 11px; }
+.poll-bar { height: 6px; background: var(--bg-input); border-radius: 3px; overflow: hidden; display: block; }
+.poll-bar > span { display: block; height: 100%; background: var(--accent); }
+.poll-count { text-align: right; font-variant-numeric: tabular-nums; }
+.poll-foot { flex-wrap: wrap; font-size: 12px; }
+.closed-polls { margin-top: 18px; }
+.recent-rounds { margin-top: 14px; }
+.closed-polls > summary, .recent-rounds > summary { cursor: pointer; color: var(--text-dim); font-size: 13px; margin-bottom: 10px; }
+.community .round { border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px; }
+.panel-inset { background: var(--bg-elevated); border-radius: 8px; padding: 12px; margin-top: 8px; }
+.proposal-result { margin: 10px 0; font-size: 13px; }
+.result-row { display: grid; grid-template-columns: minmax(0, 1fr) 40% 3em; gap: 10px; align-items: center; margin-top: 4px; }

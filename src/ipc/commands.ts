@@ -327,23 +327,6 @@ export interface BallotQuestion {
   /** Prompt for a free-form answer; null/absent means free-form isn't allowed. */
   other_prompt?: string | null;
 }
-/** One cast answer, mapping to the backend VoteInput. */
-export type VoteInput =
-  | { kind: "abstain" }
-  | { kind: "choice"; index: number }
-  | { kind: "free_form"; text: string };
-
-/** Build (no sign/broadcast) a poll vote: a shielded payment to the poll's
- *  reception address carrying the encoded Vote Cast Memo. Returns a normal
- *  DraftTransaction whose `memo` is the encoded vote — pass that memo and the
- *  reception address to `walletSend` to cast it. */
-export const walletPrepareVote = (args: {
-  group_id: string;
-  reception_address: string;
-  ballot_json: string;
-  votes: VoteInput[];
-  amount_zatoshis: number;
-}) => invoke<DraftTransaction>("wallet_prepare_vote", { args });
 
 // ── ZcashNames (ZNS) resolution ───────────────────────────────────────────
 /** A resolved ZNS registration. `address` is the unified address to pay. */
@@ -490,7 +473,7 @@ export interface PendingSession {
   session_id: string;
   /** "viewing_key" sessions agree on a group's private viewing key; the app
    *  joins them by itself, so they aren't requests to approve. */
-  kind: "signing" | "viewing_key";
+  kind: "signing" | "viewing_key" | "group_message";
   coordinator: string | null;
   coordinator_pubkey: string;
   matching_groups: string[];
@@ -517,7 +500,67 @@ export const listPendingSessions = (serverUrl: string | null) =>
 /** The sessions that are signing requests for the user (not the ones the app
  *  joins by itself). */
 export const signingRequests = (sessions: PendingSession[] | undefined) =>
-  (sessions ?? []).filter((s) => s.kind !== "viewing_key");
+  (sessions ?? []).filter((s) => s.kind === "signing");
+
+/** A group poll (see commands/polls.rs). */
+export interface PollView {
+  group_id: string;
+  poll_id: string;
+  /** Hex communication key of the member who asked. */
+  author: string;
+  title: string;
+  details: string;
+  options: string[];
+  created_at: number;
+  closes_at: number;
+  closed: boolean;
+  /** Each member's current answer, by hex communication key. */
+  votes: Record<string, number>;
+  tally: number[];
+  my_vote: number | null;
+  members: number;
+  /** How many members must agree: the group's signing threshold. */
+  threshold: number;
+  agreed: number | null;
+  /** The Zcash community vote proposal it asks about, if any. */
+  community: { round_id: string; proposal_id: number } | null;
+}
+export const listPolls = (groupId: string | null) => invoke<PollView[]>("list_polls", { groupId });
+export const createPoll = (args: {
+  group_id: string;
+  title: string;
+  details: string;
+  options: string[];
+  open_for_secs: number;
+}) => invoke<string>("create_poll", { args });
+export const votePoll = (groupId: string, pollId: string, choice: number) =>
+  invoke<void>("vote_poll", { groupId, pollId, choice });
+export const closePoll = (groupId: string, pollId: string) => invoke<void>("close_poll", { groupId, pollId });
+export const receiveGroupMessages = (groupId: string, sessionId: string) =>
+  invoke<void>("receive_group_messages", { groupId, sessionId });
+export const refreshPolls = (groupId: string) => invoke<void>("refresh_polls", { groupId });
+
+/** A Zcash community vote round (Shielded Vote; see core/src/community_vote.rs). */
+export interface CommunityRound {
+  id: string;
+  title: string;
+  description: string;
+  discussion_url: string | null;
+  snapshot_height: number;
+  vote_end_time: number;
+  created_at: number;
+  status: "pending" | "active" | "tallying" | "finalized" | "failed" | "unknown";
+  test: boolean;
+  proposals: { id: number; title: string; description: string; options: string[]; results: number[] | null }[];
+}
+export interface CommunityVotes {
+  open: CommunityRound[];
+  recent: CommunityRound[];
+}
+export const communityVotes = () => invoke<CommunityVotes>("community_votes");
+/** Ask a group about proposals in an open community vote, one poll each. */
+export const pollCommunityRound = (groupId: string, roundId: string, proposalIds: number[]) =>
+  invoke<number>("poll_community_round", { groupId, roundId, proposalIds });
 
 /** Agreeing on a private viewing key for a group created before they existed
  *  (see commands/viewing.rs). */

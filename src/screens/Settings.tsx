@@ -139,8 +139,8 @@ function AdvancedCard({ enabled }: { enabled: boolean }) {
         <strong>Show advanced options</strong>
       </label>
       <p className="dim" style={{ fontSize: 12, margin: "6px 0 0" }}>
-        Test networks and local devnet, diagnostics log, Ed25519 groups, raw-message
-        signing, and coinholder voting.
+        Test networks and local devnet, diagnostics log, Ed25519 groups, and raw-message
+        signing.
       </p>
     </div>
   );

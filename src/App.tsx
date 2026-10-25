@@ -18,6 +18,7 @@ import {
   joinViewingKeySession,
   listPendingSessions,
   notifyIfAway,
+  receiveGroupMessages,
   signingRequests,
 } from "./ipc/commands";
 import CeremonyListener from "./CeremonyListener";
@@ -34,6 +35,7 @@ import NewSigningSession from "./screens/NewSigningSession";
 import Inbox from "./screens/Inbox";
 import WalletSettings from "./screens/WalletSettings";
 import Settings, { AboutSettings, AdvancedSettings, SecuritySettings } from "./screens/Settings";
+import Votes, { usePollsAwaitingMe } from "./screens/Votes";
 
 /** A red dot with a white "!", shown against a nav entry that needs the user to
  *  do something: a signing session waiting in their inbox, or a DKG ceremony in
@@ -70,6 +72,7 @@ function Layout() {
     retry: false,
   });
   const pendingCount = signingRequests(pendingSessions.data).length;
+  const pollsAwaiting = usePollsAwaitingMe();
 
   // A request that arrives while the app is in the background gets a system
   // notification, once: a signer who doesn't notice stalls the payment.
@@ -102,6 +105,11 @@ function Layout() {
       joining.current.add(s.session_id);
       if (s.kind === "viewing_key") {
         joinViewingKeySession(s.matching_groups[0], s.session_id, s.coordinator_pubkey).catch(() => {});
+        continue;
+      }
+      // Group polls: read and stored by the backend, nothing to approve.
+      if (s.kind === "group_message") {
+        receiveGroupMessages(s.matching_groups[0], s.session_id).catch(() => {});
         continue;
       }
       joinSigningSession({ group_id: s.matching_groups[0], session_id: s.session_id, server_url: null })
@@ -155,6 +163,14 @@ function Layout() {
             />
           )}
         </NavLink>
+        <NavLink to="/votes">
+          Votes
+          {pollsAwaiting > 0 && (
+            <AttentionBadge
+              title={`${pollsAwaiting} ${pollsAwaiting === 1 ? "poll is" : "polls are"} waiting for your vote`}
+            />
+          )}
+        </NavLink>
         <NavLink to="/groups">
           Groups
           {dkgInProgress && <AttentionBadge title="A group is being set up and needs your attention" />}
@@ -191,6 +207,7 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <Home /> },
       { path: "inbox", element: <Inbox /> },
+      { path: "votes", element: <Votes /> },
       { path: "groups", element: <Groups /> },
       { path: "groups/new", element: <NewGroup /> },
       { path: "groups/join", element: <JoinGroup /> },
