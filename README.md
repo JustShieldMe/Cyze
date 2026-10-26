@@ -43,8 +43,8 @@ The app has five places: **Home**, **Approvals**, **Votes**, **Groups** and
   - **Pay if agreed:** a group poll can propose payments. Once the group
     agrees, its author sends exactly those, and each approver's app checks the
     transaction against the poll.
-  - **Rules:** pay only trusted payees, and more approvals for larger
-    payments, adopted by poll.
+  - **Rules:** pay only trusted payees, more approvals for larger payments,
+    and a wait with veto before larger payments, adopted by poll.
   - **Reasons:** a payment can say what it's for. Approvers see it, and so
     does every member's history. It never goes on chain.
   - With several groups, a switcher at the top picks the one wallet the app
@@ -206,7 +206,8 @@ signing, an advanced option).
   transaction.
 - **Group rules, enforced by every approver's app.** A group can adopt rules
   by poll: pay only trusted payees (those as many members trust as a payment
-  needs), and more approvals for larger payments. The sender's and each
+  needs), more approvals for larger payments, and a wait before larger
+  payments, during which any member can veto them. The sender's and each
   approver's app refuse a payment that breaks them. With no contracts on
   shielded funds, rules hold unless that many members act together, like the
   wallet itself.

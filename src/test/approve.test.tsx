@@ -192,3 +192,31 @@ test("an approver sees which of the group's rules a request meets", async () => 
   });
   await ui.findByText("✓ Meets the group's rules: pays only trusted payees · 3 approvals needed, 3 asked.");
 });
+
+test("an approver sees that a large payment was announced, waited, and wasn't vetoed", async () => {
+  fakeBackend({ list_pending_sessions: () => [request], join_signing_session: () => "c8" });
+  const ui = await renderApp("/inbox");
+  await waitFor(() => expect(joinedAs("s1")).toBe("c8"));
+  await emit("signing:progress", {
+    ceremony_id: "c8",
+    event: {
+      phase: "awaiting_approval",
+      message_hex: "9f".repeat(32),
+      context: { ...context, poll_id: "p9" },
+      auto_approved: false,
+      verified,
+      poll: {
+        poll_id: "p9",
+        missing: false,
+        title: "Pay the auditor's retainer?",
+        agreed: false,
+        declined: false,
+        chose_pay: 0,
+        threshold: 2,
+        delay_secs: 86_400,
+        announced_at: Math.floor(Date.now() / 1000) - 30 * 3_600,
+      },
+    },
+  });
+  await ui.findByText(/✓ Announced in “Pay the auditor's retainer\?” 30 hours ago, past the group's 1 day wait/);
+});

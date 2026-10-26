@@ -12,6 +12,16 @@ const DURATIONS = [
   { label: "1 week", secs: 7 * 86_400 },
 ];
 
+/** How long larger payments can wait for vetoes. */
+const DELAYS = [
+  { label: "1 hour", secs: 3_600 },
+  { label: "12 hours", secs: 12 * 3_600 },
+  { label: "1 day", secs: 86_400 },
+  { label: "2 days", secs: 2 * 86_400 },
+  { label: "3 days", secs: 3 * 86_400 },
+  { label: "1 week", secs: 7 * 86_400 },
+];
+
 /** The group's rules for its payments: what's in effect, and proposing new
  *  ones, which take effect once the group agrees in a poll. */
 export function GroupRulesCard({ group, network }: { group: GroupSummary; network: WalletNetwork }) {
@@ -87,12 +97,17 @@ function ProposeRules({
   const [tiered, setTiered] = useState(!!current?.large);
   const [from, setFrom] = useState(current?.large ? zec(current.large.from_zatoshis) : "");
   const [approvals, setApprovals] = useState(current?.large?.approvals ?? group.threshold + 1);
+  const [delayed, setDelayed] = useState(!!current?.delay);
+  const [delayFrom, setDelayFrom] = useState(current?.delay ? zec(current.delay.from_zatoshis) : "");
+  const [delaySecs, setDelaySecs] = useState(current?.delay?.secs ?? 2 * 86_400);
+  const delayZats = Math.round(Number(delayFrom) * 1e8);
   const [title, setTitle] = useState("New payment rules");
   const [duration, setDuration] = useState(DURATIONS[1].secs);
   const fromZats = Math.round(Number(from) * 1e8);
   const rules: GroupRules = {
     ...(trustedOnly ? { trusted_payees_only: true } : {}),
     ...(tiered && canTier ? { large: { from_zatoshis: fromZats, approvals } } : {}),
+    ...(delayed ? { delay: { from_zatoshis: delayZats, secs: delaySecs } } : {}),
   };
   const coins = (z: number) => `${zec(z)} ${unit(network)}`;
   const lines = describeRules(rules, coins);
@@ -164,6 +179,37 @@ function ProposeRules({
           </select>
         </div>
       )}
+      <label className="row confirm items-start">
+        <input type="checkbox" className="w-auto mt-1" checked={delayed} onChange={(e) => setDelayed(e.target.checked)} />
+        <span>
+          Larger payments wait for vetoes
+          <span className="dim text-sm block">
+            They're announced in a payment poll first, and can be sent once the wait has passed without any member
+            choosing Don't pay.
+          </span>
+        </span>
+      </label>
+      {delayed && (
+        <div className="row gap-2 items-center rules-tier">
+          <span className="text-sm">Payments of</span>
+          <input
+            type="text"
+            inputMode="decimal"
+            aria-label="Wait from this amount"
+            placeholder={`50 ${unit(network)}`}
+            value={delayFrom}
+            onChange={(e) => setDelayFrom(e.target.value)}
+          />
+          <span className="text-sm">{unit(network)} or more wait</span>
+          <select aria-label="Wait" value={delaySecs} onChange={(e) => setDelaySecs(Number(e.target.value))}>
+            {DELAYS.map((d) => (
+              <option key={d.secs} value={d.secs}>
+                {d.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
       <label>Question</label>
       <input type="text" value={title} maxLength={200} onChange={(e) => setTitle(e.target.value)} />
       <label>Open for</label>
@@ -179,7 +225,9 @@ function ProposeRules({
       <div className="row">
         <button
           onClick={() => propose.mutate()}
-          disabled={propose.isPending || !title.trim() || (tiered && canTier && !(fromZats > 0))}
+          disabled={
+            propose.isPending || !title.trim() || (tiered && canTier && !(fromZats > 0)) || (delayed && !(delayZats > 0))
+          }
         >
           {propose.isPending ? "Asking…" : "Ask the group"}
         </button>

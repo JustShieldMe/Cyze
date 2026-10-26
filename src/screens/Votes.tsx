@@ -21,7 +21,8 @@ import {
 import { asNetwork, unit } from "../network";
 import { resolveParticipant } from "../lib/participants";
 import { payeeFor, usePayees } from "../lib/payees";
-import { approvalsNeeded, describeRules, useGroupRules } from "../lib/rules";
+import { approvalsNeeded, delayFor, describeRules, durationText, useGroupRules } from "../lib/rules";
+import { useNow } from "../lib/time";
 import { selectActiveSend, useCeremonies } from "../stores/ceremonies";
 import { checkRows, emptyRow, PaymentRow, PaymentRows, useRuleError } from "../wallet/Batch";
 import { zec } from "../wallet/common";
@@ -395,6 +396,12 @@ function RulesOutcome({ poll }: { poll: PollView }) {
  *  once agreed, or declined. */
 function PaymentOutcome({ poll, mine, group }: { poll: PollView; mine: boolean; group?: GroupSummary }) {
   const name = useNames();
+  const rules = useGroupRules(poll.group_id);
+  const now = useNow(60_000);
+  const total = (poll.payments ?? []).reduce((t, p) => t + p.amount_zatoshis, 0);
+  // Under a delay rule it's an announcement: it goes once the wait has passed
+  // with nobody choosing Don't pay, agreed or not.
+  const delay = delayFor(rules.data?.rules, total);
   if (poll.paid_txid) {
     return (
       <p className="ok mt-3 mb-0">
@@ -402,15 +409,40 @@ function PaymentOutcome({ poll, mine, group }: { poll: PollView; mine: boolean; 
       </p>
     );
   }
+  if (delay) {
+    const vetoed = Object.entries(poll.votes)
+      .filter(([, c]) => c === 1)
+      .map(([pk]) => name(pk));
+    if (vetoed.length) {
+      return (
+        <p className="danger-text mt-3 mb-0">
+          Vetoed: {vetoed.join(", ")} chose Don't pay. It can't be sent while anyone does.
+        </p>
+      );
+    }
+    const from = (poll.announced_at ?? poll.created_at) + delay.secs;
+    if (now / 1000 < from) {
+      return (
+        <p className="dim mt-3 mb-0">
+          Announced. The group's rules make it wait {durationText(delay.secs)}: it can be sent {relative(from)}, unless a
+          member vetoes it by choosing Don't pay.
+        </p>
+      );
+    }
+    if (!mine || !group) {
+      return <p className="dim mt-3 mb-0">The wait is over with no veto. {name(poll.author)} can send it now.</p>;
+    }
+    return <SendAgreed poll={poll} group={group} intro="The wait is over with no veto. You can send it now." />;
+  }
   if (poll.agreed === 1) return <p className="dim mt-3 mb-0">The group decided not to pay.</p>;
   if (poll.agreed !== 0) return null;
   if (!mine || !group) return <p className="dim mt-3 mb-0">Agreed to pay. {name(poll.author)} can send it now.</p>;
-  return <SendAgreed poll={poll} group={group} />;
+  return <SendAgreed poll={poll} group={group} intro="The group agreed. You can send it now." />;
 }
 
 /** Send a poll's agreed payments: choose who approves (those who chose Pay,
  *  to start with) and ask them. The payments come from the poll. */
-function SendAgreed({ poll, group }: { poll: PollView; group: GroupSummary }) {
+function SendAgreed({ poll, group, intro }: { poll: PollView; group: GroupSummary; intro: string }) {
   const name = useNames();
   const identity = useQuery({ queryKey: ["identity"], queryFn: getIdentity });
   const me = identity.data?.pubkey;
@@ -458,7 +490,7 @@ function SendAgreed({ poll, group }: { poll: PollView; group: GroupSummary }) {
   }
   return (
     <div className="send-agreed mt-3">
-      <p className="ok mb-2">The group agreed. You can send it now.</p>
+      <p className="ok mb-2">{intro}</p>
       <div className="dim text-sm mb-1">
         Ask to approve ({needed} of {group.num_participants} needed
         {needed > group.threshold ? ", by the group's rules for larger payments" : ""})

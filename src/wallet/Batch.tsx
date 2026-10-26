@@ -13,7 +13,8 @@ import {
 } from "../ipc/commands";
 import { unit } from "../network";
 import { MAX_REASON, payeeFor, usePayees } from "../lib/payees";
-import { payeeRuleError, useGroupRules } from "../lib/rules";
+import { delayFor, payeeRuleError, useGroupRules } from "../lib/rules";
+import { AnnounceInstead } from "./Announce";
 import { ADDRESS_PLACEHOLDER, checkRecipient } from "./address";
 import { SyncErrorView, zec } from "./common";
 
@@ -246,6 +247,8 @@ export function BatchSend({
   const ruleError = useRuleError(group.id);
   const { payments, errors, total } = checkRows(rows, network, ruleError);
   const tooMuch = total > spendable;
+  const rules = useGroupRules(group.id);
+  const delay = delayFor(rules.data?.rules, total);
   const prepare = useMutation({
     mutationFn: () => walletPreparePayments(group.id, payments),
     onSuccess: (d) => onPrepared(d, reason.trim() || undefined),
@@ -285,12 +288,23 @@ export function BatchSend({
       </p>
       {err && <SyncErrorView text={err} />}
       {blocked && <p className="dim text-sm">{blocked}</p>}
-      <button
-        onClick={() => prepare.mutate()}
-        disabled={!!blocked || prepare.isPending || payments.length < 2 || errors.some(Boolean) || tooMuch}
-      >
-        {prepare.isPending ? "Preparing…" : "Review payments"}
-      </button>
+      {delay ? (
+        <AnnounceInstead
+          groupId={group.id}
+          network={network}
+          payments={payments}
+          reason={reason.trim() || undefined}
+          delay={delay}
+          disabled={!!blocked || payments.length < 2 || errors.some(Boolean) || tooMuch}
+        />
+      ) : (
+        <button
+          onClick={() => prepare.mutate()}
+          disabled={!!blocked || prepare.isPending || payments.length < 2 || errors.some(Boolean) || tooMuch}
+        >
+          {prepare.isPending ? "Preparing…" : "Review payments"}
+        </button>
+      )}
     </div>
   );
 }

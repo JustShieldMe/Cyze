@@ -178,7 +178,7 @@ pub async fn create_poll<R: Runtime>(app: AppHandle<R>, args: CreatePollArgs) ->
         closes_at: unix_now() + open_for,
         community: None,
         payments,
-        rules: args.rules,
+        rules: args.rules.map(Box::new),
     };
     write(&app, &args.group_id, body).await?;
     Ok(poll_id)
@@ -365,7 +365,7 @@ pub(crate) async fn write<R: Runtime>(app: &AppHandle<R>, group_id: &str, body: 
         .update_polls(group_id, |log| {
             let record = Record { group_id: group_id.to_string(), seq: log.next_seq(&me), at: unix_now(), body };
             record.check()?;
-            log.insert(&me, record.clone());
+            log.insert_received(&me, record.clone(), unix_now());
             log.outbox.push(record.seq);
             Ok::<_, frost_app_core::CoreError>(record)
         })
@@ -449,12 +449,13 @@ pub async fn receive_group_messages<R: Runtime>(app: AppHandle<R>, group_id: Str
             _ => tracing::debug!("ignored a group message for another group or malformed"),
         }
     }
+    let now = unix_now();
     let (new_polls, gap) = state
         .update_polls(&group_id, |log| {
             let mut new_polls = 0;
             for record in records {
                 let is_poll = matches!(record.body, RecordBody::Poll { .. }) && record.check().is_ok();
-                if log.insert(&author, record) && is_poll {
+                if log.insert_received(&author, record, now) && is_poll {
                     new_polls += 1;
                 }
             }
