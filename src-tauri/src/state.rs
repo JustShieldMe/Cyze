@@ -225,6 +225,10 @@ pub struct AppState {
     /// send signs each note in its own round; once one round of a verified
     /// transaction is approved, its other rounds are approved automatically.
     pub approved_sighashes: Mutex<HashMap<String, std::time::Instant>>,
+    /// What this device approved automatically within a group's spending
+    /// limit, by group: (unix seconds, cost). Counts payments the wallet
+    /// hasn't seen mined yet against the limit.
+    pub auto_approvals: Mutex<HashMap<String, Vec<(u64, u64)>>>,
     /// Sessions this app ran key generation in. The organizer keeps one open
     /// briefly after it finishes, and it must not look like a signing request.
     pub dkg_sessions: std::sync::Mutex<std::collections::HashSet<Uuid>>,
@@ -305,6 +309,7 @@ impl AppState {
             unlocked_tx: tokio::sync::watch::channel(false).0,
             sync_service: crate::sync_service::SyncService::default(),
             approved_sighashes: Mutex::new(HashMap::new()),
+            auto_approvals: Mutex::new(HashMap::new()),
             dkg_sessions: Default::default(),
             viewing_key_runs: Default::default(),
             viewing_key_sessions: Default::default(),

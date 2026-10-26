@@ -13,7 +13,9 @@
 //! by poll: larger payments wait an hour after they're announced, which is
 //! refused unannounced, too soon, and once Bob vetoes; then rules replacing
 //! those, to pay only trusted payees: a payment to anyone else is refused
-//! before anyone is asked, and "send all" to the trusted auditor goes through.
+//! before anyone is asked. Then a spending limit: with automatic approval on,
+//! Bob's app approves a small payment to the trusted auditor by itself, and
+//! leaves one over the limit to Bob. Then "send all" goes through.
 //!
 //! Needs thus-spoke-zakura 0.3.x (NU6.3 from block 1) or 0.4.x (NU7 from block
 //! 1, with `CYZE_DEVNET_UPGRADE=nu7`). Ignored by default; run in release mode,
@@ -407,6 +409,68 @@ async fn a_two_of_two_send_is_verified_signed_and_mined() {
     };
     let refusal = refused(commands::wallet::wallet_send(p.alice.app.handle().clone(), untrusted).await);
     assert!(refusal.contains("only to trusted payees"), "{refusal}");
+
+    // A spending limit counts what the wallet sent, so Bob's app syncs it too.
+    sync_service::spawn(p.bob.app.handle().clone());
+    commands::server::set_active_wallet(bob.clone(), group_id.clone()).await.unwrap();
+    let synced = Instant::now();
+    loop {
+        commands::wallet::wallet_sync_now(bob.clone(), false).await.unwrap();
+        let s = commands::wallet::wallet_sync_status(bob.clone(), group_id.clone()).await.unwrap();
+        if s.is_some_and(|s| s.last_synced_ms.is_some() && frost_app_core::wallet::is_caught_up(s.scanned_height, s.tip_height)) {
+            break;
+        }
+        assert!(synced.elapsed() < Duration::from_secs(300), "Bob's wallet never synced");
+        tokio::time::sleep(Duration::from_secs(3)).await;
+    }
+    let history = commands::wallet::wallet_history(bob.clone(), group_id.clone()).await.unwrap();
+    let sent_today: u64 = history.iter().filter(|t| t.direction == "send").map(|t| t.amount_zatoshis + t.fee_zatoshis.unwrap_or(0)).sum();
+    // Room for a 0.05 payment and its fee, not for another 0.08 after it.
+    let limit = frost_app_core::rules::SpendingLimit { up_to_zatoshis: sent_today + 10_000_000, per_secs: 86_400 };
+    adopt(
+        frost_app_core::rules::GroupRules { trusted_payees_only: true, limit: Some(limit), ..Default::default() },
+        "Approve small payments automatically",
+    )
+    .await;
+    commands::rules::set_auto_approve(bob.clone(), group_id.clone(), true).await.unwrap();
+    let status = commands::rules::auto_approval_status(bob.clone(), group_id.clone()).await.unwrap();
+    assert!(status.on && status.spent == Some(sent_today), "{:?}", (status.on, status.spent, sent_today));
+    let small = |amount_zatoshis| commands::wallet::WalletSendArgs {
+        amount_zatoshis,
+        memo: None,
+        reason: None,
+        poll_id: None,
+        ..poll_send(&p, &group_id, "", &recipient)
+    };
+    let (txid, bob_saw) = send_and_see_what_bob_saw(&p, small(5_000_000), Some(5_000_000)).await;
+    eprintln!("approved automatically: {txid}");
+    assert_eq!(bob_saw["auto_approved"], true, "{bob_saw}");
+    assert_eq!(bob_saw["auto_limit"]["approved"], true, "{bob_saw}");
+    ths(&["mine", "10"]);
+    let started = Instant::now();
+    loop {
+        commands::wallet::wallet_sync_now(alice.clone(), false).await.unwrap();
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let s = commands::wallet::wallet_group_status(alice.clone(), group_id.clone()).await.unwrap();
+        if s.spendable_zatoshis > 0 && s.spendable_zatoshis == s.total_zatoshis {
+            break;
+        }
+        assert!(started.elapsed() < Duration::from_secs(180), "the change never became spendable: {s:?}");
+    }
+    let (_, bob_saw) = send_and_see_what_bob_saw(&p, small(8_000_000), Some(8_000_000)).await;
+    assert_eq!(bob_saw["auto_approved"], false, "{bob_saw}");
+    assert!(bob_saw["auto_limit"]["reason"].as_str().unwrap().contains("over the limit"), "{bob_saw}");
+    ths(&["mine", "10"]);
+    let started = Instant::now();
+    loop {
+        commands::wallet::wallet_sync_now(alice.clone(), false).await.unwrap();
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let s = commands::wallet::wallet_group_status(alice.clone(), group_id.clone()).await.unwrap();
+        if s.spendable_zatoshis > 0 && s.spendable_zatoshis == s.total_zatoshis {
+            break;
+        }
+        assert!(started.elapsed() < Duration::from_secs(180), "the change never became spendable: {s:?}");
+    }
 
     let (txid, bob_saw) = send_and_see_what_bob_saw(
         &p,

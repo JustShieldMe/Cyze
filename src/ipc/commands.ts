@@ -655,6 +655,9 @@ export interface GroupRules {
   /** Payments of at least `from_zatoshis` together are announced in a payment
    *  poll `secs` before they're sent; anyone choosing Don't pay vetoes them. */
   delay?: { from_zatoshis: number; secs: number } | null;
+  /** Members' apps may approve payments to trusted payees by themselves while
+   *  the wallet has sent less than `up_to_zatoshis` in the last `per_secs`. */
+  limit?: { up_to_zatoshis: number; per_secs: number } | null;
 }
 /** The rules in effect in a group, and the poll that adopted them. */
 export interface RulesInEffect {
@@ -665,6 +668,18 @@ export interface RulesInEffect {
   members: number;
 }
 export const groupRules = (groupId: string) => invoke<RulesInEffect>("group_rules", { groupId });
+
+/** Whether this device approves payments by itself within a group's spending
+ *  limit, and what the wallet sent in the limit's period (null if it can't
+ *  say until the wallet syncs). */
+export interface AutoApprovalStatus {
+  on: boolean;
+  spent: number | null;
+  limit: { up_to_zatoshis: number; per_secs: number } | null;
+}
+export const autoApprovalStatus = (groupId: string) =>
+  invoke<AutoApprovalStatus>("auto_approval_status", { groupId });
+export const setAutoApprove = (groupId: string, on: boolean) => invoke<void>("set_auto_approve", { groupId, on });
 
 /** What a member says a transaction was for. */
 export interface PaymentReason {

@@ -110,15 +110,18 @@ and skip kinds they don't know.
       (its author only, once agreed, once); approvers' `check_poll`
       (`commands/signing.rs`) refuses another sender, other payments, or a
       paid poll. Follow-up: let members who voted Pay have their app approve
-      it automatically (with the spending-limit rules below).
+      it automatically, as the spending limit does for small payments.
 - [x] **Group rules** — `core/src/rules.rs`, adopted by poll (`Poll.rules`,
       `polls::rules_in_effect`); checked by `commands::rules::check` in the
       sender's `wallet_send` (against its own verified draft) and the
       approvers' gate.
 - [x] **Trusted payees only** — `PayeeTrust` records; a payee is trusted once
       threshold members trust its current address.
-- [ ] **Spending limits** — approve automatically up to X per week to trusted
-      payees (the approver's app must be open).
+- [x] **Spending limits** — `GroupRules.limit` and
+      `rules::may_approve_automatically`; each member opts in
+      (`PrivateSettings.auto_approve`); `commands::rules::automatic_approval`
+      counts the wallet's history over the period (by blocks) plus this
+      device's in-flight automatic approvals, and only with a fresh sync.
 - [x] **Delay with veto** — `GroupRules.delay`; announcements are payment
       polls, sendable once the delay has passed since each app received them
       (`GroupLog.received`, `PollView.announced_at`) with no Don't pay vote

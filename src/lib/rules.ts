@@ -12,7 +12,7 @@ export function useGroupRules(groupId: string | undefined) {
 }
 
 export function noRules(rules: GroupRules | undefined | null): boolean {
-  return !rules?.trusted_payees_only && !rules?.large && !rules?.delay;
+  return !rules?.trusted_payees_only && !rules?.large && !rules?.delay && !rules?.limit;
 }
 
 /** The wait payments totalling `total` have under the rules, if any. */
@@ -47,6 +47,11 @@ export function describeRules(rules: GroupRules, coins: (zatoshis: number) => st
   if (rules.delay) {
     lines.push(
       `Payments of ${coins(rules.delay.from_zatoshis)} or more are announced ${durationText(rules.delay.secs)} ahead, and any member can veto them.`,
+    );
+  }
+  if (rules.limit) {
+    lines.push(
+      `Members' apps may approve payments to trusted payees by themselves, up to ${coins(rules.limit.up_to_zatoshis)} in any ${durationText(rules.limit.per_secs)}.`,
     );
   }
   return lines;

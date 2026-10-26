@@ -314,8 +314,11 @@ enum Verdict {
         tx: VerifiedTransaction,
         auto_approved: bool,
         window: Option<ApprovalWindow>,
-        poll: Option<PollCheck>,
+        poll: Option<Box<PollCheck>>,
         rules: Option<RulesCheck>,
+        /// This device's decision on approving it within the group's spending
+        /// limit, when it approves automatically there.
+        auto: Option<Box<crate::commands::rules::AutoDecision>>,
     },
     /// No transaction attached, and raw signing is allowed (advanced options).
     Raw,
@@ -327,7 +330,7 @@ impl Verdict {
     /// Add the decision to the `awaiting_approval` event the UI receives.
     fn annotate(&self, event: &mut serde_json::Value) {
         match self {
-            Verdict::Verified { tx, auto_approved, window, poll, rules } => {
+            Verdict::Verified { tx, auto_approved, window, poll, rules, auto } => {
                 event["verified"] = serde_json::json!(tx);
                 event["auto_approved"] = serde_json::json!(auto_approved);
                 event["window"] = serde_json::json!(window);
@@ -336,6 +339,9 @@ impl Verdict {
                 }
                 if let Some(rules) = rules {
                     event["rules"] = serde_json::json!(rules);
+                }
+                if let Some(auto) = auto {
+                    event["auto_limit"] = serde_json::json!(auto);
                 }
             }
             Verdict::Raw => event["unverified"] = serde_json::json!(true),
@@ -472,7 +478,7 @@ async fn gate_wallet_request<R: tauri::Runtime>(
             .and_then(|tx| verify::check_coordinator_claims(network, group_id, seed.as_deref(), &tx, claimed).map(|()| tx))
             .map_or_else(
                 |e| Verdict::Refused(e.to_string()),
-                |tx| Verdict::Verified { tx, auto_approved: false, window: None, poll: None, rules: None },
+                |tx| Verdict::Verified { tx, auto_approved: false, window: None, poll: None, rules: None, auto: None },
             ),
         None if settings.advanced_mode.unwrap_or(false) => Verdict::Raw,
         None => Verdict::Refused(
@@ -505,7 +511,9 @@ async fn gate_wallet_request<R: tauri::Runtime>(
                 (Err(reason), _) | (_, Err(reason)) => Verdict::Refused(reason),
                 (Ok(poll), Ok(rules)) => {
                     let window = approval_window(&state, group_id, tx.expiry_height).await;
-                    Verdict::Verified { tx, auto_approved, window, poll, rules }
+                    let auto = crate::commands::rules::automatic_approval(&state, group_id, &tx).await.map(Box::new);
+                    let poll = poll.map(Box::new);
+                    Verdict::Verified { tx, auto_approved, window, poll, rules, auto }
                 }
             }
         }
@@ -517,7 +525,7 @@ async fn gate_wallet_request<R: tauri::Runtime>(
         return verdict;
     };
     match verdict {
-        Verdict::Verified { tx, window, poll, rules, .. } => {
+        Verdict::Verified { tx, window, poll, rules, auto, .. } => {
             let approved_before = state
                 .approved_sighashes
                 .lock()
@@ -525,9 +533,24 @@ async fn gate_wallet_request<R: tauri::Runtime>(
                 .get(&tx.sighash_hex)
                 .is_some_and(|at| at.elapsed() < APPROVAL_MEMORY);
             handle.gate = ApprovalGate::Verified { sighash_hex: tx.sighash_hex.clone() };
-            let auto_approved = approved_before
+            // Within the group's spending limit, approved by itself: once per
+            // transaction, so its later rounds count as approved already.
+            let by_limit = !approved_before && auto.as_ref().is_some_and(|a| a.approved);
+            let auto_approved = (approved_before || by_limit)
                 && handle.approval.take().is_some_and(|approval| approval.send(true).is_ok());
-            Verdict::Verified { tx, auto_approved, window, poll, rules }
+            if auto_approved && by_limit {
+                let mut approved = state.approved_sighashes.lock().await;
+                approved.retain(|_, at| at.elapsed() < APPROVAL_MEMORY);
+                approved.insert(tx.sighash_hex.clone(), std::time::Instant::now());
+                drop(approved);
+                let cost = auto.as_ref().map_or(0, |a| a.cost);
+                crate::commands::rules::record_automatic_approval(&state, group_id, cost).await;
+                tracing::info!(cost, "approved a payment automatically, within the group's spending limit");
+            }
+            // A later round of a transaction approved by hand isn't an
+            // automatic approval within the limit.
+            let auto = auto.filter(|_| !approved_before);
+            Verdict::Verified { tx, auto_approved, window, poll, rules, auto }
         }
         Verdict::Raw => {
             handle.gate = ApprovalGate::Open;

@@ -86,6 +86,8 @@ pub fn run() {
             commands::payees::set_payment_reason,
             commands::payees::trust_payee,
             commands::rules::group_rules,
+            commands::rules::auto_approval_status,
+            commands::rules::set_auto_approve,
             commands::tor::set_use_tor,
             commands::backup::backup_status,
             commands::backup::export_backup,
