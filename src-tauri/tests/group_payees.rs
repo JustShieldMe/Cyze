@@ -87,9 +87,9 @@ async fn members_share_payees_and_what_payments_were_for() {
             },
         )
     };
-    let impossible = GroupRules { trusted_payees_only: false, large: Some(LargePayments { from_zatoshis: 1, approvals: 3 }) };
+    let impossible = GroupRules { large: Some(LargePayments { from_zatoshis: 1, approvals: 3 }), ..GroupRules::default() };
     assert!(propose(impossible).await.unwrap_err().message.contains("the group has 2 members"));
-    let rules = GroupRules { trusted_payees_only: true, large: None };
+    let rules = GroupRules { trusted_payees_only: true, ..GroupRules::default() };
     let poll_id = propose(rules.clone()).await.unwrap();
     let in_effect = async |state: &tauri::State<'_, AppState>| {
         commands::rules::group_rules(state.clone(), group_id.clone()).await.unwrap()

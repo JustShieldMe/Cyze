@@ -23,7 +23,8 @@ import { resolveParticipant } from "../lib/participants";
 import { useCeremonies, selectActiveSend } from "../stores/ceremonies";
 import { useAdvancedMode } from "../lib/advanced";
 import { MAX_REASON, payeeFor, useMemberName, usePayees } from "../lib/payees";
-import { approvalsNeeded, payeeRuleError, useGroupRules } from "../lib/rules";
+import { approvalsNeeded, delayFor, payeeRuleError, useGroupRules } from "../lib/rules";
+import { AnnounceInstead } from "./Announce";
 import { WalletTxHistory } from "./Activity";
 import { BatchSend } from "./Batch";
 import { ReviewNotesTab } from "./Notes";
@@ -427,6 +428,7 @@ function EnterSend({
   const payee = payeeFor(payees.data, address);
   const rules = useGroupRules(group.id);
   const forbidden = needsLookup || check.error ? null : payeeRuleError(rules.data?.rules, payees.data, address);
+  const delay = delayFor(rules.data?.rules, all ? spendable : Math.round(Number(amount) * 1e8));
   const zats = all ? spendable : Math.round(Number(amount) * 1e8);
   const tooMuch = !all && zats > 0 && zats > spendable;
 
@@ -581,14 +583,39 @@ function EnterSend({
 
       {err && <SyncErrorView text={err} />}
       {blocked && <p className="dim text-sm">{blocked}</p>}
-      <button
-        onClick={() => prepare.mutate()}
-        disabled={
-          !!blocked || prepare.isPending || !address || !(zats > 0) || tooMuch || needsLookup || !!check.error || !!forbidden
-        }
-      >
-        {prepare.isPending ? "Preparing…" : "Review payment"}
-      </button>
+      {delay && !all ? (
+        <AnnounceInstead
+          groupId={group.id}
+          network={network}
+          payments={[{ recipient: address, amount_zatoshis: zats, memo: !check.transparent && memo.trim() ? memo.trim() : null }]}
+          reason={reason.trim() || undefined}
+          delay={delay}
+          disabled={!!blocked || !address || tooMuch || needsLookup || !!check.error || !!forbidden}
+        />
+      ) : (
+        <button
+          onClick={() => prepare.mutate()}
+          disabled={
+            !!blocked ||
+            prepare.isPending ||
+            !address ||
+            !(zats > 0) ||
+            tooMuch ||
+            needsLookup ||
+            !!check.error ||
+            !!forbidden ||
+            !!delay
+          }
+        >
+          {prepare.isPending ? "Preparing…" : "Review payment"}
+        </button>
+      )}
+      {delay && all && (
+        <p className="dim text-sm">
+          Sending everything is over the group's limit for payments without an announcement; announce a set amount
+          instead.
+        </p>
+      )}
     </div>
   );
 }

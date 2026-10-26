@@ -9,9 +9,11 @@
 //! about as large a request as co-signers can verify, after one too large for
 //! that is refused at review. Then a payment proposed in a group poll: sent
 //! once both agree, only by Alice, who proposed it, checked by Bob's app
-//! against his copy of the poll, and only once. Then the group adopts a rule
-//! to pay only trusted payees: a payment to anyone else is refused before
-//! anyone is asked, and "send all" to the trusted auditor goes through.
+//! against his copy of the poll, and only once. Then the group adopts rules
+//! by poll: larger payments wait an hour after they're announced, which is
+//! refused unannounced, too soon, and once Bob vetoes; then rules replacing
+//! those, to pay only trusted payees: a payment to anyone else is refused
+//! before anyone is asked, and "send all" to the trusted auditor goes through.
 //!
 //! Needs thus-spoke-zakura 0.3.x (NU6.3 from block 1) or 0.4.x (NU7 from block
 //! 1, with `CYZE_DEVNET_UPGRADE=nu7`). Ignored by default; run in release mode,
@@ -318,33 +320,79 @@ async fn a_two_of_two_send_is_verified_signed_and_mined() {
     commands::payees::trust_payee(p.bob.app.handle().clone(), group_id.clone(), auditor.author, auditor.payee_id, true)
         .await
         .unwrap();
-    let rules = frost_app_core::rules::GroupRules { trusted_payees_only: true, large: None };
-    let adopt = commands::polls::create_poll(
+    let adopt = async |rules: frost_app_core::rules::GroupRules, title: &str| {
+        let poll = commands::polls::create_poll(
+            p.alice.app.handle().clone(),
+            commands::polls::CreatePollArgs {
+                group_id: group_id.clone(),
+                title: title.into(),
+                details: String::new(),
+                options: Vec::new(),
+                open_for_secs: 24 * 60 * 60,
+                payments: Vec::new(),
+                rules: Some(rules.clone()),
+            },
+        )
+        .await
+        .unwrap();
+        until(&p, &group_id, "Bob never got the rules", async || polls_of(&bob).await.iter().any(|q| q.poll_id == poll)).await;
+        for user in [&p.alice, &p.bob] {
+            commands::polls::vote_poll(user.app.handle().clone(), group_id.clone(), poll.clone(), 0).await.unwrap();
+        }
+        let in_effect = async |state: &tauri::State<'_, AppState>| {
+            commands::rules::group_rules(state.clone(), group_id.clone()).await.unwrap().rules
+        };
+        until(&p, &group_id, "the rules never took effect", async || {
+            let trusted = commands::payees::list_payees(bob.clone(), group_id.clone()).await.unwrap()[0].payee.trusted;
+            trusted && in_effect(&alice).await == rules && in_effect(&bob).await == rules
+        })
+        .await;
+    };
+
+    // Larger payments wait an hour after they're announced; any veto stops them.
+    let delay = frost_app_core::rules::Delay { from_zatoshis: 50_000_000, secs: 3_600 };
+    adopt(frost_app_core::rules::GroupRules { trusted_payees_only: true, delay: Some(delay), ..Default::default() }, "Wait for vetoes")
+        .await;
+    let large = commands::wallet::WalletSendArgs {
+        amount_zatoshis: 60_000_000,
+        memo: None,
+        reason: None,
+        poll_id: None,
+        ..poll_send(&p, &group_id, "", &recipient)
+    };
+    let refusal = refused(commands::wallet::wallet_send(p.alice.app.handle().clone(), large).await);
+    assert!(refusal.contains("announced in a payment poll 1 hour before"), "{refusal}");
+    let announced = commands::polls::create_poll(
         p.alice.app.handle().clone(),
         commands::polls::CreatePollArgs {
             group_id: group_id.clone(),
-            title: "Pay only trusted payees".into(),
+            title: "Pay the auditor's retainer?".into(),
             details: String::new(),
             options: Vec::new(),
             open_for_secs: 24 * 60 * 60,
-            payments: Vec::new(),
-            rules: Some(rules.clone()),
+            payments: vec![frost_app_core::polls::ProposedPayment {
+                recipient: recipient.clone(),
+                amount_zatoshis: 60_000_000,
+                memo: None,
+            }],
+            rules: None,
         },
     )
     .await
     .unwrap();
-    until(&p, &group_id, "Bob never got the rules", async || polls_of(&bob).await.iter().any(|q| q.poll_id == adopt)).await;
-    for user in [&p.alice, &p.bob] {
-        commands::polls::vote_poll(user.app.handle().clone(), group_id.clone(), adopt.clone(), 0).await.unwrap();
-    }
-    let in_effect = async |state: &tauri::State<'_, AppState>| {
-        commands::rules::group_rules(state.clone(), group_id.clone()).await.unwrap().rules
-    };
-    until(&p, &group_id, "the rules never took effect", async || {
-        let trusted = commands::payees::list_payees(bob.clone(), group_id.clone()).await.unwrap()[0].payee.trusted;
-        trusted && in_effect(&alice).await == rules && in_effect(&bob).await == rules
+    let refusal = refused(send_poll_id(&p, &group_id, &announced, &recipient).await);
+    assert!(refusal.contains("can be sent in 60 minutes"), "{refusal}");
+    until(&p, &group_id, "Bob never got the announcement", async || polls_of(&bob).await.iter().any(|q| q.poll_id == announced)).await;
+    commands::polls::vote_poll(p.bob.app.handle().clone(), group_id.clone(), announced.clone(), 1).await.unwrap();
+    until(&p, &group_id, "Alice never saw the veto", async || {
+        polls_of(&alice).await.iter().any(|q| q.poll_id == announced && q.tally.get(1) == Some(&1))
     })
     .await;
+    let refusal = refused(send_poll_id(&p, &group_id, &announced, &recipient).await);
+    assert!(refusal.contains("vetoed"), "{refusal}");
+
+    // Rules replacing those: pay only trusted payees.
+    adopt(frost_app_core::rules::GroupRules { trusted_payees_only: true, ..Default::default() }, "Pay only trusted payees").await;
     let untrusted = commands::wallet::WalletSendArgs {
         group_id: group_id.clone(),
         recipient: outside_recipient_at(7),
@@ -393,6 +441,16 @@ async fn a_two_of_two_send_is_verified_signed_and_mined() {
         }
         assert!(started.elapsed() < Duration::from_secs(180), "the wallet never emptied: {s:?}");
     }
+}
+
+/// Alice sending the payment poll `poll_id` proposes.
+async fn send_poll_id(
+    p: &common::Pair,
+    group_id: &str,
+    poll_id: &str,
+    recipient: &str,
+) -> Result<commands::wallet::SendStarted, frost_app_lib::error::AppError> {
+    commands::wallet::wallet_send(p.alice.app.handle().clone(), poll_send(p, group_id, poll_id, recipient)).await
 }
 
 /// Why a send was refused; panics if it wasn't.

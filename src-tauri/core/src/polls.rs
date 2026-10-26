@@ -108,7 +108,7 @@ pub enum RecordBody {
         /// The rules it proposes, if any, replacing the group's: in effect
         /// once the group agrees to adopt them (see [`rules_in_effect`]).
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        rules: Option<crate::rules::GroupRules>,
+        rules: Option<Box<crate::rules::GroupRules>>,
     },
     /// The author trusting (or no longer trusting) a payee at this address,
     /// which `owner` (hex communication key) added. A trust counts only while
@@ -295,6 +295,11 @@ pub struct GroupLog {
     /// Numbers of this device's own records not yet sent to every member.
     #[serde(default)]
     pub outbox: Vec<u64>,
+    /// When this device got each record (unix seconds, its own clock), by
+    /// author and number: for a delay that runs from when each member learned
+    /// of something, whatever time its author put on it.
+    #[serde(default)]
+    pub received: BTreeMap<String, BTreeMap<u64, u64>>,
 }
 
 impl GroupLog {
@@ -306,6 +311,22 @@ impl GroupLog {
         }
         by_author.insert(record.seq, record);
         true
+    }
+
+    /// [`GroupLog::insert`], noting that this device got it at `now`.
+    pub fn insert_received(&mut self, author: &str, record: Record, now: u64) -> bool {
+        let seq = record.seq;
+        let new = self.insert(author, record);
+        if new {
+            self.received.entry(author.to_string()).or_default().insert(seq, now);
+        }
+        new
+    }
+
+    /// When this device got a record: noted on arrival, or (for one kept
+    /// before arrival times were) the time its author put on it.
+    pub fn received_at(&self, author: &str, record: &Record) -> u64 {
+        self.received.get(author).and_then(|r| r.get(&record.seq)).copied().unwrap_or(record.at)
     }
 
     /// The next number for a record `me` writes.
@@ -347,6 +368,9 @@ pub struct PollView {
     pub details: String,
     pub options: Vec<String>,
     pub created_at: u64,
+    /// When this device learned of it: the later of `created_at` and when it
+    /// got the poll. A delay before a large payment runs from this.
+    pub announced_at: u64,
     pub closes_at: u64,
     /// Closed by time or by its author.
     pub closed: bool,
@@ -431,6 +455,7 @@ pub fn polls(group_id: &str, log: &GroupLog, members: &[String], threshold: u32,
                 details: details.clone(),
                 options: options.clone(),
                 created_at: record.at,
+                announced_at: record.at.max(log.received_at(author, record)),
                 closes_at: *closes_at,
                 closed: closed_at.is_some() || now >= *closes_at,
                 my_vote: votes.get(me).copied(),
@@ -441,7 +466,7 @@ pub fn polls(group_id: &str, log: &GroupLog, members: &[String], threshold: u32,
                 agreed,
                 community: community.clone(),
                 payments: payments.clone(),
-                rules: rules.clone(),
+                rules: rules.as_deref().cloned(),
                 paid_txid,
             });
         }
@@ -679,6 +704,20 @@ mod tests {
         assert!(rec(1, 10, payment_poll("p", vec![memo])).check().is_err());
     }
 
+    #[test]
+    fn a_poll_is_announced_when_this_device_got_it_whatever_time_its_author_put_on_it() {
+        let mut log = GroupLog::default();
+        // Written "at 100", but this device only got it at 900.
+        log.insert_received("alice", rec(1, 100, payment_poll("p", vec![pay("u1auditor", 1)])), 900);
+        // Arrived before the time its author put on it: that time counts.
+        log.insert_received("bob", rec(1, 950, payment_poll("q", vec![pay("u1auditor", 1)])), 940);
+        let views = polls(G, &log, &members(), 2, "carol", 1_000);
+        let announced = |id: &str| views.iter().find(|p| p.poll_id == id).unwrap().announced_at;
+        assert_eq!((announced("p"), announced("q")), (900, 950));
+        assert!(!log.insert_received("alice", rec(1, 100, vote("p", 0)), 2_000), "a duplicate changes nothing");
+        assert_eq!(log.received_at("alice", &rec(1, 100, vote("p", 0))), 900);
+    }
+
     fn rules_poll(id: &str, rules: crate::rules::GroupRules) -> RecordBody {
         RecordBody::Poll {
             poll_id: id.into(),
@@ -688,15 +727,15 @@ mod tests {
             closes_at: 1_000,
             community: None,
             payments: Vec::new(),
-            rules: Some(rules),
+            rules: Some(Box::new(rules)),
         }
     }
 
     #[test]
     fn the_latest_rules_the_group_agreed_to_are_in_effect() {
         use crate::rules::{GroupRules, LargePayments};
-        let trusted_only = GroupRules { trusted_payees_only: true, large: None };
-        let tiered = GroupRules { trusted_payees_only: false, large: Some(LargePayments { from_zatoshis: 1, approvals: 3 }) };
+        let trusted_only = GroupRules { trusted_payees_only: true, ..GroupRules::default() };
+        let tiered = GroupRules { large: Some(LargePayments { from_zatoshis: 1, approvals: 3 }), ..GroupRules::default() };
         let mut log = GroupLog::default();
         assert!(rules_in_effect(&polls(G, &log, &members(), 2, "bob", 500)).is_none(), "none adopted: no rules");
         log.insert("alice", rec(1, 100, rules_poll("r1", trusted_only.clone())));
@@ -715,7 +754,7 @@ mod tests {
     fn a_poll_proposing_rules_is_refused_unless_well_formed() {
         use crate::rules::{GroupRules, LargePayments};
         assert!(rec(1, 10, rules_poll("r", GroupRules::default())).check().is_ok(), "no rules at all is a valid proposal");
-        let impossible = GroupRules { trusted_payees_only: false, large: Some(LargePayments { from_zatoshis: 0, approvals: 3 }) };
+        let impossible = GroupRules { large: Some(LargePayments { from_zatoshis: 0, approvals: 3 }), ..GroupRules::default() };
         assert!(rec(1, 10, rules_poll("r", impossible)).check().is_err());
         let mut with_payments = rules_poll("r", GroupRules::default());
         if let RecordBody::Poll { payments, .. } = &mut with_payments {

@@ -119,8 +119,10 @@ and skip kinds they don't know.
       threshold members trust its current address.
 - [ ] **Spending limits** — approve automatically up to X per week to trusted
       payees (the approver's app must be open).
-- [ ] **Delay with veto** — large payments announced first and signable only
-      after a delay; any member can veto meanwhile.
+- [x] **Delay with veto** — `GroupRules.delay`; announcements are payment
+      polls, sendable once the delay has passed since each app received them
+      (`GroupLog.received`, `PollView.announced_at`) with no Don't pay vote
+      (`commands::rules::poll_permits`).
 - [x] **Tiered approvals** — `GroupRules.large`; approvers count the signers
       committed in the signing package (`AwaitingApproval.signers`).
 - [ ] **Change members or threshold** — a new group, then move the funds

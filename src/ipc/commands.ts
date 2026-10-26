@@ -574,6 +574,8 @@ export interface PollView {
   details: string;
   options: string[];
   created_at: number;
+  /** When this device learned of it: a rule's delay runs from this. */
+  announced_at?: number;
   closes_at: number;
   closed: boolean;
   /** Each member's current answer, by hex communication key. */
@@ -650,6 +652,9 @@ export interface GroupRules {
   trusted_payees_only?: boolean;
   /** Payments of at least `from_zatoshis` together need `approvals` approvals. */
   large?: { from_zatoshis: number; approvals: number } | null;
+  /** Payments of at least `from_zatoshis` together are announced in a payment
+   *  poll `secs` before they're sent; anyone choosing Don't pay vetoes them. */
+  delay?: { from_zatoshis: number; secs: number } | null;
 }
 /** The rules in effect in a group, and the poll that adopted them. */
 export interface RulesInEffect {

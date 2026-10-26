@@ -42,6 +42,10 @@ breaking changes. Cyze is beta, unaudited software (see the README).
     its address as a payment needs approvals.
   - **Larger payments need more approvals**, for payments over an amount
     together in one transaction.
+  - **Larger payments wait for vetoes:** they're announced in a payment poll
+    (**Announce it** on the send form) and can be sent once the wait has
+    passed with no member choosing Don't pay. Each app counts the wait from
+    when it received the announcement.
   - The sender's app checks the rules before asking anyone, and each
     approver's app checks them again and refuses a payment that breaks them.
     Approvers see which rules a request met.

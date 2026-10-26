@@ -359,6 +359,12 @@ struct PollCheck {
     /// How many members chose "Pay", and how many it takes.
     chose_pay: u32,
     threshold: u32,
+    /// Under a delay rule: how long the payment waits after it's announced,
+    /// and when this device learned of it (unix seconds). The gate already
+    /// refused it if that hasn't passed, or a member vetoed it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    delay_secs: Option<u64>,
+    announced_at: u64,
 }
 
 /// What a wallet signing request carries, as the approval event gives it.
@@ -403,6 +409,8 @@ async fn check_poll(
             declined: false,
             chose_pay: 0,
             threshold: 0,
+            delay_secs: None,
+            announced_at: 0,
         });
     };
     if poll.payments.is_empty() {
@@ -417,6 +425,18 @@ async fn check_poll(
     if !crate::commands::polls::pays_what_was_proposed(network, &poll.payments, tx) {
         return Err("refused to sign: the transaction doesn't make the payments the poll proposed".into());
     }
+    // Under a delay rule, an announcement goes only once its delay has passed
+    // since this device learned of it, with no veto.
+    let rules = crate::commands::rules::in_effect(state, group_id)
+        .await
+        .map_err(|e| format!("refused to sign: couldn't read the group's rules ({})", e.message))?
+        .rules;
+    let total = poll.payments.iter().map(|p| p.amount_zatoshis).sum();
+    let delay = rules.delay_for(total);
+    if delay.is_some() {
+        crate::commands::rules::poll_permits(&rules, &poll, crate::commands::wallet::unix_now())
+            .map_err(|e| format!("refused to sign: {e}"))?;
+    }
     Ok(PollCheck {
         poll_id: poll.poll_id,
         missing: false,
@@ -425,6 +445,8 @@ async fn check_poll(
         declined: poll.agreed == Some(1),
         chose_pay: poll.tally.first().copied().unwrap_or(0),
         threshold: poll.threshold,
+        delay_secs: delay.map(|d| d.secs),
+        announced_at: poll.announced_at,
     })
 }
 
@@ -468,7 +490,9 @@ async fn gate_wallet_request<R: tauri::Runtime>(
             };
             // The group's rules, as this device sees them. Refused if they
             // can't be read: they may forbid it.
-            let rules = match crate::commands::rules::check(&state, group_id, &tx, signers).await {
+            // It carries out an announcement this device has, ready to send.
+            let announced = matches!(&poll, Some(Ok(check)) if !check.missing);
+            let rules = match crate::commands::rules::check(&state, group_id, &tx, signers, announced).await {
                 Ok((_, Err(broken))) => Err(format!("refused to sign: {broken}")),
                 Ok((in_effect, Ok(()))) => Ok((!in_effect.rules.is_empty()).then(|| RulesCheck {
                     trusted_payees_only: in_effect.rules.trusted_payees_only,

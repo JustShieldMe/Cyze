@@ -367,6 +367,17 @@ A group can adopt **rules** for its payments, under **Rules** on Home:
   that isn't a trusted payee.
 - **Larger payments need more approvals.** For example, in a 3-of-5 group,
   payments of 100 ZEC or more (together, in one transaction) need 4 approvals.
+- **Larger payments wait for vetoes.** Payments over an amount have to be
+  announced first, and can be sent only after a wait (an hour to a week) in
+  which no member vetoed them.
+
+With a wait in effect, the send form offers **Announce it** instead of
+**Review payment** for a payment over the amount. That starts a payment poll
+(see [Propose a payment](VOTING.md#propose-a-payment)). Any member can veto it
+by choosing **Don't pay**; nobody has to choose Pay. Once the wait has passed
+with no veto, the member who announced it sends it from **Votes**, with the
+usual approvals. Each member's app counts the wait from when it received the
+announcement, so every member gets the whole wait to object.
 
 To adopt or change them, click **Propose rules**, choose them, and **Ask the
 group**. That starts a poll with **Adopt** and **Don't adopt**; the new rules

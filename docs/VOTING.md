@@ -112,6 +112,14 @@ shows **Paid**, and it can't be sent again.
 If the member who proposed it can't send it (they left, or lost their device),
 ask the group again in a new poll.
 
+**Under a wait rule.** If the group's rules make larger payments wait for
+vetoes ([Rules](USER_GUIDE.md#rules)), a payment poll over the amount is an
+*announcement*. Agreement isn't needed: once the wait has passed with no
+member choosing **Don't pay**, the member who announced it can send it. Any
+single member choosing Don't pay is a veto, and stops it for as long as they
+keep that answer. Each member's app counts the wait from when it received the
+announcement, so a backdated one gains nothing.
+
 ### Propose rules
 
 A poll can also propose the group's **rules** for payments: paying only trusted

@@ -15,6 +15,7 @@ import { useCeremonies } from "../stores/ceremonies";
 import { asNetwork, networkLabel, unit } from "../network";
 import { resolveParticipant } from "../lib/participants";
 import { payeeFor, useMemberName, usePayees } from "../lib/payees";
+import { durationText } from "../lib/rules";
 import { clock, useNow } from "../lib/time";
 
 /** Signer-side ceremony phases, as a human would say them. */
@@ -76,6 +77,10 @@ interface PollCheck {
   declined: boolean;
   chose_pay: number;
   threshold: number;
+  /** Under a delay rule: the wait after it's announced (already checked to
+   *  have passed with no veto), and when this app learned of it. */
+  delay_secs?: number;
+  announced_at?: number;
 }
 
 /** The group's rules a request met (commands::signing::RulesCheck). The
@@ -105,6 +110,16 @@ function PollStatus({ poll, from }: { poll: PollCheck; from: string }) {
           with {from} before approving.
         </span>
       </div>
+    );
+  }
+  if (poll.delay_secs) {
+    const hours = Math.max(1, Math.round((Date.now() / 1000 - (poll.announced_at ?? 0)) / 3_600));
+    return (
+      <p className="ok mb-2">
+        ✓ Announced in “{poll.title}” {hours} {hours === 1 ? "hour" : "hours"} ago, past the group's{" "}
+        {durationText(poll.delay_secs)} wait, and no member vetoed it. The transaction makes exactly the payments it
+        proposed.
+      </p>
     );
   }
   if (poll.agreed) {

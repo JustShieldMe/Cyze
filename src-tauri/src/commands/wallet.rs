@@ -858,9 +858,8 @@ async fn agreed_payment_poll(state: &AppState, group_id: &str, poll_id: &str) ->
     if let Some(txid) = &poll.paid_txid {
         return Err(AppError::new("config", format!("this poll's payment was already sent, in {txid}")));
     }
-    if poll.agreed != Some(0) {
-        return Err(AppError::new("config", "the group hasn't agreed to pay"));
-    }
+    let rules = crate::commands::rules::in_effect(state, group_id).await?;
+    crate::commands::rules::poll_permits(&rules.rules, &poll, unix_now()).map_err(|e| AppError::new("rules", e))?;
     Ok(poll)
 }
 
@@ -1094,7 +1093,11 @@ pub async fn wallet_send<R: tauri::Runtime>(
         &draft.sighash_hex,
         first_alpha,
     )?;
-    if let (_, Err(broken)) = crate::commands::rules::check(&state, &args.group_id, &verified, args.signers.len() as u32).await? {
+    // A poll's payments were checked to be sendable above (agreed_payment_poll).
+    let announced = args.poll_id.is_some();
+    if let (_, Err(broken)) =
+        crate::commands::rules::check(&state, &args.group_id, &verified, args.signers.len() as u32, announced).await?
+    {
         return Err(AppError::new("rules", broken.to_string()));
     }
     // Each Orchard spend is re-randomized with its own α, so each needs its own
