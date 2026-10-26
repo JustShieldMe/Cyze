@@ -1190,6 +1190,13 @@ pub async fn wallet_send<R: tauri::Runtime>(
     let group_id = args.group_id.clone();
     let wallet_dir = wid.clone();
     let pending_key = state.pending_tx_key(&args.group_id).await?;
+    // Recorded in the wallet once sent. A move off the old address was built
+    // from the old wallet, which scanning keeps current.
+    let record = (!args.from_old_address).then(|| wallet::RecordSent {
+        data_dir: state.data_dir.clone(),
+        wallet_id: wid.clone(),
+        db_key: db_key.clone(),
+    });
     // Transaction context fields sent to co-signers (C-1). For a multi-note
     // spend each note is signed in its own FROST session; every one carries the
     // same `plan_id` (the ceremony id) and the shared `tx_sighash` so a
@@ -1352,7 +1359,7 @@ pub async fn wallet_send<R: tauri::Runtime>(
             .await
             .map(|(_, u, _)| u)
             .unwrap_or(url);
-        match wallet::broadcast_signed(&signed_pczt_hex, network, &broadcast_url).await {
+        match wallet::broadcast_signed(&signed_pczt_hex, network, &broadcast_url, record).await {
             Ok(txid) => {
                 wallet::clear_pending_tx(&data_dir, &wallet_dir, network, &ceremony_str);
                 let _ = task_app.emit(
@@ -1409,7 +1416,12 @@ pub async fn wallet_rebroadcast(
     let wid = state.wallet_dir_id(&group_id).await?;
     let key = state.pending_tx_key(&group_id).await?;
     let signed_pczt_hex = wallet::load_pending_tx(&state.data_dir, &wid, network, &ceremony_id, &key)?;
-    let txid = wallet::broadcast_signed(&signed_pczt_hex, network, &url).await?;
+    let record = wallet::RecordSent {
+        data_dir: state.data_dir.clone(),
+        wallet_id: wid.clone(),
+        db_key: state.wallet_db_key(&group_id).await?,
+    };
+    let txid = wallet::broadcast_signed(&signed_pczt_hex, network, &url, Some(record)).await?;
     wallet::clear_pending_tx(&state.data_dir, &wid, network, &ceremony_id);
     Ok(txid)
 }

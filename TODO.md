@@ -237,16 +237,15 @@ and skip kinds they don't know.
 
 ## Wallet (Zcash)
 
-- [ ] **Record our own sends in the wallet** — Cyze builds sends as PCZTs and
-      broadcasts them itself, so the wallet db learns of them only by scanning:
-      as a balance change, without the fee or outputs (`sent_notes` stays
-      empty; compact blocks can't be decrypted with the OVK). History then
-      shows the fee inside the amount and no recipient. The sending device
-      fills these in from its saved send (`withWhatWasSent` in Activity.tsx).
-      Fix: `extract_and_store_transaction_from_pczt` at broadcast (the sender),
-      and for other members either enhancement (fetching full transactions,
-      which tells the server which are the group's) or the details in a group
-      record.
+- [x] **Record our own sends in the wallet** — `broadcast_signed` stores a
+      transaction the network accepted with `extract_and_store_transaction_from_pczt`
+      (`wallet::RecordSent`), so the sender's history has its fee, outputs and
+      memos. Best effort, after broadcast, so a failed broadcast locks nothing.
+- [ ] **Other members' history of a send** — their wallets learn of it only by
+      scanning (compact blocks can't be decrypted with the OVK): a balance
+      change, fee inside the amount, no recipient. Options: enhancement
+      (fetching full transactions, which tells the server which are the
+      group's) or the details in a group record from the sender.
 
 - [x] **Auto-sync polish** — the backend sync service keeps the active wallet
       current, so Home no longer shows a permanent **Sync Now**: it offers

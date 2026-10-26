@@ -180,7 +180,13 @@ async fn a_two_of_two_send_is_verified_signed_and_mined() {
         commands::wallet::wallet_sync_now(alice.clone(), false).await.unwrap();
         tokio::time::sleep(Duration::from_secs(3)).await;
         let history = commands::wallet::wallet_history(alice.clone(), group_id.clone()).await.unwrap();
-        if history.iter().any(|t| t.txid == txid) {
+        if let Some(t) = history.iter().find(|t| t.txid == txid) {
+            // Alice's wallet recorded what it sent: the amount without the
+            // fee, the fee, the recipient and the memo.
+            assert_eq!(t.amount_zatoshis, 50_000_000, "{t:?}");
+            assert!(t.fee_zatoshis.is_some_and(|f| f > 0), "{t:?}");
+            assert_eq!(t.recipient.as_deref(), Some(recipient.as_str()), "{t:?}");
+            assert_eq!(t.memo.as_deref(), Some("cyze end-to-end"), "{t:?}");
             break;
         }
         assert!(started.elapsed() < Duration::from_secs(180), "{txid} never showed up in history");
@@ -247,10 +253,11 @@ async fn a_two_of_two_send_is_verified_signed_and_mined() {
         let history = commands::wallet::wallet_history(alice.clone(), group_id.clone()).await.unwrap();
         if let Some(t) = history.iter().find(|t| t.txid == txid) {
             if s.spendable_zatoshis > 0 && s.spendable_zatoshis == s.total_zatoshis {
-                // The wallet records its own sends as a balance change, without
-                // their fee or outputs (TODO.md), so the amount includes the fee.
+                // Alice's wallet recorded the batch: its total, without the fee,
+                // and every payment.
                 let total: u64 = batch.iter().map(|p| p.amount_zatoshis).sum();
-                assert!(t.amount_zatoshis >= total, "{} < {total}", t.amount_zatoshis);
+                assert_eq!(t.amount_zatoshis, total, "{t:?}");
+                assert_eq!(t.payments.len(), batch.len(), "{t:?}");
                 break;
             }
         }
