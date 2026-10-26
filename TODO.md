@@ -132,8 +132,11 @@ and skip kinds they don't know.
       committed in the signing package (`AwaitingApproval.signers`).
 - [ ] **Change members or threshold** — a new group, then move the funds
       (reusing the viewing-key move, `commands/viewing.rs`).
-- [ ] **Share repair** — a member who lost their device gets a new share from
-      the others (FROST repairable shares), without moving funds.
+- [x] **Share repair** — `core/src/repair.rs` (RTS over a `REPAIR_SESSION`),
+      `commands/repair.rs`; helpers vouch for the new key (`MemberKey`
+      records, `polls::vouched_member_keys`) so other members switch too.
+      Follow-up: share *refresh* (new shares, same key) for a device that may
+      have been stolen.
 - [ ] **Recurring payments** — scheduled payments that still need approval.
 
 ## Voting (protocol / coinholder governance)

@@ -533,7 +533,7 @@ export interface PendingSession {
   session_id: string;
   /** "viewing_key" sessions agree on a group's private viewing key; the app
    *  joins them by itself, so they aren't requests to approve. */
-  kind: "signing" | "viewing_key" | "group_message";
+  kind: "signing" | "viewing_key" | "group_message" | "repair";
   coordinator: string | null;
   coordinator_pubkey: string;
   matching_groups: string[];
@@ -563,6 +563,31 @@ export const listPendingSessions = (serverUrl: string | null) =>
  *  joins by itself). */
 export const signingRequests = (sessions: PendingSession[] | undefined) =>
   (sessions ?? []).filter((s) => s.kind === "signing");
+/** Requests to help repair a member's lost share (commands/repair.rs). */
+export const repairRequests = (sessions: PendingSession[] | undefined) =>
+  (sessions ?? []).filter((s) => s.kind === "repair" && s.matching_groups.length > 0);
+
+/** What a contact code holds, without saving it. */
+export interface ContactCode {
+  name: string;
+  pubkey: string;
+  safety_code: string;
+}
+export const readContact = (text: string) => invoke<ContactCode>("read_contact", { text });
+
+/** Start repairing member `identifier`'s lost share with these helpers (this
+ *  member included). Returns the ceremony and the code for the member's new
+ *  app. */
+export const startRepair = (groupId: string, identifier: string, newContact: string, helpers: string[]) =>
+  invoke<{ ceremony_id: string; code: string }>("start_repair", { groupId, identifier, newContact, helpers });
+/** Help with a repair another member started (approved with respondToSigning). */
+export const joinRepair = (groupId: string, sessionId: string) =>
+  invoke<string>("join_repair", { groupId, sessionId });
+/** What a repair code is for. */
+export const readRepairCode = (code: string) =>
+  invoke<{ group: string; member: string; server: string }>("read_repair_code", { code });
+/** On the repaired member's new device: join the repair and keep the group. */
+export const receiveRepair = (code: string) => invoke<string>("receive_repair", { code });
 
 /** A group poll (see commands/polls.rs). */
 export interface PollView {

@@ -245,3 +245,70 @@ pub async fn until(p: &Pair, group_id: &str, what: &str, done: impl AsyncFn() ->
         tokio::time::sleep(Duration::from_millis(300)).await;
     }
 }
+
+/// A member of a group made by [`group_of`]: their app and communication key.
+pub struct Member {
+    pub user: UserApp,
+    pub pubkey: String,
+}
+
+/// A user with a keystore, the test server configured and trusted: a member's
+/// app, or a new device.
+pub async fn user_on(server: &TestServer, name: &str) -> Member {
+    let user = make_user();
+    let state = user.app.state::<AppState>();
+    commands::keystore::create_keystore(state.clone(), format!("{name}-passphrase")).await.unwrap();
+    let server_url = format!("127.0.0.1:{}", server.port);
+    commands::server::set_server_url(state.clone(), server_url.clone()).await.unwrap();
+    commands::server::trust_server_cert(state.clone(), server_url, server.cert_pem.clone()).await.unwrap();
+    let pubkey = commands::contacts::export_my_contact(state, name.into()).await.unwrap().pubkey;
+    Member { user, pubkey }
+}
+
+/// A `threshold`-of-`names.len()` group of new users who are each other's
+/// contacts, made by key generation with a private viewing key. Returns them,
+/// in `names` order, and the group's id.
+pub async fn group_of(server: &TestServer, names: &[&str], threshold: u16) -> (Vec<Member>, String) {
+    let mut members = Vec::new();
+    for name in names {
+        members.push(user_on(server, name).await);
+    }
+    for (i, a) in members.iter().enumerate() {
+        let state = a.user.app.state::<AppState>();
+        for (j, b) in members.iter().enumerate() {
+            if i != j {
+                let text = commands::contacts::export_my_contact(b.user.app.state::<AppState>(), names[j].into()).await.unwrap().text;
+                commands::contacts::add_contact(state.clone(), text, None).await.unwrap();
+            }
+        }
+    }
+    let server_url = format!("127.0.0.1:{}", server.port);
+    let args = |participants: Vec<String>| commands::dkg::StartDkgArgs {
+        suite: frost_app_core::ciphersuite::Suite::RedPallas,
+        description: "test group".into(),
+        threshold,
+        participants,
+        server_url: Some(server_url.clone()),
+        session_id: None,
+        agree_viewing_key: true,
+    };
+    let others: Vec<String> = members[1..].iter().map(|m| m.pubkey.clone()).collect();
+    commands::dkg::start_dkg(members[0].user.app.handle().clone(), args(others)).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    for m in &members[1..] {
+        commands::dkg::start_dkg(m.user.app.handle().clone(), args(vec![])).await.unwrap();
+    }
+    let mut group_id = String::new();
+    for m in &members {
+        let state = m.user.app.state::<AppState>();
+        for _ in 0..90 {
+            if let Some(g) = commands::groups::list_groups(state.clone()).await.unwrap().first() {
+                group_id = g.id.clone();
+                break;
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+        assert!(!group_id.is_empty(), "key generation didn't complete");
+    }
+    (members, group_id)
+}

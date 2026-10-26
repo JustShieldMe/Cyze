@@ -73,6 +73,17 @@ export default function CeremonyListener() {
   });
   useTauriEvent<CeremonyEventPayload>("dkg:failed", (p) => onFailed("dkg", p));
 
+  // Repairing a member's share (commands/repair.rs): on a helper's app the
+  // group switches to the member's new key, and on the member's new device a
+  // group arrives.
+  useTauriEvent<CeremonyEventPayload>("repair:progress", (p) => onProgress("repair", p));
+  useTauriEvent<CeremonyEventPayload>("repair:complete", (p) => {
+    onComplete("repair", p);
+    queryClient.invalidateQueries({ queryKey: ["groups"] });
+    queryClient.invalidateQueries({ queryKey: ["pending-sessions"] });
+  });
+  useTauriEvent<CeremonyEventPayload>("repair:failed", (p) => onFailed("repair", p));
+
   useTauriEvent<CeremonyEventPayload>("signing:progress", (p) => {
     onProgress("signing", p);
     const auto = (p.event as { auto_limit?: { approved?: boolean } } | undefined)?.auto_limit;

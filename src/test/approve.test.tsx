@@ -255,3 +255,22 @@ test("an approver sees what their app approved by itself within the limit, and w
   });
   await ui.findByText("Not approved automatically: it pays an address that isn't a trusted payee.");
 });
+
+test("a member reviews a request to help repair another's share, and approves it", async () => {
+  const backend = fakeBackend({
+    list_pending_sessions: () => [{ ...request, session_id: "rs1", kind: "repair" }],
+    join_repair: () => "c11",
+    respond_to_signing: () => null,
+  });
+  const ui = await renderApp("/inbox");
+  await ui.findByText("Alice asks you to help repair a member's share in Treasury");
+  fireEvent.click(ui.getByRole("button", { name: "Review request" }));
+  await waitFor(() => expect(backend.calls("join_repair")).toEqual([{ groupId: GROUP_ID, sessionId: "rs1" }]));
+  await emit("repair:progress", {
+    ceremony_id: "c11",
+    event: { phase: "awaiting_approval", member: BOB, new_key: "dd".repeat(32), new_key_safety_code: "11111 22222 33333" },
+  });
+  await ui.findByText("11111 22222 33333");
+  fireEvent.click(ui.getByRole("button", { name: "Approve and help" }));
+  await waitFor(() => expect(backend.calls("respond_to_signing")).toEqual([{ ceremonyId: "c11", approve: true }]));
+});

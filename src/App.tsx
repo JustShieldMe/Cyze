@@ -19,6 +19,7 @@ import {
   listPendingSessions,
   notifyIfAway,
   receiveGroupMessages,
+  repairRequests,
   signingRequests,
 } from "./ipc/commands";
 import CeremonyListener from "./CeremonyListener";
@@ -71,7 +72,7 @@ function Layout() {
     refetchInterval: 10_000,
     retry: false,
   });
-  const pendingCount = signingRequests(pendingSessions.data).length;
+  const pendingCount = signingRequests(pendingSessions.data).length + repairRequests(pendingSessions.data).length;
   const pollsAwaiting = usePollsAwaitingMe();
 
   // A request that arrives while the app is in the background gets a system

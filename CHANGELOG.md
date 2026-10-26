@@ -58,6 +58,12 @@ breaking changes. Cyze is beta, unaudited software (see the README).
 - **Read-only access:** **Share read-only access** on a group's page gives an
   accountant or auditor the viewing key, once you confirm what it reveals. The
   key no longer shows under Keys and addresses.
+- **Share repair:** a member who lost their device and backup gets their share
+  back from as many members as the threshold (FROST's repairable threshold
+  scheme), without moving the funds. **Recover a group** on the new device,
+  **Repair a member's share** on the group's page, approval under Approvals.
+  The rebuilt share is checked against the group's record before it's kept,
+  and the group switches to the member's new key once enough helpers vouch.
 - **Reasons:** say what a payment is for, for the group only.
   - Approvers see it with the request, attributed to the member who asked.
   - Once sent, every member's **Activity** shows it. Any member can add

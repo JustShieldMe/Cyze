@@ -125,6 +125,11 @@ pub enum RecordBody {
     Payee { payee_id: String, name: String, address: String },
     /// The author removing a payee they added.
     PayeeRemoved { payee_id: String },
+    /// The author, having helped repair a member's share
+    /// ([`crate::repair`]), vouching that the member's communication key is
+    /// now `pubkey`. Other members take it once as many members vouch for it as
+    /// a payment needs approvals.
+    MemberKey { identifier: String, pubkey: String },
     /// What a payment was for, as the author tells the group: their latest
     /// for the transaction counts, and an empty one takes theirs back. Never
     /// on chain.
@@ -223,6 +228,12 @@ impl Record {
             RecordBody::PayeeRemoved { payee_id } => {
                 if payee_id.is_empty() || payee_id.len() > 64 {
                     return bad("payee id");
+                }
+            }
+            RecordBody::MemberKey { identifier, pubkey } => {
+                let hex_of = |s: &str, max: usize| !s.is_empty() && s.len() <= max && s.chars().all(|c| c.is_ascii_hexdigit());
+                if !hex_of(identifier, 128) || pubkey.len() != 64 || !hex_of(pubkey, 64) {
+                    return bad("member key");
                 }
             }
             RecordBody::PaymentReason { txid, text } => {
@@ -476,6 +487,33 @@ pub fn polls(group_id: &str, log: &GroupLog, members: &[String], threshold: u32,
     out
 }
 
+/// Members' new communication keys that as many current members as
+/// `threshold` vouch for ([`RecordBody::MemberKey`], each member's latest for
+/// a member counting): identifier (hex) to the key (hex).
+pub fn vouched_member_keys(log: &GroupLog, members: &[String], threshold: u32) -> BTreeMap<String, String> {
+    let current: HashSet<&str> = members.iter().map(String::as_str).collect();
+    // identifier → voucher → key, each voucher's latest.
+    let mut latest: BTreeMap<&str, BTreeMap<&str, &str>> = BTreeMap::new();
+    for (author, records) in log.records.iter().filter(|(a, _)| current.contains(a.as_str())) {
+        for record in records.values().filter(|r| r.check().is_ok()) {
+            if let RecordBody::MemberKey { identifier, pubkey } = &record.body {
+                latest.entry(identifier).or_default().insert(author, pubkey);
+            }
+        }
+    }
+    let mut out = BTreeMap::new();
+    for (identifier, vouchers) in latest {
+        let mut counts: BTreeMap<&str, u32> = BTreeMap::new();
+        for key in vouchers.values() {
+            *counts.entry(key).or_default() += 1;
+        }
+        if let Some((key, _)) = counts.into_iter().find(|(_, n)| threshold > 0 && *n >= threshold) {
+            out.insert(identifier.to_string(), key.to_string());
+        }
+    }
+    out
+}
+
 /// The poll whose rules are in effect: the latest one the group agreed to
 /// adopt. None if the group never adopted any, so it has none.
 pub fn rules_in_effect(polls: &[PollView]) -> Option<&PollView> {
@@ -716,6 +754,20 @@ mod tests {
         assert_eq!((announced("p"), announced("q")), (900, 950));
         assert!(!log.insert_received("alice", rec(1, 100, vote("p", 0)), 2_000), "a duplicate changes nothing");
         assert_eq!(log.received_at("alice", &rec(1, 100, vote("p", 0))), 900);
+    }
+
+    #[test]
+    fn a_members_new_key_counts_once_enough_members_vouch_for_it() {
+        let (new, other) = ("aa".repeat(32), "bb".repeat(32));
+        let vouch = |key: &str| RecordBody::MemberKey { identifier: "03".into(), pubkey: key.into() };
+        let mut log = GroupLog::default();
+        log.insert("alice", rec(1, 10, vouch(&new)));
+        log.insert("mallory", rec(1, 11, vouch(&new)));
+        assert!(vouched_member_keys(&log, &members(), 2).is_empty(), "one member, and an outsider");
+        log.insert("bob", rec(1, 12, vouch(&other)));
+        assert!(vouched_member_keys(&log, &members(), 2).is_empty(), "two members, two keys");
+        log.insert("bob", rec(2, 13, vouch(&new)));
+        assert_eq!(vouched_member_keys(&log, &members(), 2), BTreeMap::from([("03".to_string(), new)]));
     }
 
     fn rules_poll(id: &str, rules: crate::rules::GroupRules) -> RecordBody {

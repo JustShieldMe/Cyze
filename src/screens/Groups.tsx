@@ -2,8 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
+  exportMyContact,
   getIdentity,
   groupOrchardKeys,
+  readContact,
+  readRepairCode,
+  receiveRepair,
+  startRepair,
+  AppError,
   viewingKeyStatus,
   listContacts,
   listGroups,
@@ -18,6 +24,7 @@ import { QRCodeSVG } from "qrcode.react";
 import { resolveParticipant } from "../lib/participants";
 import Contacts from "./Contacts";
 import { KeyRow } from "../wallet/common";
+import { useCeremonies } from "../stores/ceremonies";
 
 function isOrchard(group: GroupSummary): boolean {
   return group.ciphersuite.includes("Pallas");
@@ -113,15 +120,23 @@ function ReadOnlyAccess({ group }: { group: GroupSummary }) {
   );
 }
 
-/** Guided, accurate explanation of FROST's repairable-share recovery, shown in
- *  the group flow so a member knows what to do if they lose their share. */
-function ShareRepairGuide({ group }: { group: GroupSummary }) {
+/** Recovering from a lost share: what protects each member, and repairing a
+ *  member's share with the others' help (FROST's repairable threshold scheme,
+ *  commands/repair.rs). */
+function ShareRepairGuide({
+  group,
+  identity,
+  contacts,
+}: {
+  group: GroupSummary;
+  identity: Identity | undefined;
+  contacts: ContactDto[] | undefined;
+}) {
   const [open, setOpen] = useState(false);
   const t = group.threshold;
   const n = group.num_participants;
-  // Repairing one member's share needs `t` *other* members to help. There are
-  // only n-1 others, so it is possible only when t <= n-1, i.e. t < n. An
-  // m-of-m group (t === n) therefore cannot repair a lost share.
+  // Repairing one member's share needs `t` *other* members, and there are
+  // only n-1, so a t-of-t group can't repair one.
   const repairable = t < n;
 
   return (
@@ -129,138 +144,163 @@ function ShareRepairGuide({ group }: { group: GroupSummary }) {
       <button className="secondary" onClick={() => setOpen((o) => !o)}>
         {open ? "Hide" : "Recovery & share repair"}
       </button>
-
       {open && (
         <div className="mt-3">
-          {repairable ? (
-            <div className="callout">
-              <span>
-                Because this is a <strong>{t}-of-{n}</strong> group, a lost or
-                corrupted share is not fatal. Any <strong>{t}</strong> of the
-                other {n - 1} members can help you regenerate <em>your</em> share
-                — without ever revealing it and without anyone reconstructing the
-                full group key. This is FROST's <em>repairable threshold</em>{" "}
-                scheme.
-              </span>
-            </div>
-          ) : (
-            <div className="callout warn">
-              <span>
-                This is an <strong>{t}-of-{n}</strong> group — every member is
-                required to sign. Repairing one member's share itself needs{" "}
-                <strong>{t}</strong> other members to help, but only {n - 1}{" "}
-                exist, so <strong>a lost share in this group cannot be repaired</strong>.
-                Your only protection against losing a share is your recovery code
-                and a current backup file (Settings → Key backup). If a member permanently
-                loses their share, the group must run a new DKG to form a fresh
-                group.
-              </span>
-            </div>
-          )}
-
-          <h3 className="mt-4">How your recovery options fit together</h3>
           <ul className="guide-list">
             <li>
-              <strong>Forgot your passphrase</strong> but still have this device:
-              use your 12-word recovery code to set a new one.
+              <strong>Forgot your passphrase</strong> but still have this device: use your 12-word recovery code to set
+              a new one.
             </li>
             <li>
-              <strong>Device failure</strong>, but you kept a backup file: on the
-              new device choose <em>Restore from a backup</em>, then unlock with your
-              passphrase or recovery code.
+              <strong>New device, with a backup file:</strong> choose <em>Restore from a backup</em> on it.
             </li>
             <li>
-              <strong>Lost the share entirely</strong> (no device, no backup):{" "}
-              {repairable ? (
-                <>
-                  the group can rebuild it with FROST's repair protocol (below),
-                  but that isn't built into Cyze yet. Until it is, while at least{" "}
-                  {t} members still hold their shares, move the funds to a new group
-                  made with a fresh DKG.
-                </>
-              ) : (
-                <>
-                  this {t}-of-{n} group cannot repair a share — the group would
-                  need to form a new one with a fresh DKG.
-                </>
-              )}
+              <strong>Lost your share entirely</strong> (no device, no backup):{" "}
+              {repairable
+                ? `${t} of the other members can rebuild it on your new device, without moving the funds. Set up Cyze there, then follow Recover a group under Groups.`
+                : `this ${t}-of-${n} group can't repair a share: it would need ${t} other members, and there are ${n - 1}. Keep your recovery code and a backup current; if a share is lost, form a new group and move the funds.`}
             </li>
           </ul>
-
-          {repairable && (
-            <>
-              <h3 className="mt-4">Before you start</h3>
-              <div className="callout">
-                <span>
-                  You'll need: a working install of this app holding this group's
-                  public data (already stored here), at least <strong>{t}</strong>{" "}
-                  other participants online and willing to help, and agreement on
-                  the identifier of the member being repaired.
-                </span>
-              </div>
-
-              <h3 className="mt-4">How repair works (not in the app yet)</h3>
-              <ol className="steps">
-                <li>
-                  <div className="step-title">Choose your helpers</div>
-                  <div className="step-body">
-                    Pick any {t} of the other {n - 1} participants who still have
-                    their shares. They are the “helpers.” Fewer than {t} cannot
-                    repair a share — that is the security threshold working as
-                    intended.
-                  </div>
-                </li>
-                <li>
-                  <div className="step-title">Round 1 — helpers compute repair deltas</div>
-                  <div className="step-body">
-                    Each helper uses their own share to compute a random blinding
-                    value (a “delta”) for every other helper and sends it to them
-                    over an encrypted channel. No delta reveals anything about a
-                    share.
-                  </div>
-                </li>
-                <li>
-                  <div className="step-title">Round 2 — helpers combine into a “sigma”</div>
-                  <div className="step-body">
-                    Each helper sums the deltas they received into a single value
-                    (their “sigma”) and sends it privately to you, the member
-                    being repaired.
-                  </div>
-                </li>
-                <li>
-                  <div className="step-title">Round 3 — you reconstruct your share</div>
-                  <div className="step-body">
-                    Your device combines the {t} sigmas with your identifier and
-                    the group's public commitments to rebuild your secret share
-                    and key package — entirely locally.
-                  </div>
-                </li>
-                <li>
-                  <div className="step-title">Verify</div>
-                  <div className="step-body">
-                    Run a <Link to="/sign">test signing session</Link> with the
-                    group to confirm your repaired share produces valid signatures.
-                  </div>
-                </li>
-              </ol>
-
-              <div className="callout warn mt-4">
-                <span>
-                  <strong>Privacy guarantee:</strong> at no point does any helper
-                  learn your share, and the full group secret is never
-                  reconstructed. Helpers only ever exchange random blinding values.
-                </span>
-              </div>
-            </>
-          )}
-
-          <p className="dim mt-3">
-            The protocol above is FROST's repairable threshold scheme
-            (<span className="code-inline">frost-core</span>). A guided in-app repair
-            ceremony is planned. Until then, keep your recovery code and a current
-            backup file, so a lost device never needs a repair.
-          </p>
+          {repairable && <RepairMember group={group} identity={identity} contacts={contacts} />}
         </div>
+      )}
+    </div>
+  );
+}
+
+/** Repairing another member's lost share: who, their new contact code (its
+ *  safety code compared with them), and the helpers. Shows the repair code to
+ *  hand them, then the repair's progress. */
+function RepairMember({
+  group,
+  identity,
+  contacts,
+}: {
+  group: GroupSummary;
+  identity: Identity | undefined;
+  contacts: ContactDto[] | undefined;
+}) {
+  const me = identity?.pubkey ?? null;
+  const name = (pk: string) => resolveParticipant(pk, identity, contacts).label;
+  const members = Object.entries(group.participants);
+  const [lost, setLost] = useState("");
+  const [contactText, setContactText] = useState("");
+  const [compared, setCompared] = useState(false);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [started, setStarted] = useState<{ ceremony_id: string; code: string } | null>(null);
+  const contact = useQuery({
+    queryKey: ["contact-code", contactText.trim()],
+    queryFn: () => readContact(contactText.trim()),
+    enabled: contactText.trim().length > 20,
+    retry: false,
+  });
+  const lostKey = group.participants[lost];
+  const helpers = new Set([...picked, ...(me ? [me] : [])].filter((pk) => pk !== lostKey));
+  const start = useMutation({
+    mutationFn: () => startRepair(group.id, lost, contactText.trim(), [...helpers]),
+    onSuccess: setStarted,
+  });
+  const ceremony = useCeremonies((s) => (started ? s.ceremonies[started.ceremony_id] : undefined));
+
+  if (started) {
+    const waiting = (ceremony?.detail?.members as string[] | undefined) ?? [];
+    return (
+      <div className="callout block mt-3">
+        <p className="mt-0">
+          Give {name(lostKey)} this repair code, privately. On their new device they paste it under{" "}
+          <strong>Groups → Recover a group</strong>.
+        </p>
+        <KeyRow label="Repair code" value={started.code} />
+        <p className="mb-0 mt-3">
+          {ceremony?.failed ? (
+            <span className="error">{ceremony.error}</span>
+          ) : ceremony?.done ? (
+            <span className="ok">
+              ✓ Repaired: {name(lostKey)}'s new device has their share, and the group uses their new key.
+            </span>
+          ) : ceremony?.phase === "share_sent" ? (
+            <span className="dim">Sent your part. Waiting for {name(lostKey)}'s app to rebuild and check the share…</span>
+          ) : waiting.length ? (
+            <span className="dim">Waiting for {waiting.map((pk) => (pk === contact.data?.pubkey ? name(lostKey) : name(pk))).join(", ")}…</span>
+          ) : (
+            <span className="dim">Waiting for the other helpers to approve, and for {name(lostKey)} to join…</span>
+          )}
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-3">
+      <h3 className="mt-0">Repair a member's share</h3>
+      <p className="dim text-sm">
+        Repair rebuilds the same share on the member's new device. If their device might have been stolen rather than
+        lost, don't repair: whoever has it still holds the share. Form a new group and move the funds instead.
+      </p>
+      <label>Who lost their share?</label>
+      <select value={lost} onChange={(e) => setLost(e.target.value)}>
+        <option value="" disabled>
+          Choose a member
+        </option>
+        {members
+          .filter(([, pk]) => pk !== me)
+          .map(([id, pk]) => (
+            <option key={id} value={id}>
+              {name(pk)}
+            </option>
+          ))}
+      </select>
+      {lost && (
+        <>
+          <label>Their new contact code</label>
+          <textarea
+            rows={2}
+            placeholder="zffrost1… from their new device (Groups → Recover a group)"
+            value={contactText}
+            onChange={(e) => {
+              setContactText(e.target.value);
+              setCompared(false);
+            }}
+          />
+          {contact.isError && <div className="error pull-up">That isn't a contact code.</div>}
+          {contact.data && (
+            <div className="callout block mb-3">
+              <div className="dim text-sm">Safety code of their new key</div>
+              <div className="safety-code">{contact.data.safety_code}</div>
+              <label className="row confirm items-start mb-0">
+                <input type="checkbox" className="w-auto mt-1" checked={compared} onChange={(e) => setCompared(e.target.checked)} />
+                <span>I read this with {name(lostKey)}, in person or on a call, and it matches their screen.</span>
+              </label>
+            </div>
+          )}
+          <label>Helpers ({group.threshold} needed)</label>
+          {members
+            .filter(([id]) => id !== lost)
+            .map(([id, pk]) => (
+              <label key={id} className="member-pick mb-2">
+                <input
+                  type="checkbox"
+                  checked={helpers.has(pk)}
+                  disabled={pk === me}
+                  onChange={(e) => {
+                    const next = new Set(picked);
+                    if (e.target.checked) next.add(pk);
+                    else next.delete(pk);
+                    setPicked(next);
+                  }}
+                />
+                <span>{name(pk)}</span>
+              </label>
+            ))}
+          <p className="dim text-sm">Each helper approves on their own device, and must be online.</p>
+          {start.error && <div className="error">{(start.error as unknown as AppError).message}</div>}
+          <button
+            onClick={() => start.mutate()}
+            disabled={!contact.data || !compared || helpers.size < group.threshold || start.isPending}
+          >
+            {start.isPending ? "Starting…" : "Start repair"}
+          </button>
+        </>
       )}
     </div>
   );
@@ -393,7 +433,7 @@ export function GroupCard({
 
       {isOrchard(group) && <ReadOnlyAccess group={group} />}
 
-      <ShareRepairGuide group={group} />
+      <ShareRepairGuide group={group} identity={identity} contacts={contacts} />
 
       <div className="mt-3">
         <button
@@ -448,6 +488,7 @@ export default function Groups() {
           </Link>
         </div>
       </div>
+      <RecoverGroup />
       {groups.data?.length ? (
         groups.data.map((g) => (
           <Link
@@ -472,6 +513,90 @@ export default function Groups() {
         </div>
       )}
       <Contacts />
+    </div>
+  );
+}
+
+/** On a new device, after losing one: getting a group's share back from its
+ *  other members. Shows this device's contact code to give them, and takes
+ *  the repair code they send back. */
+function RecoverGroup() {
+  const [open, setOpen] = useState(false);
+  const identity = useQuery({ queryKey: ["identity"], queryFn: getIdentity });
+  const myContact = useQuery({
+    queryKey: ["my-contact", identity.data?.username],
+    queryFn: () => exportMyContact(identity.data?.username || "me"),
+    enabled: open && identity.isSuccess,
+  });
+  const [code, setCode] = useState("");
+  const info = useQuery({
+    queryKey: ["repair-code", code.trim()],
+    queryFn: () => readRepairCode(code.trim()),
+    enabled: code.includes("cyzerepair1"),
+    retry: false,
+  });
+  const [ceremonyId, setCeremonyId] = useState<string | null>(null);
+  const ceremony = useCeremonies((s) => (ceremonyId ? s.ceremonies[ceremonyId] : undefined));
+  const recover = useMutation({ mutationFn: () => receiveRepair(code.trim()), onSuccess: setCeremonyId });
+
+  return (
+    <div className="card">
+      <div className="row between items-center">
+        <span>
+          <strong>Lost a device?</strong> <span className="dim">Get your share of a group back from the others.</span>
+        </span>
+        <button className="link-button" onClick={() => setOpen((o) => !o)}>
+          {open ? "Close" : "Recover a group"}
+        </button>
+      </div>
+      {open && (
+        <div className="mt-3">
+          <p className="mt-0">
+            1. Send a member of the group this contact code, and read them its safety code on a call or in person so
+            they know it's you.
+          </p>
+          {myContact.data && (
+            <>
+              <KeyRow label="Your contact code" value={myContact.data.text} />
+              <p className="dim text-sm">
+                Safety code: <span className="code-inline">{myContact.data.safety_code}</span>
+              </p>
+            </>
+          )}
+          <p>2. They start the repair with other members, and send you a repair code. Paste it here:</p>
+          <textarea
+            rows={2}
+            aria-label="Repair code"
+            placeholder="cyzerepair1…"
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+          />
+          {info.isError && <div className="error pull-up">{(info.error as unknown as AppError).message}</div>}
+          {info.data && !ceremonyId && (
+            <>
+              <p>
+                Recover your share in <strong>{info.data.group}</strong>, as {info.data.member}. Keep Cyze open until
+                every helper has approved.
+              </p>
+              {recover.error && <div className="error">{(recover.error as unknown as AppError).message}</div>}
+              <button onClick={() => recover.mutate()} disabled={recover.isPending}>
+                {recover.isPending ? "Joining…" : "Recover"}
+              </button>
+            </>
+          )}
+          {ceremonyId && (
+            <p className="mb-0">
+              {ceremony?.failed ? (
+                <span className="error">{ceremony.error}</span>
+              ) : ceremony?.done ? (
+                <span className="ok">✓ Recovered. The group is below, and its wallet is syncing.</span>
+              ) : (
+                <span className="dim">Waiting for the helpers' parts…</span>
+              )}
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }

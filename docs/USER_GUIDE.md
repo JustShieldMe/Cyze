@@ -112,6 +112,39 @@ then unlock with your passphrase, or with your recovery code if you've forgotten
 it. Without a backup file, the recovery code alone can't bring back a lost
 device's key shares.
 
+### Repairing a lost share
+
+If you lost your device and have no backup, the other members can **repair**
+your share: as many of them as the group's threshold rebuild it on your new
+device, without learning it and without moving the funds. A group where every
+member must approve (2 of 2, 3 of 3) can't repair a share.
+
+**On your new device:**
+1. Set up Cyze (a new keystore), then open **Groups → Recover a group**.
+2. Send a member your **contact code**, and read them its **safety code** on a
+   call or in person, so they know the new key is yours.
+3. Paste the **repair code** they send back and click **Recover**. Keep Cyze
+   open until the helpers have approved; the group then appears under Groups,
+   its wallet syncing from where it started.
+
+**As a helper:**
+1. On the group's page, open **Recovery & share repair → Repair a member's
+   share**, choose the member, and paste their new contact code.
+2. Read its safety code with them and tick that it matches. Choose the helpers
+   (at least the threshold, you included), then **Start repair**, and send the
+   member the repair code it shows.
+3. The other helpers get the request under **Approvals**, with the same safety
+   code to compare, and click **Approve and help**.
+
+Your app checks the rebuilt share against the group's public record of it
+before keeping it. Afterwards the group uses your new key: the helpers' apps at
+once, and the other members' apps once as many helpers vouch for it as a
+payment needs.
+
+**Lost or stolen?** Repair rebuilds the *same* share. If your old device might
+have been stolen, whoever has it still holds the share: don't repair, form a
+new group and move the funds instead.
+
 ---
 
 ## 3. Managing contacts

@@ -708,11 +708,14 @@ pub async fn list_pending_sessions(
         // session is a member of the group: a threshold subset of group A is not
         // a subset of group B unless B contains all of them.
         let session_pubkeys: Vec<&Vec<u8>> = info.pubkeys.iter().map(|p| &p.0).collect();
+        // A repair session also holds the repaired member's new key, which
+        // isn't a member yet: exactly one key outside the group.
+        let repair = info.message_count == frost_app_core::repair::REPAIR_SESSION;
         let matching_groups = groups
             .iter()
             .filter(|(_, members)| {
-                members.contains(&info.coordinator_pubkey.0)
-                    && session_pubkeys.iter().all(|pk| members.contains(pk))
+                let outsiders = session_pubkeys.iter().filter(|pk| !members.contains(pk)).count();
+                members.contains(&info.coordinator_pubkey.0) && outsiders == usize::from(repair)
             })
             .map(|(id, _)| id.clone())
             .collect();
@@ -721,6 +724,7 @@ pub async fn list_pending_sessions(
             kind: match info.message_count {
                 frost_app_core::viewing::NEW_VIEWING_KEY_SESSION => "viewing_key",
                 frost_app_core::polls::GROUP_MESSAGE_SESSION => "group_message",
+                frost_app_core::repair::REPAIR_SESSION => "repair",
                 _ => "signing",
             },
             coordinator,
