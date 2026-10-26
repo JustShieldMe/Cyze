@@ -79,6 +79,11 @@ traffic and sees the same kind of connection details.
 - **Diagnostics log**: kept in memory only, cleared when the app quits, with
   group ids removed.
 - **Backups** are files you save where you choose, encrypted like the keystore.
+- **History exports** (Export CSV) are files you save where you choose, and
+  aren't encrypted: they list the wallet's payments, addresses and memos.
+- **A viewing key you share** (Share read-only access) lets whoever has it see
+  the wallet's balance and every payment, past and future. It can't be taken
+  back.
 
 Anyone who knows a group's id could see the payments of a group created before
 Cyze 0.3, until its members make its viewing key private (see the user guide).

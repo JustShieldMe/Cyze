@@ -37,7 +37,10 @@ The app has five places: **Home**, **Approvals**, **Votes**, **Groups** and
     once. Enter them one by one or paste a list.
   - **Transparent addresses** are detected automatically, with a note that the
     payment will be public.
-  - **Activity** lists payments with their memos and fees.
+  - **Activity** lists payments with their memos and fees, and exports them as
+    CSV for accounting.
+  - **Read-only access:** share the wallet's viewing key with an accountant or
+    auditor, after a plain warning of what it reveals.
   - **Payees:** the group keeps a shared list of the addresses it pays, by
     name. Pick one when sending; approvers and the history show its name.
   - **Pay if agreed:** a group poll can propose payments. Once the group

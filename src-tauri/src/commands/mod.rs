@@ -2,6 +2,7 @@ pub mod about;
 pub mod backup;
 pub mod contacts;
 pub mod dkg;
+pub mod export;
 pub mod groups;
 pub mod invite;
 pub mod keystore;

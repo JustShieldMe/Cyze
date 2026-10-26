@@ -669,6 +669,11 @@ export interface RulesInEffect {
 }
 export const groupRules = (groupId: string) => invoke<RulesInEffect>("group_rules", { groupId });
 
+/** Ask where to save a CSV file, then save it. The path, or null if the
+ *  user cancelled. */
+export const saveCsv = (fileName: string, contents: string) =>
+  invoke<string | null>("save_csv", { fileName, contents });
+
 /** Whether this device approves payments by itself within a group's spending
  *  limit, and what the wallet sent in the limit's period (null if it can't
  *  say until the wallet syncs). */
