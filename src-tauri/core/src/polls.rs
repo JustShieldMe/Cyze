@@ -20,6 +20,15 @@
 //!
 //! One session carries one encrypted message to each recipient, holding every
 //! record sent at once, so a recipient can always decrypt it on its own.
+//!
+//! ## Records from other versions
+//!
+//! Every numbered record a member sends is kept, including kinds this version
+//! doesn't know ([`RecordBody::Unknown`]) and records it can't use (they fail
+//! [`Record::check`], say a newer version allows more options). Only records
+//! that pass the check count. Keeping the rest fills their number, so the
+//! member's later records aren't stuck behind a gap that catching up can never
+//! fill, and a later version reads them from storage as they came.
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -39,6 +48,9 @@ pub const MAX_TITLE: usize = 200;
 pub const MAX_DETAILS: usize = 2_000;
 pub const MAX_OPTION: usize = 100;
 pub const MAX_OPTIONS: usize = 10;
+/// The largest record kept as it came (as JSON). A bigger one is kept without
+/// its contents, which still fills its number.
+pub const MAX_RECORD_BYTES: usize = 16 * 1024;
 
 /// What one member sends the others.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,6 +93,10 @@ pub enum RecordBody {
     Vote { poll_id: String, choice: u32 },
     /// The poll's author closing it early.
     Close { poll_id: String },
+    /// A record of a kind this version doesn't know (from a newer one), or a
+    /// known kind it can't read, kept as it came. Never counts.
+    #[serde(untagged)]
+    Unknown(serde_json::Map<String, serde_json::Value>),
 }
 
 impl Record {
@@ -116,9 +132,36 @@ impl Record {
                     return bad("poll id");
                 }
             }
+            RecordBody::Unknown(_) => return bad("a kind this version of Cyze doesn't know"),
         }
         Ok(())
     }
+
+    /// The record as this device keeps it: as it came, unless it's larger
+    /// than [`MAX_RECORD_BYTES`].
+    pub fn bounded(self) -> Self {
+        let size = serde_json::to_vec(&self).map_or(usize::MAX, |json| json.len());
+        if size <= MAX_RECORD_BYTES {
+            return self;
+        }
+        Record { body: RecordBody::Unknown(serde_json::Map::new()), ..self }
+    }
+}
+
+/// The messages in one decrypted batch. One that doesn't parse (a message
+/// type from a newer version, or a malformed one) is skipped rather than
+/// losing the rest.
+pub fn decode_batch(bytes: &[u8]) -> Result<Vec<Message>, CoreError> {
+    let batch: Vec<serde_json::Value> =
+        serde_json::from_slice(bytes).map_err(|e| CoreError::Ceremony(format!("a malformed group message: {e}")))?;
+    Ok(batch
+        .into_iter()
+        .filter_map(|message| {
+            serde_json::from_value(message)
+                .inspect_err(|e| tracing::debug!("skipped a group message this version can't read: {e}"))
+                .ok()
+        })
+        .collect())
 }
 
 /// A Zcash community vote proposal (`crate::community_vote`) a poll asks the
@@ -211,20 +254,23 @@ pub struct PollView {
 }
 
 /// Work out every poll in a group from its records. Only current members'
-/// records count; a vote counts if it's for an existing option, written before
-/// the poll closed, and the latest of that member's votes on it.
+/// records that pass [`Record::check`] count; a vote counts if it's for an
+/// existing option, written before the poll closed, and the latest of that
+/// member's votes on it.
 pub fn polls(group_id: &str, log: &GroupLog, members: &[String], threshold: u32, me: &str, now: u64) -> Vec<PollView> {
     let members: HashSet<&str> = members.iter().map(String::as_str).collect();
     let current = |author: &String| members.contains(author.as_str());
+    let valid = |r: &&Record| r.check().is_ok();
     let mut out = Vec::new();
     for (author, records) in log.records.iter().filter(|(a, _)| current(a)) {
-        for record in records.values() {
+        for record in records.values().filter(valid) {
             let RecordBody::Poll { poll_id, title, details, options, closes_at, community } = &record.body else {
                 continue;
             };
             // Closed early: the author's first Close for it.
             let closed_at = records
                 .values()
+                .filter(valid)
                 .filter(|r| matches!(&r.body, RecordBody::Close { poll_id: p } if p == poll_id))
                 .map(|r| r.at)
                 .min();
@@ -234,6 +280,7 @@ pub fn polls(group_id: &str, log: &GroupLog, members: &[String], threshold: u32,
                 let latest = theirs
                     .values()
                     .rev()
+                    .filter(valid)
                     .filter(|r| r.at <= ends)
                     .find_map(|r| match &r.body {
                         RecordBody::Vote { poll_id: p, choice } if p == poll_id && (*choice as usize) < options.len() => {
@@ -344,9 +391,7 @@ pub async fn receive(
             if msg.sender != sender {
                 continue;
             }
-            let batch: Vec<Message> = serde_json::from_slice(&msg.msg)
-                .map_err(|e| CoreError::Ceremony(format!("a malformed group message: {e}")))?;
-            messages.extend(batch);
+            messages.extend(decode_batch(&msg.msg)?);
         }
         Ok((sender, messages))
     }
@@ -444,5 +489,80 @@ mod tests {
         let json = serde_json::to_string(&message).unwrap();
         assert_eq!(serde_json::from_str::<Message>(&json).unwrap(), message);
         assert!(json.contains(r#""cyze_poll":"record""#), "{json}");
+    }
+
+    /// What a newer version might send: a kind of record this one doesn't
+    /// know, then a vote, plus a message type it doesn't know.
+    const FROM_A_NEWER_VERSION: &str = r#"[
+        {"cyze_poll":"record","group_id":"group","seq":1,"at":10,"kind":"from_the_future","what":"a kind no version uses"},
+        {"cyze_poll":"record","group_id":"group","seq":2,"at":20,"kind":"vote","poll_id":"p","choice":0},
+        {"cyze_poll":"something_new","group_id":"group"}
+    ]"#;
+
+    #[test]
+    fn a_batch_from_a_newer_version_still_delivers_what_this_version_can_read() {
+        let messages = decode_batch(FROM_A_NEWER_VERSION.as_bytes()).unwrap();
+        assert_eq!(messages.len(), 2, "the unknown message type is skipped, not the batch");
+        let [Message::Record(future), Message::Record(vote)] = messages.as_slice() else { panic!("{messages:?}") };
+        assert!(matches!(future.body, RecordBody::Unknown(_)));
+        assert_eq!(vote.body, RecordBody::Vote { poll_id: "p".into(), choice: 0 });
+    }
+
+    #[test]
+    fn a_record_kind_this_version_doesnt_know_fills_its_number_and_never_counts() {
+        let Message::Record(future) = decode_batch(FROM_A_NEWER_VERSION.as_bytes()).unwrap().remove(0) else {
+            panic!()
+        };
+        assert!(future.check().is_err());
+        let mut log = GroupLog::default();
+        log.insert("alice", rec(2, 20, poll("p", 20, 1_000)));
+        log.insert("alice", future.clone());
+        assert_eq!(log.have().get("alice"), Some(&2), "no gap left to ask for again");
+        assert_eq!(polls(G, &log, &members(), 2, "bob", 500).len(), 1);
+
+        // Stored and read back (or resent after a downgrade), it's unchanged,
+        // so a version that knows the kind reads it as it was written.
+        let stored = serde_json::to_string(&log).unwrap();
+        let back: GroupLog = serde_json::from_str(&stored).unwrap();
+        assert_eq!(back, log);
+        let original: serde_json::Value = serde_json::from_str(FROM_A_NEWER_VERSION).unwrap();
+        let mut resent = serde_json::to_value(Message::Record(back.own_after("alice", 0)[0].clone())).unwrap();
+        resent.as_object_mut().unwrap().remove("cyze_poll");
+        let mut sent = original[0].clone();
+        sent.as_object_mut().unwrap().remove("cyze_poll");
+        assert_eq!(resent, sent);
+    }
+
+    #[test]
+    fn a_record_this_version_cant_use_fills_its_number_and_never_counts() {
+        let mut too_many = poll("q", 10, 1_000);
+        if let RecordBody::Poll { options, .. } = &mut too_many {
+            *options = (0..MAX_OPTIONS + 1).map(|i| i.to_string()).collect();
+        }
+        let bad_vote = r#"[{"cyze_poll":"record","group_id":"group","seq":3,"at":30,"kind":"vote","poll_id":"p","choice":"yes"}]"#;
+        let Message::Record(bad_vote) = decode_batch(bad_vote.as_bytes()).unwrap().remove(0) else { panic!() };
+        let mut log = GroupLog::default();
+        log.insert("alice", rec(1, 10, poll("p", 10, 1_000)));
+        log.insert("alice", rec(2, 20, too_many));
+        log.insert("alice", bad_vote);
+        log.insert("alice", rec(4, 40, vote("p", 1)));
+        assert_eq!(log.have().get("alice"), Some(&4));
+        let shown = polls(G, &log, &members(), 2, "alice", 500);
+        assert_eq!(shown.iter().map(|p| p.poll_id.as_str()).collect::<Vec<_>>(), ["p"]);
+        assert_eq!(shown[0].tally, vec![0, 1], "the unreadable vote doesn't count; the next one does");
+    }
+
+    #[test]
+    fn an_oversized_record_is_kept_without_its_contents() {
+        let mut big = serde_json::Map::new();
+        big.insert("kind".into(), "from_the_future".into());
+        big.insert("what".into(), "x".repeat(MAX_RECORD_BYTES).into());
+        let kept = rec(5, 50, RecordBody::Unknown(big)).bounded();
+        assert_eq!((kept.seq, kept.at), (5, 50));
+        assert_eq!(kept.body, RecordBody::Unknown(serde_json::Map::new()));
+        let back: Record = serde_json::from_str(&serde_json::to_string(&kept).unwrap()).unwrap();
+        assert_eq!(back, kept);
+        let small = rec(1, 10, vote("p", 0));
+        assert_eq!(small.clone().bounded(), small);
     }
 }

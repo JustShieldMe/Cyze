@@ -6,42 +6,11 @@ mod common;
 
 use std::time::{Duration, Instant};
 
-use common::{dkg, pair, start_server, UserApp};
+use common::{dkg, pair, polls_of, start_server, until};
 use frost_app_core::ciphersuite::Suite;
 use frost_app_lib::commands;
 use frost_app_lib::state::AppState;
 use tauri::Manager;
-
-/// Read every group-message session waiting for `user`, as the interface's
-/// auto-join does. Returns how many it read.
-async fn pump(user: &UserApp, group_id: &str) -> usize {
-    let state = user.app.state::<AppState>();
-    let mut read = 0;
-    for s in commands::signing::list_pending_sessions(state.clone(), None).await.unwrap() {
-        if s.kind == "group_message" {
-            commands::polls::receive_group_messages(user.app.handle().clone(), group_id.to_string(), s.session_id)
-                .await
-                .unwrap();
-            read += 1;
-        }
-    }
-    read
-}
-
-async fn polls_of(user: &UserApp) -> Vec<frost_app_core::polls::PollView> {
-    commands::polls::list_polls(user.app.state::<AppState>(), None).await.unwrap()
-}
-
-/// Pump both apps until `done` says so.
-async fn until(p: &common::Pair, group_id: &str, what: &str, done: impl AsyncFn() -> bool) {
-    let started = Instant::now();
-    while !done().await {
-        pump(&p.alice, group_id).await;
-        pump(&p.bob, group_id).await;
-        assert!(started.elapsed() < Duration::from_secs(30), "{what}");
-        tokio::time::sleep(Duration::from_millis(300)).await;
-    }
-}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn members_poll_each_other() {

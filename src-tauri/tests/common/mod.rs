@@ -4,7 +4,7 @@
 #![allow(dead_code)] // each test binary uses a different subset
 
 use std::process::{Child, Command};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use frost_app_lib::commands;
 use frost_app_lib::state::AppState;
@@ -213,4 +213,35 @@ pub async fn wait_until_private(state: &tauri::State<'_, AppState>, group_id: &s
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
     panic!("the group's viewing key never became private");
+}
+
+/// Read every group-message session waiting for `user`, as the interface's
+/// auto-join does. Returns how many it read.
+pub async fn pump(user: &UserApp, group_id: &str) -> usize {
+    let state = user.app.state::<AppState>();
+    let mut read = 0;
+    for s in commands::signing::list_pending_sessions(state.clone(), None).await.unwrap() {
+        if s.kind == "group_message" {
+            commands::polls::receive_group_messages(user.app.handle().clone(), group_id.to_string(), s.session_id)
+                .await
+                .unwrap();
+            read += 1;
+        }
+    }
+    read
+}
+
+pub async fn polls_of(user: &UserApp) -> Vec<frost_app_core::polls::PollView> {
+    commands::polls::list_polls(user.app.state::<AppState>(), None).await.unwrap()
+}
+
+/// Pump both apps until `done` says so.
+pub async fn until(p: &Pair, group_id: &str, what: &str, done: impl AsyncFn() -> bool) {
+    let started = Instant::now();
+    while !done().await {
+        pump(&p.alice, group_id).await;
+        pump(&p.bob, group_id).await;
+        assert!(started.elapsed() < Duration::from_secs(30), "{what}");
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
 }

@@ -338,7 +338,9 @@ pub async fn receive_group_messages<R: Runtime>(app: AppHandle<R>, group_id: Str
     let mut resend_after = None;
     for message in messages {
         match message {
-            Message::Record(record) if record.group_id == group_id && record.check().is_ok() => records.push(record),
+            // Kept even when this version can't use it (see `polls` on records
+            // from other versions): only records that pass the check count.
+            Message::Record(record) if record.group_id == group_id && record.seq > 0 => records.push(record.bounded()),
             Message::SyncRequest { group_id: g_id, have } if g_id == group_id => {
                 resend_after = Some(have.get(&me).copied().unwrap_or(0));
             }
@@ -349,7 +351,7 @@ pub async fn receive_group_messages<R: Runtime>(app: AppHandle<R>, group_id: Str
         .update_polls(&group_id, |log| {
             let mut new_polls = 0;
             for record in records {
-                let is_poll = matches!(record.body, RecordBody::Poll { .. });
+                let is_poll = matches!(record.body, RecordBody::Poll { .. }) && record.check().is_ok();
                 if log.insert(&author, record) && is_poll {
                     new_polls += 1;
                 }
