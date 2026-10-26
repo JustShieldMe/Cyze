@@ -125,6 +125,23 @@ pub enum RecordBody {
     Payee { payee_id: String, name: String, address: String },
     /// The author removing a payee they added.
     PayeeRemoved { payee_id: String },
+    /// A payment the author schedules to repeat ([`crate::schedules`]): their
+    /// app starts each one when it's due, and it's approved like any other.
+    Schedule {
+        schedule_id: String,
+        payments: Vec<ProposedPayment>,
+        #[serde(default)]
+        reason: String,
+        every: crate::schedules::Every,
+        /// The first payment's date (unix seconds).
+        first_due: u64,
+        /// Who to ask to approve each (hex communication keys).
+        signers: Vec<String>,
+    },
+    /// The author stopping a schedule of theirs.
+    ScheduleStopped { schedule_id: String },
+    /// The author's app sent a schedule's payment due at `due`, in `txid`.
+    ScheduleRun { schedule_id: String, due: u64, txid: String },
     /// The author, having helped repair a member's share
     /// ([`crate::repair`]), vouching that the member's communication key is
     /// now `pubkey`. Other members take it once as many members vouch for it as
@@ -228,6 +245,39 @@ impl Record {
             RecordBody::PayeeRemoved { payee_id } => {
                 if payee_id.is_empty() || payee_id.len() > 64 {
                     return bad("payee id");
+                }
+            }
+            RecordBody::Schedule { schedule_id, payments, reason, every, signers, .. } => {
+                if schedule_id.is_empty() || schedule_id.len() > 64 {
+                    return bad("schedule id");
+                }
+                if payments.is_empty() || payments.len() > MAX_PROPOSED_PAYMENTS || reason.chars().count() > MAX_REASON {
+                    return bad("scheduled payments");
+                }
+                for p in payments {
+                    let address = &p.recipient;
+                    if address.is_empty() || address.len() > MAX_ADDRESS || !address.chars().all(|c| c.is_ascii_alphanumeric()) {
+                        return bad("a scheduled payment's address");
+                    }
+                    if p.amount_zatoshis == 0 || p.amount_zatoshis > MAX_ZATOSHIS || p.memo.as_ref().is_some_and(|m| m.len() > 512) {
+                        return bad("a scheduled payment");
+                    }
+                }
+                if !every.is_valid() || signers.is_empty() || signers.len() > 64 || signers.iter().any(|s| s.len() != 64) {
+                    return bad("schedule");
+                }
+            }
+            RecordBody::ScheduleStopped { schedule_id } => {
+                if schedule_id.is_empty() || schedule_id.len() > 64 {
+                    return bad("schedule id");
+                }
+            }
+            RecordBody::ScheduleRun { schedule_id, txid, .. } => {
+                if schedule_id.is_empty() || schedule_id.len() > 64 {
+                    return bad("schedule id");
+                }
+                if txid.len() != 64 || !txid.chars().all(|c| c.is_ascii_hexdigit()) {
+                    return bad("transaction id");
                 }
             }
             RecordBody::MemberKey { identifier, pubkey } => {

@@ -137,7 +137,14 @@ and skip kinds they don't know.
       records, `polls::vouched_member_keys`) so other members switch too.
       Follow-up: share *refresh* (new shares, same key) for a device that may
       have been stolen.
-- [ ] **Recurring payments** — scheduled payments that still need approval.
+- [x] **Recurring payments** — `Schedule`/`ScheduleStopped`/`ScheduleRun`
+      records, worked out by `core/src/schedules.rs` (calendar months, 3-day
+      grace, missed dates); `commands/schedules.rs`; the author's app starts
+      each due payment (`src/Scheduler.tsx`, once per date via
+      `scheduleStarts`) through `wallet_send`, so approvers' rules and
+      automatic approval apply unchanged. Follow-up: approvers' apps could
+      recognise a payment matching a schedule they've seen, and a scheduled
+      payment over a delay rule could be announced automatically.
 
 ## Voting (protocol / coinholder governance)
 

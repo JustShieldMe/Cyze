@@ -77,7 +77,11 @@ It covers the whole lifecycle:
   history);
 - payments that each approver's app verifies before they approve;
 - a shared list of the group's payees, and reasons on payments, that every
-  member sees.
+  member sees;
+- batch, scheduled and poll-approved payments, under rules the group adopts
+  (trusted payees, more approvals or a wait for larger payments, automatic
+  approval within a limit);
+- accounting export, read-only access, and repairing a member's lost share.
 
 It supports NU6.3 (Ironwood) and NU7, which mainnet activates at block
 3,543,405 (around November 5, 2026).
@@ -439,6 +443,42 @@ Rules are enforced by each member's app, not on chain: Zcash has no contracts
 for shielded funds. They stop a careless approval, a swapped address or one
 compromised device. They can't stop as many members as a payment needs
 acting together, who could change the rules or run apps that ignore them.
+
+### Scheduled payments
+
+**Scheduled payments** on Home repeat a payment, like payroll or rent. Click
+**Schedule a payment**, then fill in:
+
+- the payments (one or several, as in a batch);
+- an optional reason;
+- how often it repeats (every week, two weeks, month, three months or year);
+- the date of the first payment;
+- who approves each one.
+
+Every member sees the schedule, with its next date, who approves, and when it
+was last sent.
+
+On each date, around midday, your app asks the approvers, exactly as if you'd
+sent the payment yourself. Approvers see it as an ordinary request, with the
+reason starting "Scheduled:", and each one's app checks it against the group's
+rules. Within a spending limit, members who turned on automatic approval have
+their app approve payments to trusted payees by itself. With a limit, trusted
+payees and enough members approving automatically, a schedule pays without
+anyone clicking.
+
+Your app has to be open and unlocked around each date. A payment more than 3
+days late is skipped, not sent late, and the schedule says which dates it
+skipped. Only one payment from a wallet runs at a time, so a scheduled one
+waits for any payment in progress. One that fails, for example because
+approvals didn't arrive in time, isn't asked again by itself: use **Ask again**
+on Home. One that couldn't start, say because the wallet was still syncing, is
+tried again a few minutes later.
+
+A monthly schedule pays on the same day each month, or the month's last day
+when it's shorter. Only the member who made a schedule can stop it (**Stop**);
+payments already sent stay sent. A schedule can't make a payment the group's
+rules would hold for vetoes, and Cyze refuses one the rules would refuse when
+you make it.
 
 ### Accounting export and read-only access
 

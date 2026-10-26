@@ -21,6 +21,7 @@ pub mod redact;
 pub mod repair;
 pub mod rules;
 pub mod safety;
+pub mod schedules;
 pub mod sealed;
 pub mod signing;
 pub mod tls;

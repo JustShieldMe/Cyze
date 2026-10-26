@@ -299,7 +299,7 @@ async fn check_proposed_rules(
 /// Payments a new poll proposes, checked as a send would check them: each to
 /// an address on the configured network, for more than nothing. Memos are
 /// trimmed, and dropped for transparent addresses, as a send does.
-fn proposed_payments(state: &AppState, payments: Vec<ProposedPayment>) -> AppResult<Vec<ProposedPayment>> {
+pub(crate) fn proposed_payments(state: &AppState, payments: Vec<ProposedPayment>) -> AppResult<Vec<ProposedPayment>> {
     if payments.len() > polls::MAX_PROPOSED_PAYMENTS {
         return Err(AppError::new("config", format!("a poll proposes up to {} payments", polls::MAX_PROPOSED_PAYMENTS)));
     }

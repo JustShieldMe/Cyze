@@ -14,7 +14,7 @@ import {
 import { unit } from "../network";
 import { resolveParticipant } from "../lib/participants";
 import { clock, useNow } from "../lib/time";
-import { useCeremonies, type CeremonyState, type SendMeta } from "../stores/ceremonies";
+import { scheduleKey, useCeremonies, type CeremonyState, type SendMeta } from "../stores/ceremonies";
 
 import { zec, KeyRow } from "./common";
 
@@ -59,6 +59,9 @@ export async function requestApprovals(meta: SendMeta): Promise<string> {
     sighashHex: started.sighash_hex,
     closesAtMs: started.closes_at_ms,
   });
+  if (meta.schedule) {
+    useCeremonies.getState().recordScheduleStart(scheduleKey(meta.schedule.id, meta.schedule.due), started.ceremony_id);
+  }
   return started.ceremony_id;
 }
 
