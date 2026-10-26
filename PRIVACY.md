@@ -81,6 +81,9 @@ traffic and sees the same kind of connection details.
 - **Backups** are files you save where you choose, encrypted like the keystore.
 - **History exports** (Export CSV) are files you save where you choose, and
   aren't encrypted: they list the wallet's payments, addresses and memos.
+- **Repairing a share** sends the repaired member's new device the group's
+  public data and its viewing seed, end-to-end encrypted through the
+  coordination server, from each helper.
 - **A viewing key you share** (Share read-only access) lets whoever has it see
   the wallet's balance and every payment, past and future. It can't be taken
   back.

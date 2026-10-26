@@ -4,7 +4,7 @@ import { encryptedStorage } from "./encryptedStorage";
 import { liveCeremonies, type CreateInviteArgs } from "../ipc/commands";
 import { useKeystore } from "./keystore";
 
-export type CeremonyKind = "dkg" | "signing" | "send";
+export type CeremonyKind = "dkg" | "signing" | "send" | "repair";
 
 export interface CeremonyEventPayload {
   ceremony_id: string;

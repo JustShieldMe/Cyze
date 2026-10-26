@@ -391,7 +391,7 @@ pub(crate) struct SessionIo<'a> {
 }
 
 impl SessionIo<'_> {
-    async fn send_to(&mut self, recipients: &[PublicKey], bytes: &[u8]) -> Result<(), CoreError> {
+    pub(crate) async fn send_to(&mut self, recipients: &[PublicKey], bytes: &[u8]) -> Result<(), CoreError> {
         for pk in recipients {
             let msg = self.cipher.encrypt(Some(pk), bytes.to_vec()).map_err(|e| CoreError::Crypto(e.to_string()))?;
             self.client.send(&api::SendArgs { session_id: self.session_id, recipients: vec![pk.clone()], msg }).await?;
@@ -400,7 +400,7 @@ impl SessionIo<'_> {
     }
 
     /// Wait for more messages (or cancellation).
-    async fn receive_more(&mut self) -> Result<(), CoreError> {
+    pub(crate) async fn receive_more(&mut self) -> Result<(), CoreError> {
         let r = self.client.receive(&api::ReceiveArgs { session_id: self.session_id, as_coordinator: false }).await?;
         if r.msgs.is_empty() {
             tokio::select! {

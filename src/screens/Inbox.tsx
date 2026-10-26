@@ -2,14 +2,20 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   getIdentity,
+  joinRepair,
   joinSigningSession,
   listContacts,
   listGroups,
   listPendingSessions,
+  repairRequests,
   signingRequests,
   respondToSigning,
   AppError,
   ApprovalWindow,
+  ContactDto,
+  GroupSummary,
+  Identity,
+  PendingSession,
 } from "../ipc/commands";
 import { useCeremonies } from "../stores/ceremonies";
 import { asNetwork, networkLabel, unit } from "../network";
@@ -304,6 +310,85 @@ function VerifiedSummary({
   );
 }
 
+/** A request to help repair a member's lost share: the member, their new
+ *  key's safety code to compare with them, then approve or decline. */
+function RepairRequest({
+  session,
+  groups,
+  identity,
+  contacts,
+}: {
+  session: PendingSession;
+  groups: GroupSummary[] | undefined;
+  identity: Identity | undefined;
+  contacts: ContactDto[] | undefined;
+}) {
+  const { ceremonies, joinedSessions, recordJoin } = useCeremonies();
+  const [error, setError] = useState<string | null>(null);
+  const ceremonyId = joinedSessions[session.session_id];
+  const ceremony = ceremonyId ? ceremonies[ceremonyId] : undefined;
+  const detail = (ceremony?.detail ?? {}) as { member?: string; new_key_safety_code?: string };
+  const group = groups?.find((g) => g.id === session.matching_groups[0]);
+  const name = (pk: string) => resolveParticipant(pk, identity, contacts).label;
+  const from = name(session.coordinator_pubkey);
+  const act = async (f: () => Promise<unknown>) => {
+    setError(null);
+    try {
+      await f();
+    } catch (e) {
+      setError((e as AppError).message ?? String(e));
+    }
+  };
+  return (
+    <div className="card">
+      <h3 className="m-0">
+        {from} asks you to help repair a member's share{group ? ` in ${group.description || "a group"}` : ""}
+      </h3>
+      {!ceremony && (
+        <div className="row mt-3">
+          <button
+            onClick={() =>
+              act(async () => recordJoin(session.session_id, await joinRepair(session.matching_groups[0], session.session_id)))
+            }
+          >
+            Review request
+          </button>
+        </div>
+      )}
+      {ceremony?.phase === "awaiting_approval" && detail.member && (
+        <div className="mt-3">
+          <p className="mt-0">
+            <strong>{name(detail.member)}</strong> lost their share and has set up a new device. Helping rebuilds the
+            share there, and the group will use their new key.
+          </p>
+          <div className="callout block">
+            <div className="dim text-sm">Safety code of their new key</div>
+            <div className="safety-code">{detail.new_key_safety_code}</div>
+            <div className="dim text-sm">
+              Only help if you've read this with {name(detail.member)}, in person or on a call, and it matches. If their
+              old device might have been stolen, decline: the group should move its funds instead.
+            </div>
+          </div>
+          <div className="row mt-3">
+            <button onClick={() => act(() => respondToSigning(ceremonyId, true))}>Approve and help</button>
+            <button className="danger" onClick={() => act(() => respondToSigning(ceremonyId, false))}>
+              Decline
+            </button>
+          </div>
+        </div>
+      )}
+      {ceremony && !ceremony.done && !ceremony.failed && ceremony.phase !== "awaiting_approval" && (
+        <p className="dim mt-3 mb-0">
+          {ceremony.phase === "share_sent" ? "Sent your part. Waiting for their app to check it…" : "Working…"}
+        </p>
+      )}
+      {ceremony?.done && <p className="ok mt-3 mb-0">✓ Repaired. The group uses their new key now.</p>}
+      {ceremony?.failed && <p className="error mt-3 mb-0">{ceremony.error}</p>}
+      {error && <div className="error">{error}</div>}
+    </div>
+  );
+}
+
 export default function Inbox() {
   const groups = useQuery({ queryKey: ["groups"], queryFn: listGroups });
   const identity = useQuery({ queryKey: ["identity"], queryFn: getIdentity });
@@ -350,7 +435,11 @@ export default function Inbox() {
       )}
       {error && <div className="error">{error}</div>}
 
-      {signingRequests(sessions.data).length ? (
+      {repairRequests(sessions.data).map((s) => (
+        <RepairRequest key={s.session_id} session={s} groups={groups.data} identity={identity.data} contacts={contacts.data} />
+      ))}
+
+      {signingRequests(sessions.data).length || repairRequests(sessions.data).length ? (
         signingRequests(sessions.data).map((s) => {
           const ceremonyId = joinedSessions[s.session_id];
           const ceremony = ceremonyId ? ceremonies[ceremonyId] : undefined;

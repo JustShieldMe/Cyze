@@ -383,7 +383,7 @@ pub(crate) async fn write<R: Runtime>(app: &AppHandle<R>, group_id: &str, body: 
 }
 
 /// Send this device's undelivered records to the other members.
-async fn deliver<R: Runtime>(app: &AppHandle<R>, group_id: &str) -> AppResult<()> {
+pub(crate) async fn deliver<R: Runtime>(app: &AppHandle<R>, group_id: &str) -> AppResult<()> {
     let state = app.state::<AppState>();
     let g = group(&state, group_id).await?;
     let me = hex::encode(&g.me.0);
@@ -465,6 +465,12 @@ pub async fn receive_group_messages<R: Runtime>(app: AppHandle<R>, group_id: Str
         })
         .await?;
     updated(&app, &group_id, new_polls);
+    // Members' new keys after a repair, once enough members vouch for them.
+    match crate::commands::repair::apply_vouched_keys(&state, &group_id).await {
+        Ok(true) => tracing::info!("switched to a repaired member's new key"),
+        Ok(false) => {}
+        Err(e) => tracing::warn!("couldn't apply a repaired member's new key: {}", e.message),
+    }
 
     // They're catching up: resend what they lack of ours, to them alone.
     if let Some(after) = resend_after {

@@ -20,6 +20,25 @@ pub struct ContactDto {
     pub verified: bool,
 }
 
+/// What a contact code holds, without saving it: its name, key and safety
+/// code, to compare with its owner.
+#[derive(Serialize)]
+pub struct ContactCode {
+    pub name: String,
+    pub pubkey: String,
+    pub safety_code: String,
+}
+
+#[tauri::command]
+pub async fn read_contact(text: String) -> AppResult<ContactCode> {
+    let contact = frost_app_core::config::contact_from_text(&text)?;
+    Ok(ContactCode {
+        name: contact.name.clone(),
+        pubkey: hex::encode(&contact.pubkey.0),
+        safety_code: frost_app_core::safety::safety_code(&contact.pubkey.0),
+    })
+}
+
 #[tauri::command]
 pub async fn list_contacts(state: State<'_, AppState>) -> AppResult<Vec<ContactDto>> {
     let private = state.load_private().await?;
