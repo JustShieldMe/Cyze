@@ -421,7 +421,7 @@ function DevnetPanel({
               <>
                 <br />
                 Install it (Linux / macOS, needs Docker), then run{" "}
-                <span className="code-inline">thus-spoke-zakura</span>:
+                <span className="code-inline">ths start</span>:
                 <span className="row gap-2 mt-2 items-center">
                   <code className="mono devnet-cmd">{INSTALL_CMD}</code>
                   <button className="secondary" onClick={copyInstall}>
