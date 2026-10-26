@@ -6,6 +6,20 @@ breaking changes. Cyze is beta, unaudited software (see the README).
 
 ## [Unreleased]
 
+## [0.3.0-rc.3] — 2026-10-26
+
+Release candidate for 0.3.0. It replaces 0.3.0-rc.2, which wasn't published.
+It adds group coordination: votes, payees, batch and scheduled payments,
+payments agreed by poll, group rules, accounting export, share repair, and
+changing members or threshold.
+
+**Upgrade before NU7.** Mainnet activates NU7 at block 3,543,405 (around
+November 5, 2026). After that, earlier versions can't send on mainnet.
+
+**Upgrade together.** Polls, payees, rules and schedules reach only members on
+this version, and only apps on this version apply the group's rules when
+asked to approve.
+
 ### Added
 - **Votes**, a fifth place in the sidebar:
   - **Group polls:** any member asks the group a question, and an option counts
