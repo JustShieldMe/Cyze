@@ -1,6 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useTauriEvent } from "./ipc/events";
 import { notifyIfAway, SyncStatus, walletSyncNow } from "./ipc/commands";
+import { useRecordRun } from "./Scheduler";
 import { useCeremonies, CeremonyEventPayload } from "./stores/ceremonies";
 
 /**
@@ -17,6 +18,7 @@ import { useCeremonies, CeremonyEventPayload } from "./stores/ceremonies";
 export default function CeremonyListener() {
   const queryClient = useQueryClient();
   const { onProgress, onComplete, onFailed } = useCeremonies();
+  const recordRun = useRecordRun();
 
   /**
    * A ceremony just moved funds. Re-read the wallet panels from the local db at
@@ -60,6 +62,8 @@ export default function CeremonyListener() {
     queryClient.invalidateQueries({ queryKey: ["payment-reasons", group_id] });
     queryClient.invalidateQueries({ queryKey: ["group-rules", group_id] });
     queryClient.invalidateQueries({ queryKey: ["auto-approval", group_id] });
+    queryClient.invalidateQueries({ queryKey: ["schedules", group_id] });
+    queryClient.invalidateQueries({ queryKey: ["due-schedules"] });
     if (new_polls > 0) notifyIfAway("A new poll in one of your groups.");
   });
 
@@ -104,6 +108,8 @@ export default function CeremonyListener() {
     onComplete("send", p);
     refreshWallet();
     notifyIfAway("Your payment was approved and sent.");
+    const sent = useCeremonies.getState().ceremonies[p.ceremony_id];
+    if (sent?.send?.schedule && sent.txid) void recordRun(sent.send.groupId, sent.send.schedule, sent.txid);
   });
   useTauriEvent<CeremonyEventPayload>("send:failed", (p) => {
     onFailed("send", p);

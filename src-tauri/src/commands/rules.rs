@@ -227,12 +227,24 @@ pub(crate) async fn check(
     asked: u32,
     announced: bool,
 ) -> AppResult<(RulesInEffect, Result<(), Broken>)> {
+    let payments: Vec<(&str, u64)> = tx.payments.iter().map(|p| (p.address.as_str(), p.value_zatoshis)).collect();
+    check_payments(state, group_id, &payments, asked, announced).await
+}
+
+/// [`check`] for payments by address and amount, the addresses as a verified
+/// payment to them reads ([`frost_app_core::wallet::verify::address_forms`]).
+pub(crate) async fn check_payments(
+    state: &AppState,
+    group_id: &str,
+    payments: &[(&str, u64)],
+    asked: u32,
+    announced: bool,
+) -> AppResult<(RulesInEffect, Result<(), Broken>)> {
     let rules = in_effect(state, group_id).await?;
     let trusted: Vec<Vec<String>> =
         payees_in(state, group_id).await?.into_iter().filter(|p| p.payee.trusted).map(|p| p.forms).collect();
-    let payments: Vec<(&str, u64)> = tx.payments.iter().map(|p| (p.address.as_str(), p.value_zatoshis)).collect();
     let is_trusted = |address: &str| trusted.iter().any(|forms| forms.iter().any(|f| f == address));
-    let verdict = rules.rules.check(&payments, asked, rules.threshold, is_trusted, announced);
+    let verdict = rules.rules.check(payments, asked, rules.threshold, is_trusted, announced);
     Ok((rules, verdict))
 }
 

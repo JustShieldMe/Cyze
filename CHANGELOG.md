@@ -53,6 +53,15 @@ breaking changes. Cyze is beta, unaudited software (see the README).
   - The sender's app checks the rules before asking anyone, and each
     approver's app checks them again and refuses a payment that breaks them.
     Approvers see which rules a request met.
+- **Scheduled payments:** **Schedule a payment** on Home repeats payments
+  weekly, monthly or yearly, approved by the members you pick.
+  - On each date your app asks the approvers like any other payment. With a
+    spending limit, members' apps can approve payments to trusted payees by
+    themselves, so a schedule can run without anyone clicking.
+  - Your app has to be open around each date: a payment more than 3 days late
+    is skipped, and the schedule shows it.
+  - Every member sees the schedule and when it was last sent. Only its author
+    can stop it.
 - **Accounting export:** **Export CSV** on Activity saves the history, one row
   per payment, with fees, payees, memos, reasons and who signed.
 - **Read-only access:** **Share read-only access** on a group's page gives an

@@ -30,6 +30,7 @@ import { BatchSend } from "./Batch";
 import { ReviewNotesTab } from "./Notes";
 import { GroupPayees, PayeeForm } from "./Payees";
 import { GroupRulesCard } from "./Rules";
+import { GroupSchedules } from "./Schedules";
 import { ViewingKeyCallout } from "./Privacy";
 import { ReceiveShieldCard } from "./Receive";
 import { requestApprovals, SendSessionPanel } from "./SendProgress";
@@ -75,6 +76,7 @@ export function WalletView({ group }: { group: GroupSummary }) {
       <WalletTxHistory group={group} network={network} />
       <GroupPayees group={group} network={network} />
       <GroupRulesCard group={group} network={network} />
+      <GroupSchedules group={group} network={network} />
     </div>
   );
 }

@@ -84,6 +84,8 @@ const defaults: Record<string, Handler> = {
   list_payment_reasons: () => [],
   group_rules: () => ({ rules: {}, poll_id: null, title: null, threshold: 2, members: 3 }),
   auto_approval_status: () => ({ on: false, spent: null, limit: null }),
+  list_schedules: () => [],
+  due_schedules: () => [],
 };
 
 /** What wallet_send returns: the ceremony, the transaction as built, and

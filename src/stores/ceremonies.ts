@@ -51,7 +51,12 @@ export interface SendMeta {
   payments?: { recipient: string; amountZatoshis: number; memo?: string }[];
   /** The group poll whose agreed payments this sends. */
   pollId?: string;
+  /** The scheduled payment this sends: the schedule, and the date it was due. */
+  schedule?: { id: string; due: number };
 }
+
+/** A scheduled payment's date, as the store keys it. */
+export const scheduleKey = (scheduleId: string, due: number) => `${scheduleId}@${due}`;
 
 export interface CeremonyState {
   kind: CeremonyKind;
@@ -112,6 +117,17 @@ interface CeremoniesStore {
   /** txid → signer comm pubkeys; persisted so on-chain rows can show signers
    *  even after the pending ceremony entry has been cleared. */
   txSigners: Record<string, string[]>;
+  /** Scheduled payments this app started ([`scheduleKey`] → ceremony id), so
+   *  each date is asked once: one that failed is asked again by hand. */
+  scheduleStarts: Record<string, string>;
+  /** Scheduled payments that couldn't be started, and why ([`scheduleKey`] →
+   *  when, in ms, and the error). They're tried again a while later. Kept in
+   *  memory only. */
+  scheduleErrors: Record<string, { at: number; message: string }>;
+  /** The saved history has loaded since unlocking. Kept in memory only. */
+  historyLoaded: boolean;
+  recordScheduleStart: (key: string, ceremonyId: string) => void;
+  recordScheduleError: (key: string, message: string | null) => void;
   setActiveDkg: (id: string | null, label?: string) => void;
   setActiveSigning: (id: string | null) => void;
   /** Record what a DKG's invite needs, or the invite itself once created. */
@@ -134,7 +150,7 @@ const storage = encryptedStorage();
 
 type Persisted = Pick<
   CeremoniesStore,
-  "ceremonies" | "activeDkgId" | "activeSigningId" | "activeSendByGroup" | "txSigners"
+  "ceremonies" | "activeDkgId" | "activeSigningId" | "activeSendByGroup" | "txSigners" | "scheduleStarts"
 >;
 
 const empty: Persisted = {
@@ -143,6 +159,7 @@ const empty: Persisted = {
   activeSigningId: null,
   activeSendByGroup: {},
   txSigners: {},
+  scheduleStarts: {},
 };
 
 export const useCeremonies = create<CeremoniesStore>()(
@@ -152,6 +169,18 @@ export const useCeremonies = create<CeremoniesStore>()(
       joinedSessions: {},
       recordJoin: (sessionId, ceremonyId) =>
         set((s) => ({ joinedSessions: { ...s.joinedSessions, [sessionId]: ceremonyId } })),
+      scheduleErrors: {},
+      historyLoaded: false,
+      recordScheduleStart: (key, ceremonyId) =>
+        set((s) => {
+          const { [key]: _cleared, ...errors } = s.scheduleErrors;
+          return { scheduleStarts: { ...s.scheduleStarts, [key]: ceremonyId }, scheduleErrors: errors };
+        }),
+      recordScheduleError: (key, message) =>
+        set((s) => {
+          const { [key]: _cleared, ...errors } = s.scheduleErrors;
+          return { scheduleErrors: message ? { ...errors, [key]: { at: Date.now(), message } } : errors };
+        }),
       setActiveDkg: (id, label) =>
         set((s) => {
           if (!id) return { activeDkgId: null };
@@ -316,6 +345,7 @@ export const useCeremonies = create<CeremoniesStore>()(
         activeSigningId: s.activeSigningId,
         activeSendByGroup: s.activeSendByGroup,
         txSigners: s.txSigners,
+        scheduleStarts: s.scheduleStarts,
       }),
       // Keep anything that arrived between unlock and loading the history,
       // on top of what was saved about the same ceremony.
@@ -329,6 +359,7 @@ export const useCeremonies = create<CeremoniesStore>()(
           ceremonies,
           activeSendByGroup: { ...s.activeSendByGroup, ...current.activeSendByGroup },
           txSigners: { ...s.txSigners, ...current.txSigners },
+          scheduleStarts: { ...s.scheduleStarts, ...current.scheduleStarts },
         };
       },
     }
@@ -369,11 +400,12 @@ useKeystore.subscribe((s, prev) => {
         ceremonies: Object.fromEntries(
           Object.entries(st.ceremonies).map(([id, c]) => [id, interrupted(c, live, id)]),
         ),
+        historyLoaded: true,
       }));
     })();
   } else {
     storage.lock();
-    useCeremonies.setState({ ...empty, joinedSessions: {} });
+    useCeremonies.setState({ ...empty, joinedSessions: {}, scheduleErrors: {}, historyLoaded: false });
   }
 });
 

@@ -694,6 +694,52 @@ export interface RulesInEffect {
 }
 export const groupRules = (groupId: string) => invoke<RulesInEffect>("group_rules", { groupId });
 
+/** How often a scheduled payment repeats: every so many days, or calendar
+ *  months on the same day (the month's last, when it's shorter). */
+export type Every = { days: number } | { months: number };
+/** Payments a member scheduled to repeat (core/src/schedules.rs). Its
+ *  author's app asks its approvers on each date; one more than three days
+ *  late is skipped. Dates are unix seconds. */
+export interface Schedule {
+  group_id: string;
+  schedule_id: string;
+  /** Hex communication key of the member who made it. */
+  author: string;
+  payments: PaymentRequest[];
+  reason: string;
+  every: Every;
+  first_due: number;
+  /** Members asked to approve each payment, its author among them. */
+  signers: string[];
+  stopped: boolean;
+  /** Payments sent: date → transaction id. */
+  runs: Record<string, string>;
+  /** The date due and not yet sent, which its author's app starts. */
+  due_now: number | null;
+  next_due: number | null;
+  /** The latest dates skipped because the author's app wasn't open. */
+  missed: number[];
+  /** This device's member made it. */
+  mine: boolean;
+}
+export const listSchedules = (groupId: string) => invoke<Schedule[]>("list_schedules", { groupId });
+/** This member's scheduled payments due now, in every group. */
+export const dueSchedules = () => invoke<Schedule[]>("due_schedules");
+/** Schedule payments to repeat. Returns the schedule's id. */
+export const createSchedule = (args: {
+  group_id: string;
+  payments: PaymentRequest[];
+  reason: string;
+  every: Every;
+  first_due: number;
+  signers: string[];
+}) => invoke<string>("create_schedule", { args });
+export const stopSchedule = (groupId: string, scheduleId: string) =>
+  invoke<void>("stop_schedule", { groupId, scheduleId });
+/** Tell the group a scheduled payment was sent, so it isn't started again. */
+export const recordScheduleRun = (groupId: string, scheduleId: string, due: number, txid: string) =>
+  invoke<void>("record_schedule_run", { groupId, scheduleId, due, txid });
+
 /** Ask where to save a CSV file, then save it. The path, or null if the
  *  user cancelled. */
 export const saveCsv = (fileName: string, contents: string) =>

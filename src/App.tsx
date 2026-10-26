@@ -23,6 +23,7 @@ import {
   signingRequests,
 } from "./ipc/commands";
 import CeremonyListener from "./CeremonyListener";
+import Scheduler from "./Scheduler";
 import { Logo } from "./components/Logo";
 import { BackupReminder } from "./components/Backup";
 import { WalletSwitcher } from "./components/WalletSwitcher";
@@ -149,6 +150,7 @@ function Layout() {
   return (
     <div className="layout">
       <CeremonyListener />
+      <Scheduler />
       <nav className="sidebar">
         <div className="sidebar-brand">
           <Logo markSize={24} showTagline />
