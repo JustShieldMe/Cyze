@@ -62,6 +62,11 @@ breaking changes. Cyze is beta, unaudited software (see the README).
     is skipped, and the schedule shows it.
   - Every member sees the schedule and when it was last sent. Only its author
     can stop it.
+- **Change members or threshold:** a guide on the group's page moves a group
+  to a new one: create it, copy the payees, propose the same rules, then send
+  everything to it for the usual approvals. Approvers see **Your group “…”**
+  when a payment goes to a group they're in, checked against that group's
+  keys on their own device.
 - **Accounting export:** **Export CSV** on Activity saves the history, one row
   per payment, with fees, payees, memos, reasons and who signed.
 - **Read-only access:** **Share read-only access** on a group's page gives an

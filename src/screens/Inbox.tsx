@@ -21,6 +21,7 @@ import { useCeremonies } from "../stores/ceremonies";
 import { asNetwork, networkLabel, unit } from "../network";
 import { resolveParticipant } from "../lib/participants";
 import { payeeFor, useMemberName, usePayees } from "../lib/payees";
+import { OwnGroupName } from "../wallet/Payees";
 import { durationText } from "../lib/rules";
 import { clock, useNow } from "../lib/time";
 
@@ -259,6 +260,7 @@ function VerifiedSummary({
                     <span className="dim">· group payee, added by {memberName(payee.author)}</span>
                   </div>
                 )}
+                {!p.transparent && <OwnGroupName address={p.address} />}
                 <div className="bold">
                   {formatZec(p.value_zatoshis, network)}
                   {p.transparent && (

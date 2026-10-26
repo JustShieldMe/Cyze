@@ -81,3 +81,34 @@ pub async fn rename_group(
         })
         .await
 }
+
+/// One of this member's groups, named.
+#[derive(serde::Serialize)]
+pub struct OwnGroup {
+    pub group_id: String,
+    pub description: String,
+}
+
+/// Which of this member's Zcash groups receives at `address`, if any, worked
+/// out from each group's own viewing key: approving a payment, a member sees
+/// that it goes to a group they're in.
+#[tauri::command]
+pub async fn own_group_for_address(state: State<'_, AppState>, address: String) -> AppResult<Option<OwnGroup>> {
+    let groups: Vec<(String, String)> = state
+        .with_config(|config| {
+            Ok(config
+                .group
+                .iter()
+                .filter(|(_, g)| g.ciphersuite.contains("Pallas"))
+                .map(|(id, g)| (id.clone(), g.description.clone()))
+                .collect())
+        })
+        .await?;
+    for (group_id, description) in groups {
+        let seed = state.viewing_seed(&group_id).await?;
+        if frost_app_core::wallet::verify::is_address_of(&group_id, seed.as_deref(), &address) {
+            return Ok(Some(OwnGroup { group_id, description }));
+        }
+    }
+    Ok(None)
+}

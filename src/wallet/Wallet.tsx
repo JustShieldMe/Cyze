@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
   getIdentity,
   getWalletConfig,
+  groupOrchardKeys,
   listContacts,
   walletGroupStatus,
   walletSyncNow,
@@ -28,7 +29,7 @@ import { AnnounceInstead } from "./Announce";
 import { WalletTxHistory } from "./Activity";
 import { BatchSend } from "./Batch";
 import { ReviewNotesTab } from "./Notes";
-import { GroupPayees, PayeeForm } from "./Payees";
+import { GroupPayees, OwnGroupName, PayeeForm } from "./Payees";
 import { GroupRulesCard } from "./Rules";
 import { GroupSchedules } from "./Schedules";
 import { ViewingKeyCallout } from "./Privacy";
@@ -161,6 +162,29 @@ export function GroupWallet({ group, network }: { group: GroupSummary; network: 
     onSuccess: (d) => review(d, "move"),
     onError: (e) => setErr((e as unknown as AppError).message ?? String(e)),
   });
+
+  // Everything, to a new group of this member's (changing members or
+  // threshold, from the group's page), which then arrives here as `moveTo`.
+  const location = useLocation();
+  const navigate = useNavigate();
+  const moveTo = (location.state as { moveTo?: { id: string; name: string } } | null)?.moveTo;
+  const prepareRegroup = useMutation({
+    mutationFn: async (to: { id: string; name: string }) => {
+      const keys = await groupOrchardKeys(to.id);
+      if (!keys) throw new Error("That group has no Zcash wallet.");
+      return walletPrepareSendMax(group.id, keys.address);
+    },
+    onSuccess: (d, to) => review(d, "max", `Moving the funds to the group “${to.name}”`),
+    onError: (e) => setErr((e as unknown as AppError).message ?? String(e)),
+  });
+  const initialized = !!status.data?.initialized;
+  useEffect(() => {
+    if (!moveTo || !initialized) return;
+    navigate(".", { replace: true, state: null });
+    prepareRegroup.mutate(moveTo);
+    // Once per request: the state is cleared as it's taken.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [moveTo, initialized]);
 
   // The active send lives in the persisted ceremony store, so it survives
   // navigation and shows the progress CeremonyListener keeps updating.
@@ -740,6 +764,7 @@ function ReviewSend({
                     {payee.name} <span className="dim">· group payee, added by {memberName(payee.author)}</span>
                   </div>
                 )}
+                {!selfSend && <OwnGroupName address={draft.recipient} />}
                 {kind === "move" ? "This wallet's private address" : selfSend ? "This wallet" : draft.recipient}
               </td>
             </tr>

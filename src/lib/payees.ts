@@ -4,6 +4,8 @@ import {
   listContacts,
   listPayees,
   listPaymentReasons,
+  ownGroupForAddress,
+  type OwnGroup,
   type Payee,
   type PaymentReason,
 } from "../ipc/commands";
@@ -41,6 +43,17 @@ export function payeeFor(payees: Payee[] | undefined, address: string | null | u
 export function reasonsFor(reasons: PaymentReason[] | undefined, txid: string | null | undefined): PaymentReason[] {
   const t = txid?.toLowerCase();
   return t ? (reasons ?? []).filter((r) => r.txid === t) : [];
+}
+
+/** Which of this member's groups receives at `address`, if any. */
+export function useOwnGroup(address: string | null | undefined): OwnGroup | null {
+  const own = useQuery({
+    queryKey: ["own-group", address],
+    queryFn: () => ownGroupForAddress(address!),
+    enabled: !!address,
+    staleTime: Infinity,
+  });
+  return own.data ?? null;
 }
 
 /** A member's name, by communication key: "You", a contact, or a short key. */
