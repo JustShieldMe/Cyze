@@ -83,6 +83,10 @@ breaking changes. Cyze is beta, unaudited software (see the README).
 - The memo-based coinholder vote (Vote Cast Memo v1), replaced by Votes.
 
 ### Fixed
+- History showed a payment's fee inside its amount, and no recipient or memo,
+  because the wallet learned of its own sends only by scanning. The sending
+  device now records each payment in its wallet once the network accepts it.
+  Other members' history still shows the wallet's balance change.
 - A signing request whose transaction didn't fit one message to an approver
   failed with "cryptography error from snow: input error". The limit didn't
   count the context being hex-encoded, so a send spending many notes could hit

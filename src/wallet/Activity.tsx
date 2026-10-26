@@ -73,9 +73,9 @@ export function WalletTxHistory({ group, network }: { group: GroupSummary; netwo
     () => new Set((history.data ?? []).map((t) => t.txid)),
     [history.data]
   );
-  // Sends this device made, by txid: it knows exactly what each paid, while
-  // the wallet records only its own sends' net balance change (no fee, no
-  // recipients) unless it recovers them.
+  // Sends this device made, by txid: it knows exactly what each paid. Its
+  // wallet records them too now (wallet::RecordSent), but not ones sent before
+  // it did, and another member's wallet sees only their balance change.
   const sentHere = useMemo(
     () =>
       new Map(

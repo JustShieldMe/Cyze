@@ -2673,10 +2673,17 @@ pub fn apply_signatures(
 /// its threshold signature to every spend ([`apply_signatures`]); here
 /// we attach the zero-knowledge proof, finalize, extract the transaction (which
 /// creates the binding signature), and submit it to lightwalletd.
+///
+/// With `record`, a transaction the network accepted is then stored in the
+/// wallet that built it, with its fee, outputs and memos, as a wallet that
+/// builds its own transactions would store them. Otherwise the wallet learns of
+/// it only by scanning, as a balance change. Recording is best effort: a
+/// failure is logged, never the send's.
 pub async fn broadcast_signed(
     signed_pczt_hex: &str,
     network: WalletNetwork,
     url: &str,
+    record: Option<RecordSent>,
 ) -> Result<String, CoreError> {
     let pczt = pczt::Pczt::parse(
         &hex::decode(signed_pczt_hex.trim())
@@ -2707,7 +2714,8 @@ pub async fn broadcast_signed(
 
     // Proving + finalize + extract is synchronous, CPU-bound work; keep it off
     // the async runtime so progress events and other tasks stay responsive.
-    let (raw, txid) = tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, String), CoreError> {
+    type Built = (Vec<u8>, String, pczt::Pczt, orchard::circuit::VerifyingKey);
+    let (raw, txid, proven, vk) = tokio::task::spawn_blocking(move || -> Result<Built, CoreError> {
         use orchard::circuit::{ProvingKey, VerifyingKey};
         use pczt::roles::{
             prover::Prover, spend_finalizer::SpendFinalizer, tx_extractor::TransactionExtractor,
@@ -2732,6 +2740,8 @@ pub async fn broadcast_signed(
                 .map_err(|e| CoreError::Ceremony(format!("ironwood proof: {e:?}")))?;
         }
         let pczt = prover.finish();
+        // Kept, proven, for recording in the wallet once the network takes it.
+        let proven = pczt.clone();
 
         // 2. Finalize spends (spend-auth signatures are already applied).
         let pczt = SpendFinalizer::new(pczt)
@@ -2751,7 +2761,7 @@ pub async fn broadcast_signed(
         let mut raw = Vec::new();
         tx.write(&mut raw)
             .map_err(|e| CoreError::Ceremony(format!("serialize transaction: {e}")))?;
-        Ok((raw, txid))
+        Ok((raw, txid, proven, vk))
     })
     .await
     .map_err(|e| CoreError::Ceremony(format!("proving task panicked: {e}")))??;
@@ -2768,7 +2778,36 @@ pub async fn broadcast_signed(
             resp.error_code, resp.error_message
         )));
     }
+    if let Some(record) = record {
+        let recorded = tokio::task::spawn_blocking(move || record.store(network, proven, &vk)).await;
+        match recorded {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => tracing::warn!("sent, but couldn't record the transaction in the wallet: {e}"),
+            Err(e) => tracing::warn!("sent, but recording the transaction in the wallet panicked: {e}"),
+        }
+    }
     Ok(txid)
+}
+
+/// The wallet a transaction was built from, to record it in once sent (see
+/// [`broadcast_signed`]).
+pub struct RecordSent {
+    pub data_dir: PathBuf,
+    pub wallet_id: String,
+    pub db_key: zeroize::Zeroizing<[u8; 32]>,
+}
+
+impl RecordSent {
+    /// Store a proven, signed transaction as one this wallet sent: its inputs
+    /// spent, and its fee, outputs and memos known.
+    fn store(&self, network: WalletNetwork, proven: pczt::Pczt, vk: &orchard::circuit::VerifyingKey) -> Result<(), CoreError> {
+        use zcash_client_backend::data_api::wallet::extract_and_store_transaction_from_pczt;
+        let db_path = wallet_db_path(&self.data_dir, &self.wallet_id, network);
+        let mut db = open_db(&db_path, network, self.db_key.as_ref())?;
+        extract_and_store_transaction_from_pczt::<_, std::convert::Infallible>(&mut db, &network.params(), proven, None, Some(vk))
+            .map_err(|e| CoreError::Crypto(format!("store sent transaction: {e}")))?;
+        Ok(())
+    }
 }
 
 /// A single transaction as seen from this wallet's perspective.
