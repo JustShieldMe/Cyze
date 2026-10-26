@@ -84,6 +84,39 @@ current build depends on them.
       tailnet (explicitly public — would need the same loud warning as the
       Cloudflare tunnel).
 
+## Coordination (Safe-style features)
+
+Zcash has no contracts for shielded funds, so these are rules each member's app
+applies when it decides whether to sign: they hold unless a threshold of members
+act together with modified apps, the trust the wallet already rests on. New
+kinds of group record ride on `core/src/polls.rs`, whose older versions keep
+and skip kinds they don't know.
+
+- [x] **Shared payees** — `core/src/payees.rs`, `commands/payees.rs`,
+      `src/wallet/Payees.tsx`. Author-owned; approvers name a payment from their
+      own copy, by the verified address (`verify::address_forms`).
+- [x] **Payment reasons** — `SigningContext.reason` for approvers, then a
+      `PaymentReason` record keyed by txid once sent; any member can add theirs.
+- [ ] **Accounting export** — CSV of history with payees, reasons and signers.
+- [ ] **Read-only access** — export the group's viewing key for an accountant.
+- [ ] **Batch payments** — several recipients in one transaction, approved once.
+      `verify.rs` already returns every payment; `check_coordinator_claims` and
+      the send form assume one.
+- [ ] **Pay if agreed** — a poll that carries a payment; once agreed, approvers
+      see the poll and a check that the transaction matches it exactly.
+- [ ] **Trusted payees only** — adding a payee needs a threshold of members to
+      accept; apps warn about or refuse payments to anyone else.
+- [ ] **Spending limits** — approve automatically up to X per week to trusted
+      payees (the approver's app must be open).
+- [ ] **Delay with veto** — large payments announced first and signable only
+      after a delay; any member can veto meanwhile.
+- [ ] **Tiered approvals** — e.g. over 100 ZEC needs 4 of 5 on a 3-of-5 key.
+- [ ] **Change members or threshold** — a new group, then move the funds
+      (reusing the viewing-key move, `commands/viewing.rs`).
+- [ ] **Share repair** — a member who lost their device gets a new share from
+      the others (FROST repairable shares), without moving funds.
+- [ ] **Recurring payments** — scheduled payments that still need approval.
+
 ## Voting (protocol / coinholder governance)
 
 - [ ] **Migrate to ValarGroup Shielded Vote (full rebuild; supersedes memo v1)** —

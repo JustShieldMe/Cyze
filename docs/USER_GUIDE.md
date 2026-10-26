@@ -75,7 +75,9 @@ It covers the whole lifecycle:
 - creating a group (distributed key generation, with one invite code);
 - a shared Zcash wallet that syncs in the background (receive, balances,
   history);
-- payments that each approver's app verifies before they approve.
+- payments that each approver's app verifies before they approve;
+- a shared list of the group's payees, and reasons on payments, that every
+  member sees.
 
 It supports NU6.3 (Ironwood) and NU7, which mainnet activates at block
 3,543,405 (around November 5, 2026).
@@ -268,10 +270,13 @@ members to approve it.
    address shown (a `u1…` on mainnet / `utest1…` on testnet). Received funds
    need **10 confirmations** before they are spendable (your own change needs
    3); until then the balance shows them as waiting for confirmations.
-3. Click **Send** and enter who to pay, the **amount**, and an optional
-   **memo**. A transparent (`t…`) address is detected automatically: the app
-   notes that the payment will be public, and memos aren't available. The
-   **Review payment** button explains why when it's disabled.
+3. Click **Send** and enter who to pay: paste an address, or choose one of the
+   group's payees from **Pay a saved payee**. Then enter the **amount**, an
+   optional **memo** (only the recipient reads it), and an optional **reason**
+   (only the group reads it; see [Payees and reasons](#payees-and-reasons)). A
+   transparent (`t…`) address is detected automatically: the app notes that
+   the payment will be public, and memos aren't available. The **Review
+   payment** button explains why when it's disabled.
 4. Check the payment, fee, and total, and choose which members to **ask to
    approve** (any set that meets the threshold; you are pre-selected). On
    mainnet, tick **The recipient is correct**.
@@ -296,7 +301,9 @@ again** sends the signed transaction without asking anyone again.
    gets paid and how much, any memo, what goes back to the group, and the fee.
    If the transaction doesn't match what the coordinator described, or its
    contents don't match its commitments, your app **refuses automatically** and
-   says why.
+   says why. A payment to one of the group's payees shows the payee's name, and
+   a reason shows as "Alice says it's for: …". The reason is the coordinator's
+   word: it isn't part of the transaction, so nothing checks it.
 3. Click **Approve and sign** to release your signature share, before the
    **Approve by** time the request shows. Nothing is signed until you approve.
    A request that has expired can only be dismissed. A send that spends several
@@ -306,10 +313,36 @@ again** sends the signed transaction without asking anyone again.
 Once a threshold of members approves, the coordinator's app aggregates the
 signatures, builds the proof, broadcasts the transaction, and shows the **txid**.
 The transaction then appears under **Activity** on both sides, with its fee and
-memo shown inline.
+memo shown inline, the payee's name under **With**, and its reason.
 
 **What to verify:** the txid confirms on a block explorer, and the sender's
 balance and history update.
+
+### Payees and reasons
+
+**Payees** are a group's shared list of the addresses it pays, by name. They're
+under **Payees** on Home.
+
+- **Add one** with **Add a payee**, or from the send form: type an address, then
+  **Save as a group payee**.
+- **Everyone in the group sees it,** with who added it, within about 10 seconds
+  for members who are online. Members who are offline get it later, the same
+  way they get polls ([Voting in Cyze](VOTING.md#if-you-were-offline)).
+- **Only the member who added a payee can change or remove it.** No two payees
+  can have the same name or the same address.
+- **Approvers see the name** when a payment goes to a payee. Their own app looks
+  it up from the address the transaction verifiably pays, so a request can't
+  pass off one address under another's name.
+- **Payees belong to a network.** One saved on testnet doesn't show on mainnet.
+
+A **reason** says what a payment was for. Only members of the group see it,
+and it never goes on chain.
+
+- **When sending,** fill in **Reason**. Approvers see it with the request.
+- **Once it's sent,** every member's **Activity** shows it.
+- **Any member can add theirs** to any transaction, received ones included:
+  open the transaction under **Activity** and click **Say what it was for**.
+  **Change yours** edits it; saving it empty takes it back.
 
 ### Make an older group private
 

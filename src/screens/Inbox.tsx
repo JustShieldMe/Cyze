@@ -14,6 +14,7 @@ import {
 import { useCeremonies } from "../stores/ceremonies";
 import { asNetwork, networkLabel, unit } from "../network";
 import { resolveParticipant } from "../lib/participants";
+import { payeeFor, useMemberName, usePayees } from "../lib/payees";
 import { clock, useNow } from "../lib/time";
 
 /** Signer-side ceremony phases, as a human would say them. */
@@ -41,6 +42,8 @@ interface SigningContext {
   spend_index?: number;
   /** Total notes in this transaction plan. */
   spend_total?: number;
+  /** What the coordinator says it's for: not in the transaction, so unchecked. */
+  reason?: string;
 }
 
 /** What the backend proved about the transaction from its PCZT
@@ -116,17 +119,24 @@ function ApproveReject({ ceremonyId, expired = false }: { ceremonyId: string; ex
 function VerifiedSummary({
   tx,
   network,
+  groupId,
   noteIndex,
   noteTotal,
   closesAt,
 }: {
   tx: VerifiedTransaction;
   network: string;
+  /** The group it's from, to name payments to its payees. */
+  groupId?: string;
   noteIndex?: number;
   noteTotal?: number;
   /** When approvals are needed by, if this device's sync server could say. */
   closesAt?: number | null;
 }) {
+  // Named from this device's own copy of the group's payees, by the address
+  // the transaction verifiably pays: never from the request.
+  const payees = usePayees(groupId);
+  const memberName = useMemberName();
   return (
     <>
       <p className="ok bold mb-1">
@@ -144,10 +154,18 @@ function VerifiedSummary({
               </td>
             </tr>
           )}
-          {tx.payments.map((p, i) => (
+          {tx.payments.map((p, i) => {
+            const payee = payeeFor(payees.data, p.address);
+            return (
             <tr key={i}>
               <td className="dim">Pays</td>
               <td>
+                {payee && (
+                  <div className="payee-name">
+                    {payee.name}{" "}
+                    <span className="dim">· group payee, added by {memberName(payee.author)}</span>
+                  </div>
+                )}
                 <div className="bold">
                   {formatZec(p.value_zatoshis, network)}
                   {p.transparent && (
@@ -166,7 +184,8 @@ function VerifiedSummary({
                 )}
               </td>
             </tr>
-          ))}
+            );
+          })}
           <tr>
             <td className="dim">Back to the group</td>
             <td>{formatZec(tx.change_zatoshis, network)}</td>
@@ -311,9 +330,15 @@ export default function Inbox() {
                 </p>
               ) : awaiting && ceremonyId && verified ? (
                 <div className="mt-3">
+                  {context?.reason && (
+                    <p className="reason-claim">
+                      <span className="dim">{from} says it's for:</span> {context.reason}
+                    </p>
+                  )}
                   <VerifiedSummary
                     tx={verified}
                     network={network}
+                    groupId={group?.id}
                     noteIndex={context?.spend_index}
                     noteTotal={context?.spend_total}
                     closesAt={approval?.closes_at_ms}

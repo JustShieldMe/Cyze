@@ -268,7 +268,7 @@ pub async fn join_signing_session<R: tauri::Runtime>(
                     ceremony_id,
                     &gate_group,
                     message_hex,
-                    context.as_ref(),
+                    context.as_deref(),
                     randomizer_hex.as_deref(),
                 )
                 .await

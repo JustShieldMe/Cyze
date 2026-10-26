@@ -3,6 +3,9 @@
 //! Like Snapshot, for people who already share a wallet: a way to signal and
 //! coordinate, with nothing on chain and no funds involved.
 //!
+//! The same records carry the group's other shared state: its payees and what
+//! its payments were for (worked out in [`crate::payees`]).
+//!
 //! ## How polls travel
 //!
 //! Members reach each other through the group's coordination server, as for
@@ -48,6 +51,9 @@ pub const MAX_TITLE: usize = 200;
 pub const MAX_DETAILS: usize = 2_000;
 pub const MAX_OPTION: usize = 100;
 pub const MAX_OPTIONS: usize = 10;
+pub const MAX_PAYEE_NAME: usize = 64;
+pub const MAX_ADDRESS: usize = 1_024;
+pub const MAX_REASON: usize = 500;
 /// The largest record kept as it came (as JSON). A bigger one is kept without
 /// its contents, which still fills its number.
 pub const MAX_RECORD_BYTES: usize = 16 * 1024;
@@ -93,6 +99,15 @@ pub enum RecordBody {
     Vote { poll_id: String, choice: u32 },
     /// The poll's author closing it early.
     Close { poll_id: String },
+    /// A payee the author adds to the group's address book, or changes: their
+    /// latest record for the id counts.
+    Payee { payee_id: String, name: String, address: String },
+    /// The author removing a payee they added.
+    PayeeRemoved { payee_id: String },
+    /// What a payment was for, as the author tells the group: their latest
+    /// for the transaction counts, and an empty one takes theirs back. Never
+    /// on chain.
+    PaymentReason { txid: String, text: String },
     /// A record of a kind this version doesn't know (from a newer one), or a
     /// known kind it can't read, kept as it came. Never counts.
     #[serde(untagged)]
@@ -130,6 +145,30 @@ impl Record {
             RecordBody::Vote { poll_id, .. } | RecordBody::Close { poll_id } => {
                 if poll_id.is_empty() || poll_id.len() > 64 {
                     return bad("poll id");
+                }
+            }
+            RecordBody::Payee { payee_id, name, address } => {
+                if payee_id.is_empty() || payee_id.len() > 64 {
+                    return bad("payee id");
+                }
+                if name.trim().is_empty() || name.chars().count() > MAX_PAYEE_NAME {
+                    return bad("payee name");
+                }
+                if address.is_empty() || address.len() > MAX_ADDRESS || !address.chars().all(|c| c.is_ascii_alphanumeric()) {
+                    return bad("payee address");
+                }
+            }
+            RecordBody::PayeeRemoved { payee_id } => {
+                if payee_id.is_empty() || payee_id.len() > 64 {
+                    return bad("payee id");
+                }
+            }
+            RecordBody::PaymentReason { txid, text } => {
+                if txid.len() != 64 || !txid.chars().all(|c| c.is_ascii_hexdigit()) {
+                    return bad("transaction id");
+                }
+                if text.chars().count() > MAX_REASON {
+                    return bad("reason");
                 }
             }
             RecordBody::Unknown(_) => return bad("a kind this version of Cyze doesn't know"),

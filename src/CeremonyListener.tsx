@@ -52,9 +52,12 @@ export default function CeremonyListener() {
     queryClient.invalidateQueries({ queryKey: ["backup-status"] });
   });
 
-  // Group polls arrived or changed (commands/polls.rs).
-  useTauriEvent<{ group_id: string; new_polls: number }>("polls:updated", ({ new_polls }) => {
+  // Group records arrived or changed (commands/polls.rs): polls, payees, and
+  // what payments were for.
+  useTauriEvent<{ group_id: string; new_polls: number }>("polls:updated", ({ group_id, new_polls }) => {
     queryClient.invalidateQueries({ queryKey: ["polls"] });
+    queryClient.invalidateQueries({ queryKey: ["payees", group_id] });
+    queryClient.invalidateQueries({ queryKey: ["payment-reasons", group_id] });
     if (new_polls > 0) notifyIfAway("A new poll in one of your groups.");
   });
 

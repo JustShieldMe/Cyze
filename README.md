@@ -36,6 +36,10 @@ The app has five places: **Home**, **Approvals**, **Votes**, **Groups** and
   - **Transparent addresses** are detected automatically, with a note that the
     payment will be public.
   - **Activity** lists payments with their memos and fees.
+  - **Payees:** the group keeps a shared list of the addresses it pays, by
+    name. Pick one when sending; approvers and the history show its name.
+  - **Reasons:** a payment can say what it's for. Approvers see it, and so
+    does every member's history. It never goes on chain.
   - With several groups, a switcher at the top picks the one wallet the app
     syncs and acts on.
 - **A wallet that's always current.**
@@ -193,6 +197,10 @@ signing, an advanced option).
 - **One approval per payment.** A payment that spends several notes needs one
   approval; its other rounds are approved once they verify as the same
   transaction.
+- **Names come from your own app.** A payment to one of the group's payees is
+  named from the approver's own copy of the list, by the address the
+  transaction verifiably pays. Only the member who added a payee can change
+  it. A reason for a payment is the sender's word, shown as theirs.
 - **No unverified signing.** Wallet keys never sign a request without a
   transaction attached, unless advanced options are on.
 - **Nothing is at risk before approval.** Round-1 commitments don't depend on

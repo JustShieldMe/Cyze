@@ -2237,7 +2237,7 @@ async fn open_for_send(
 
 /// Parse a recipient address for `network`, explaining a mismatch when the
 /// address clearly belongs to another network.
-fn decode_recipient(network: WalletNetwork, recipient: &str) -> Result<zcash_keys::address::Address, CoreError> {
+pub(crate) fn decode_recipient(network: WalletNetwork, recipient: &str) -> Result<zcash_keys::address::Address, CoreError> {
     let r = recipient.trim();
     zcash_keys::address::Address::decode(&network.params(), r).ok_or_else(|| {
         // Give a network-mismatch hint when the address prefix clearly belongs

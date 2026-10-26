@@ -23,6 +23,7 @@ test("a send that a lock or restart ended says so, and can be asked again", asyn
         memo: null,
         from_old_address: false,
         send_max: false,
+        reason: null,
       },
     },
   ]);

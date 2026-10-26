@@ -2,7 +2,7 @@ import { expect, test, vi } from "vitest";
 import { fireEvent, waitFor } from "@testing-library/react";
 import { emit } from "@tauri-apps/api/event";
 import { useCeremonies } from "../stores/ceremonies";
-import { ALICE, fakeBackend, GROUP_ID, renderApp } from "./fake";
+import { ALICE, BOB, fakeBackend, GROUP_ID, payee, renderApp } from "./fake";
 
 const joinedAs = (session: string) => useCeremonies.getState().joinedSessions[session];
 
@@ -116,4 +116,31 @@ test("a request shows when it must be approved by, and once expired can only be 
   expect(ui.getAllByRole("button", { name: "Approve and sign" })).toHaveLength(1);
   fireEvent.click(ui.getByRole("button", { name: "Dismiss" }));
   await waitFor(() => expect(backend.calls("respond_to_signing")).toEqual([{ ceremonyId: "c4", approve: false }]));
+});
+
+test("an approver sees the payee's name from their own payees, and what the requester says it's for", async () => {
+  fakeBackend({
+    list_pending_sessions: () => [request],
+    join_signing_session: () => "c5",
+    // Matched by the address the transaction verifiably pays, in the form a
+    // verified payment shows it.
+    list_payees: () => [payee("Auditor", "u1payee-with-more-receivers", BOB, { forms: ["u1payee-with-more-receivers", "u1payee"] })],
+  });
+  const ui = await renderApp("/inbox");
+  await waitFor(() => expect(joinedAs("s1")).toBe("c5"));
+  await emit("signing:progress", {
+    ceremony_id: "c5",
+    event: {
+      phase: "awaiting_approval",
+      message_hex: "9f".repeat(32),
+      context: { ...context, reason: "Audit, invoice 12" },
+      auto_approved: false,
+      verified,
+    },
+  });
+  await ui.findByText(/Verified: this is exactly what your signature would authorize/);
+  expect(ui.getByText("Alice says it's for:").parentElement?.textContent).toBe("Alice says it's for: Audit, invoice 12");
+  await waitFor(() =>
+    expect(document.querySelector(".payee-name")?.textContent).toBe("Auditor · group payee, added by Bob"),
+  );
 });

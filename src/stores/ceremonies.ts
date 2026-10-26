@@ -43,6 +43,9 @@ export interface SendMeta {
   fromOldAddress?: boolean;
   /** When approvals are needed by (epoch ms, estimated). */
   closesAtMs?: number;
+  /** What it's for, for the group: approvers see it, and every member's
+   *  history once it's sent. */
+  reason?: string;
 }
 
 export interface CeremonyState {

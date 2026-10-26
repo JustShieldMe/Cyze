@@ -1,5 +1,7 @@
 //! Group polls (see `frost_app_core::polls`): this device's records, kept
 //! encrypted at rest, and the commands and background delivery around them.
+//! The group's payees and payment reasons travel in the same records
+//! (`commands::payees`).
 //!
 //! Records this device writes go into its outbox and out to the other
 //! members straight away; anything that couldn't be sent (the coordination
@@ -34,7 +36,7 @@ impl AppState {
         Ok(unlocked.file.derive_subkey(KEY_INFO))
     }
 
-    async fn load_polls(&self) -> AppResult<Logs> {
+    pub(crate) async fn load_polls(&self) -> AppResult<Logs> {
         let key = self.polls_key().await?;
         let Ok(sealed) = std::fs::read(self.data_dir.join(FILE)) else {
             return Ok(Logs::default());
@@ -58,22 +60,22 @@ impl AppState {
 }
 
 /// A group's members and threshold, and who this device is.
-struct Group {
+pub(crate) struct Group {
     members: Vec<PublicKey>,
     threshold: u32,
-    me: PublicKey,
+    pub(crate) me: PublicKey,
 }
 
 impl Group {
     fn others(&self) -> Vec<PublicKey> {
         self.members.iter().filter(|p| **p != self.me).cloned().collect()
     }
-    fn member_hexes(&self) -> Vec<String> {
+    pub(crate) fn member_hexes(&self) -> Vec<String> {
         self.members.iter().map(|p| hex::encode(&p.0)).collect()
     }
 }
 
-async fn group(state: &AppState, group_id: &str) -> AppResult<Group> {
+pub(crate) async fn group(state: &AppState, group_id: &str) -> AppResult<Group> {
     state
         .with_config(|config| {
             let group = config.group.get(group_id).ok_or_else(|| AppError::new("config", "group not found"))?;
@@ -256,7 +258,7 @@ async fn list_polls_in(state: &AppState, group_id: &str) -> AppResult<Vec<PollVi
 }
 
 /// Store a record this member wrote and send it to the others.
-async fn write<R: Runtime>(app: &AppHandle<R>, group_id: &str, body: RecordBody) -> AppResult<()> {
+pub(crate) async fn write<R: Runtime>(app: &AppHandle<R>, group_id: &str, body: RecordBody) -> AppResult<()> {
     let state = app.state::<AppState>();
     let me = hex::encode(&group(&state, group_id).await?.me.0);
     let record = state

@@ -474,7 +474,7 @@ async fn run_participant_generic<C: RandomizedCiphersuite + 'static>(
     let context = if send_args.aux_msg.is_empty() {
         None
     } else {
-        serde_json::from_slice::<crate::events::SigningContext>(&send_args.aux_msg).ok()
+        serde_json::from_slice::<Box<crate::events::SigningContext>>(&send_args.aux_msg).ok()
     };
 
     // Approval gate: surface the message and wait for the user. No secret

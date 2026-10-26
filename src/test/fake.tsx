@@ -80,6 +80,8 @@ const defaults: Record<string, Handler> = {
   tor_status: () => ({ state: "off", error: null }),
   list_polls: () => [],
   community_votes: () => ({ open: [], recent: [] }),
+  list_payees: () => [],
+  list_payment_reasons: () => [],
 };
 
 /** What wallet_send returns: the ceremony, the transaction as built, and
@@ -93,6 +95,19 @@ export const started = (ceremonyId: string, amount = 250_000_000) => ({
 });
 
 export const PAYEE = "u1payee0example0address0000000000000000000000000000000000000000";
+
+/** A group payee, as list_payees returns it. */
+export const payee = (name: string, address: string, author: string, extra: Record<string, unknown> = {}) => ({
+  payee_id: `id-${name}`,
+  author,
+  name,
+  address,
+  added_at: 1_760_000_000,
+  changed_at: 1_760_000_000,
+  forms: [address],
+  mine: author === ME,
+  ...extra,
+});
 
 /** Saved history with one send waiting for approvals, as ceremony `id`. */
 export const savedSend = (id: string) =>

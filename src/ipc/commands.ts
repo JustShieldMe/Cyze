@@ -380,6 +380,9 @@ export const walletSend = (args: {
   from_old_address?: boolean;
   /** Send everything spendable to the recipient (the amount is ignored). */
   send_max?: boolean;
+  /** What it's for, for the group: approvers see it, and every member's
+   *  history once it's sent. Never on chain. */
+  reason?: string | null;
 }) => invoke<SendStarted>("wallet_send", { args });
 /** Like walletPrepareSend, paying everything spendable; the fee comes out of it. */
 export const walletPrepareSendMax = (groupId: string, recipient: string, memo?: string) =>
@@ -565,6 +568,42 @@ export const closePoll = (groupId: string, pollId: string) => invoke<void>("clos
 export const receiveGroupMessages = (groupId: string, sessionId: string) =>
   invoke<void>("receive_group_messages", { groupId, sessionId });
 export const refreshPolls = (groupId: string) => invoke<void>("refresh_polls", { groupId });
+
+/** A payee in a group's shared address book (core/src/payees.rs). Only the
+ *  member who added it can change or remove it. */
+export interface Payee {
+  payee_id: string;
+  /** Hex communication key of the member who added it. */
+  author: string;
+  name: string;
+  address: string;
+  added_at: number;
+  changed_at: number;
+  /** The address as given and as a verified payment to it reads: a payment
+   *  to any of them is to this payee. */
+  forms: string[];
+  /** This device's member added it. */
+  mine: boolean;
+}
+export const listPayees = (groupId: string) => invoke<Payee[]>("list_payees", { groupId });
+/** Add a payee, or change one this member added. Returns its id. */
+export const savePayee = (groupId: string, payeeId: string | null, name: string, address: string) =>
+  invoke<string>("save_payee", { groupId, payeeId, name, address });
+export const removePayee = (groupId: string, payeeId: string) => invoke<void>("remove_payee", { groupId, payeeId });
+
+/** What a member says a transaction was for. */
+export interface PaymentReason {
+  txid: string;
+  /** Hex communication key of the member who said it. */
+  author: string;
+  text: string;
+  at: number;
+}
+export const listPaymentReasons = (groupId: string) =>
+  invoke<PaymentReason[]>("list_payment_reasons", { groupId });
+/** Say what a transaction was for; empty text takes it back. */
+export const setPaymentReason = (groupId: string, txid: string, text: string) =>
+  invoke<void>("set_payment_reason", { groupId, txid, text });
 
 /** A Zcash community vote round (Shielded Vote; see core/src/community_vote.rs). */
 export interface CommunityRound {

@@ -407,6 +407,20 @@ fn canonical_recipient(address: &str, net: NetworkType) -> Option<String> {
     Some(address.to_string())
 }
 
+/// The forms an address takes in what members see: as given, and as a
+/// verified payment to it reads (its Orchard receiver alone, see
+/// [`canonical_recipient`]). So a saved payee is recognised in a payment
+/// whichever form the payment shows. Err if it isn't an address on `network`.
+pub fn address_forms(network: WalletNetwork, address: &str) -> Result<Vec<String>, CoreError> {
+    let given = address.trim();
+    crate::wallet::decode_recipient(network, given)?;
+    let mut forms = vec![given.to_string()];
+    if let Some(canonical) = canonical_recipient(given, network.network_type()).filter(|c| c != given) {
+        forms.push(canonical);
+    }
+    Ok(forms)
+}
+
 fn is_group_address(address: &str, fvk: &FullViewingKey) -> bool {
     let Ok((_, ua)) = unified::Address::decode(address.trim()) else {
         return false;
@@ -633,6 +647,7 @@ mod tests {
             spend_total: 1,
             tx_sighash: String::new(),
             pczt: None,
+            reason: None,
         }
     }
 
@@ -645,6 +660,28 @@ mod tests {
             Err(CoreError::Verification(msg)) => assert!(msg.contains(why), "expected {why:?}, got {msg:?}"),
             other => panic!("expected a refusal ({why}), got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_payee_address_is_recognised_in_the_form_a_verified_payment_shows() {
+        let raw = payee().to_raw_address_bytes();
+        let net = DEVNET.network_type();
+        let with_transparent =
+            unified::Address::try_from_items(vec![unified::Receiver::Orchard(raw), unified::Receiver::P2pkh([7; 20])])
+                .unwrap()
+                .encode(&net);
+        let forms = address_forms(DEVNET, &format!("  {with_transparent} ")).unwrap();
+        assert_eq!(forms, vec![with_transparent, ua(payee())]);
+        assert_eq!(address_forms(DEVNET, &ua(payee())).unwrap(), vec![ua(payee())], "already in that form");
+
+        let transparent = transparent::address::TransparentAddress::PublicKeyHash([7; 20]).to_zcash_address(net).encode();
+        assert_eq!(address_forms(DEVNET, &transparent).unwrap(), vec![transparent]);
+
+        let mainnet = unified::Address::try_from_items(vec![unified::Receiver::Orchard(raw)])
+            .unwrap()
+            .encode(&zcash_protocol::consensus::NetworkType::Main);
+        assert!(address_forms(DEVNET, &mainnet).is_err(), "an address on another network");
+        assert!(address_forms(DEVNET, "not an address").is_err());
     }
 
     #[test]

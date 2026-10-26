@@ -22,8 +22,10 @@ import { asNetwork, devnetHasIronwood, unit } from "../network";
 import { resolveParticipant } from "../lib/participants";
 import { useCeremonies, selectActiveSend } from "../stores/ceremonies";
 import { useAdvancedMode } from "../lib/advanced";
+import { MAX_REASON, payeeFor, useMemberName, usePayees } from "../lib/payees";
 import { WalletTxHistory } from "./Activity";
 import { ReviewNotesTab } from "./Notes";
+import { GroupPayees, PayeeForm } from "./Payees";
 import { ViewingKeyCallout } from "./Privacy";
 import { ReceiveShieldCard } from "./Receive";
 import { requestApprovals, SendSessionPanel } from "./SendProgress";
@@ -67,6 +69,7 @@ export function WalletView({ group }: { group: GroupSummary }) {
     <div>
       <GroupWallet group={group} network={network} />
       <WalletTxHistory group={group} network={network} />
+      <GroupPayees group={group} network={network} />
     </div>
   );
 }
@@ -115,10 +118,13 @@ export function GroupWallet({ group, network }: { group: GroupSummary; network: 
   const [err, setErr] = useState<string | null>(null);
   const [draft, setDraft] = useState<DraftTransaction | null>(null);
   const [draftKind, setDraftKind] = useState<DraftKind>("payment");
-  const review = (d: DraftTransaction, kind: DraftKind) => {
+  /** What the payment is for, for the group (not in the transaction). */
+  const [reason, setReason] = useState<string | undefined>(undefined);
+  const review = (d: DraftTransaction, kind: DraftKind, why?: string) => {
     setErr(null);
     setDraft(d);
     setDraftKind(kind);
+    setReason(why);
     setPanel("send");
   };
 
@@ -284,6 +290,7 @@ export function GroupWallet({ group, network }: { group: GroupSummary; network: 
             network={network}
             draft={draft}
             kind={draftKind}
+            reason={reason}
             onBack={() => setDraft(null)}
             onError={setErr}
           />
@@ -295,7 +302,7 @@ export function GroupWallet({ group, network }: { group: GroupSummary; network: 
             pending={s.orchard.pending_zatoshis + s.ironwood.pending_zatoshis}
             caughtUp={caughtUp}
             blocksRemaining={blocksRemaining}
-            onPrepared={(d, all) => review(d, all ? "max" : "payment")}
+            onPrepared={(d, all, why) => review(d, all ? "max" : "payment", why)}
           />
         )
       ) : panel === "notes" && advanced ? (
@@ -317,7 +324,8 @@ export function GroupWallet({ group, network }: { group: GroupSummary; network: 
   );
 }
 
-/** Step 1 of a payment: who, how much, and an optional memo. */
+/** Step 1 of a payment: who (typed, or one of the group's payees), how much,
+ *  an optional memo for the recipient, and an optional reason for the group. */
 function EnterSend({
   group,
   network,
@@ -333,9 +341,13 @@ function EnterSend({
   pending: number;
   caughtUp: boolean;
   blocksRemaining: number;
-  onPrepared: (draft: DraftTransaction, all: boolean) => void;
+  onPrepared: (draft: DraftTransaction, all: boolean, reason?: string) => void;
 }) {
   const [recipient, setRecipient] = useState("");
+  const [reason, setReason] = useState("");
+  const [savingPayee, setSavingPayee] = useState(false);
+  const payees = usePayees(group.id);
+  const memberName = useMemberName();
   const [amount, setAmount] = useState("");
   /** "Send all": everything spendable, the fee coming out of it. */
   const [all, setAll] = useState(false);
@@ -362,6 +374,7 @@ function EnterSend({
   const address = zns?.address ?? recipient.trim();
   const needsLookup = isName && !zns;
   const check = needsLookup ? { transparent: false, error: null } : checkRecipient(address, network);
+  const payee = payeeFor(payees.data, address);
   const zats = all ? spendable : Math.round(Number(amount) * 1e8);
   const tooMuch = !all && zats > 0 && zats > spendable;
 
@@ -370,7 +383,7 @@ function EnterSend({
       const m = !check.transparent && memo.trim() ? memo.trim() : undefined;
       return all ? walletPrepareSendMax(group.id, address, m) : walletPrepareSend(group.id, address, zats, m);
     },
-    onSuccess: (d) => onPrepared(d, all),
+    onSuccess: (d) => onPrepared(d, all, reason.trim() || undefined),
     onError: (e) => {
       const appErr = e as unknown as AppError;
       setErr(appErr.message);
@@ -390,14 +403,55 @@ function EnterSend({
   return (
     <div className="card panel">
       <h3 className="mt-0">Send</h3>
-      <label>To</label>
+      <div className="row between">
+        <label>To</label>
+        {!!payees.data?.length && (
+          <select
+            className="w-auto payee-pick"
+            aria-label="Pay a saved payee"
+            value={payee?.payee_id ?? ""}
+            onChange={(e) => {
+              const picked = payees.data?.find((p) => p.payee_id === e.target.value);
+              if (picked) setRecipient(picked.address);
+            }}
+          >
+            <option value="" disabled>
+              Pay a saved payee…
+            </option>
+            {payees.data.map((p) => (
+              <option key={`${p.author}/${p.payee_id}`} value={p.payee_id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
       <input
         type="text"
         placeholder={ADDRESS_PLACEHOLDER[network]}
         value={recipient}
-        onChange={(e) => setRecipient(e.target.value)}
+        onChange={(e) => {
+          setRecipient(e.target.value);
+          setSavingPayee(false);
+        }}
       />
       {check.error && <div className="error pull-up">{check.error}</div>}
+      {payee ? (
+        <p className="ok pull-up text-sm">
+          {payee.name} · a group payee, added by {memberName(payee.author)}
+        </p>
+      ) : (
+        address &&
+        !needsLookup &&
+        !check.error &&
+        (savingPayee ? (
+          <PayeeForm groupId={group.id} network={network} address={address} onDone={() => setSavingPayee(false)} />
+        ) : (
+          <button className="link-button pull-up mb-3" onClick={() => setSavingPayee(true)}>
+            Save as a group payee
+          </button>
+        ))
+      )}
       {check.transparent && !check.error && (
         <p className="dim pull-up text-sm">
           A transparent address: the amount and recipient will be public.
@@ -464,6 +518,15 @@ function EnterSend({
         </>
       )}
 
+      <label>Reason (optional)</label>
+      <textarea
+        placeholder="What it's for. Only your group sees this."
+        value={reason}
+        maxLength={MAX_REASON}
+        rows={2}
+        onChange={(e) => setReason(e.target.value)}
+      />
+
       {err && <SyncErrorView text={err} />}
       {blocked && <p className="dim text-sm">{blocked}</p>}
       <button
@@ -485,6 +548,7 @@ function ReviewSend({
   network,
   draft,
   kind,
+  reason,
   onBack,
   onError,
 }: {
@@ -492,10 +556,13 @@ function ReviewSend({
   network: WalletNetwork;
   draft: DraftTransaction;
   kind: DraftKind;
+  reason?: string;
   onBack: () => void;
   onError: (message: string | null) => void;
 }) {
   const identity = useQuery({ queryKey: ["identity"], queryFn: getIdentity });
+  const payees = usePayees(group.id);
+  const memberName = useMemberName();
   const contacts = useQuery({ queryKey: ["contacts"], queryFn: listContacts });
   const members = useMemo(
     () =>
@@ -535,6 +602,7 @@ function ReviewSend({
         signers: [...signers],
         sendMax: kind === "max",
         fromOldAddress: kind === "move",
+        reason,
       }),
     onSuccess: () => onError(null),
     onError: (e) => onError((e as unknown as AppError).message),
@@ -551,6 +619,7 @@ function ReviewSend({
     move: "Review: move to the private address",
   }[kind];
   const u = unit(network);
+  const payee = selfSend ? undefined : payeeFor(payees.data, draft.recipient);
 
   return (
     <div className="card panel">
@@ -569,7 +638,14 @@ function ReviewSend({
         <tbody>
           <tr>
             <td>To</td>
-            <td className="mono-cell break-all">{kind === "move" ? "This wallet's private address" : selfSend ? "This wallet" : draft.recipient}</td>
+            <td className="mono-cell break-all">
+              {payee && (
+                <div className="payee-name">
+                  {payee.name} <span className="dim">· group payee, added by {memberName(payee.author)}</span>
+                </div>
+              )}
+              {kind === "move" ? "This wallet's private address" : selfSend ? "This wallet" : draft.recipient}
+            </td>
           </tr>
           <tr>
             <td>Amount</td>
@@ -587,6 +663,12 @@ function ReviewSend({
             <tr>
               <td>Memo</td>
               <td className="break-word">{draft.memo}</td>
+            </tr>
+          )}
+          {reason && (
+            <tr>
+              <td>Reason</td>
+              <td className="break-word">{reason}</td>
             </tr>
           )}
         </tbody>

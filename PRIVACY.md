@@ -39,11 +39,14 @@ When the organizer makes their server reachable through a **Cloudflare tunnel**
 or **Tailscale**, that provider carries the (still end-to-end encrypted)
 traffic and sees the same kind of connection details.
 
-### Polls and community votes
+### Polls, payees, reasons and community votes
 
-- **Group polls** travel through your group's coordination server like
-  everything else members send each other: end-to-end encrypted, so the server
-  sees only that members exchanged messages, not the questions or answers.
+- **Group polls, payees and payment reasons** travel through your group's
+  coordination server like everything else members send each other: end-to-end
+  encrypted, so the server sees only that members exchanged messages, not the
+  questions, answers, names, addresses or reasons. Every member of the group
+  sees them all; they're kept encrypted on each member's device, and none of
+  them goes on chain.
 - **Zcash community votes**: to show what's being voted on, the app reads the
   public round list and results from ValarGroup's voting config at
   `voting.valargroup.org` and the vote servers it lists. The requests are the
