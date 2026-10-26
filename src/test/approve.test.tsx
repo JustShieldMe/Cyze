@@ -220,3 +220,38 @@ test("an approver sees that a large payment was announced, waited, and wasn't ve
   });
   await ui.findByText(/✓ Announced in “Pay the auditor's retainer\?” 30 hours ago, past the group's 1 day wait/);
 });
+
+test("an approver sees what their app approved by itself within the limit, and why it didn't otherwise", async () => {
+  fakeBackend({
+    list_pending_sessions: () => [request, { ...request, session_id: "s2" }],
+    join_signing_session: ({ args }) => ((args as { session_id: string }).session_id === "s1" ? "c9" : "c10"),
+  });
+  const ui = await renderApp("/inbox");
+  await waitFor(() => expect(joinedAs("s2")).toBe("c10"));
+  const limit = { up_to_zatoshis: 1_000_000_000, per_secs: 7 * 86_400 };
+  await emit("signing:progress", {
+    ceremony_id: "c9",
+    event: {
+      phase: "awaiting_approval",
+      message_hex: "9f".repeat(32),
+      context,
+      auto_approved: true,
+      verified,
+      auto_limit: { approved: true, reason: null, spent: 400_000_000, cost: 250_015_000, limit },
+    },
+  });
+  await ui.findByText(/✓ Approved automatically by your app: to trusted payees, within the group's spending limit/);
+  expect(ui.getByText(/has now sent 6.50015 ZEC of 10 ZEC in the last 7 days/)).toBeTruthy();
+  await emit("signing:progress", {
+    ceremony_id: "c10",
+    event: {
+      phase: "awaiting_approval",
+      message_hex: "9f".repeat(32),
+      context,
+      auto_approved: false,
+      verified,
+      auto_limit: { approved: false, reason: "it pays an address that isn't a trusted payee", spent: 0, cost: 250_015_000, limit },
+    },
+  });
+  await ui.findByText("Not approved automatically: it pays an address that isn't a trusted payee.");
+});

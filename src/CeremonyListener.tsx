@@ -38,7 +38,7 @@ export default function CeremonyListener() {
     queryClient.setQueryData(["wallet-sync", status.group_id], status);
   });
   useTauriEvent<{ group_id: string }>("wallet:updated", ({ group_id }) => {
-    for (const key of ["wallet-status", "wallet-history", "wallet-notes", "receive-address", "viewing-key"]) {
+    for (const key of ["wallet-status", "wallet-history", "wallet-notes", "receive-address", "viewing-key", "auto-approval"]) {
       queryClient.invalidateQueries({ queryKey: [key, group_id] });
     }
   });
@@ -59,6 +59,7 @@ export default function CeremonyListener() {
     queryClient.invalidateQueries({ queryKey: ["payees", group_id] });
     queryClient.invalidateQueries({ queryKey: ["payment-reasons", group_id] });
     queryClient.invalidateQueries({ queryKey: ["group-rules", group_id] });
+    queryClient.invalidateQueries({ queryKey: ["auto-approval", group_id] });
     if (new_polls > 0) notifyIfAway("A new poll in one of your groups.");
   });
 
@@ -72,9 +73,11 @@ export default function CeremonyListener() {
   });
   useTauriEvent<CeremonyEventPayload>("dkg:failed", (p) => onFailed("dkg", p));
 
-  useTauriEvent<CeremonyEventPayload>("signing:progress", (p) =>
-    onProgress("signing", p)
-  );
+  useTauriEvent<CeremonyEventPayload>("signing:progress", (p) => {
+    onProgress("signing", p);
+    const auto = (p.event as { auto_limit?: { approved?: boolean } } | undefined)?.auto_limit;
+    if (auto?.approved) notifyIfAway("Your app approved a payment by itself, within the group's spending limit.");
+  });
   useTauriEvent<CeremonyEventPayload>("signing:complete", (p) => {
     onComplete("signing", p);
     refreshWallet();

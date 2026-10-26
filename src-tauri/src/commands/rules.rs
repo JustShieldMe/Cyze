@@ -5,14 +5,15 @@
 //! they see them.
 
 use frost_app_core::polls;
-use frost_app_core::rules::{Broken, GroupRules};
-use frost_app_core::wallet::verify::VerifiedTransaction;
+use frost_app_core::rules::{Broken, GroupRules, NotAutomatic, SpendingLimit};
+use frost_app_core::wallet::{self, verify::VerifiedTransaction};
 use serde::Serialize;
 use tauri::State;
 
 use crate::commands::payees::payees_in;
 use crate::commands::polls::{group, list_polls_in};
-use crate::error::AppResult;
+use crate::commands::wallet::{group_wallet_ctx, unix_now};
+use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
 /// The rules in effect in a group, as this device sees them.
@@ -74,6 +75,145 @@ fn wait(secs: u64) -> String {
 #[tauri::command]
 pub async fn group_rules(state: State<'_, AppState>, group_id: String) -> AppResult<RulesInEffect> {
     in_effect(&state, &group_id).await
+}
+
+/// How long an automatic approval this device made counts on its own, before
+/// the payment is in the wallet's history or has expired (transactions expire
+/// within the hour).
+const IN_FLIGHT_SECS: u64 = 70 * 60;
+
+/// How recently the wallet must have synced for its history to count against
+/// a spending limit.
+const FRESH_SYNC_MS: i64 = 15 * 60 * 1000;
+
+/// What the wallet sent in the last `per_secs`, payments and fees, as far as
+/// this device can say: its history since the block that long ago (by block
+/// spacing, not block times, which a chain needn't keep current), plus what it
+/// approved automatically that may not be in it yet (counted twice once it
+/// is, never too little). None when the wallet isn't synced recently enough
+/// to say.
+pub(crate) async fn spent_in_period(state: &AppState, group_id: &str, per_secs: u64) -> AppResult<Option<u64>> {
+    let Some(tip) = state.sync_service.status(group_id).and_then(|s| {
+        let fresh = s.last_synced_ms.is_some_and(|at| wallet::now_ms() - at < FRESH_SYNC_MS)
+            && wallet::is_caught_up(s.scanned_height, s.tip_height);
+        fresh.then_some(s.tip_height)
+    }) else {
+        return Ok(None);
+    };
+    let (network, _, _) = group_wallet_ctx(state, group_id).await?;
+    let wid = state.wallet_dir_id(group_id).await?;
+    let db_key = state.wallet_db_key(group_id).await?;
+    let now = unix_now();
+    let since = wallet::height_before(network, tip, per_secs);
+    let sent: u64 = wallet::wallet_history(&state.data_dir, &wid, network, db_key.as_ref())?
+        .iter()
+        .filter(|t| t.direction == "send" && t.block_height.is_none_or(|h| h >= since))
+        .map(|t| t.amount_zatoshis + t.fee_zatoshis.unwrap_or(0))
+        .sum();
+    let in_flight: u64 = state
+        .auto_approvals
+        .lock()
+        .await
+        .get(group_id)
+        .into_iter()
+        .flatten()
+        .filter(|(at, _)| now.saturating_sub(*at) < IN_FLIGHT_SECS)
+        .map(|(_, cost)| cost)
+        .sum();
+    Ok(Some(sent + in_flight))
+}
+
+/// Whether this device approves a verified transaction by itself, within the
+/// group's spending limit. None when it doesn't approve automatically in this
+/// group (the member didn't turn it on, or the group has no limit).
+#[derive(Serialize)]
+pub(crate) struct AutoDecision {
+    pub approved: bool,
+    /// Why not, when it isn't.
+    pub reason: Option<String>,
+    /// What the wallet sent in the period before this, what this costs, and
+    /// the limit.
+    pub spent: u64,
+    pub cost: u64,
+    pub limit: SpendingLimit,
+}
+
+pub(crate) async fn automatic_approval(state: &AppState, group_id: &str, tx: &VerifiedTransaction) -> Option<AutoDecision> {
+    let on = state.load_private().await.ok()?.auto_approve.contains(group_id);
+    let rules = in_effect(state, group_id).await.ok()?;
+    let limit = rules.rules.limit.filter(|_| on)?;
+    let cost_of = |tx: &VerifiedTransaction| tx.payments.iter().map(|p| p.value_zatoshis).sum::<u64>() + tx.fee_zatoshis;
+    let Ok(Some(spent)) = spent_in_period(state, group_id, limit.per_secs).await else {
+        let reason = "the wallet isn't synced, so its spending in the period isn't known".to_string();
+        return Some(AutoDecision { approved: false, reason: Some(reason), spent: 0, cost: cost_of(tx), limit });
+    };
+    let trusted: Vec<Vec<String>> = payees_in(state, group_id)
+        .await
+        .ok()?
+        .into_iter()
+        .filter(|p| p.payee.trusted)
+        .map(|p| p.forms)
+        .collect();
+    let is_trusted = |address: &str| trusted.iter().any(|forms| forms.iter().any(|f| f == address));
+    let payments: Vec<(&str, u64)> = tx.payments.iter().map(|p| (p.address.as_str(), p.value_zatoshis)).collect();
+    Some(match rules.rules.may_approve_automatically(&payments, tx.fee_zatoshis, rules.threshold, is_trusted, spent) {
+        Ok(cost) => AutoDecision { approved: true, reason: None, spent, cost, limit },
+        Err(why) => {
+            let cost = match &why {
+                NotAutomatic::OverLimit { cost, .. } => *cost,
+                _ => cost_of(tx),
+            };
+            AutoDecision { approved: false, reason: Some(why.to_string()), spent, cost, limit }
+        }
+    })
+}
+
+/// Whether this device approves payments automatically within a group's
+/// spending limit, what the wallet sent in the limit's period (None if it
+/// can't say yet), and the limit.
+#[derive(Serialize)]
+pub struct AutoApprovalStatus {
+    pub on: bool,
+    pub spent: Option<u64>,
+    pub limit: Option<SpendingLimit>,
+}
+
+#[tauri::command]
+pub async fn auto_approval_status(state: State<'_, AppState>, group_id: String) -> AppResult<AutoApprovalStatus> {
+    let on = state.load_private().await?.auto_approve.contains(&group_id);
+    let limit = in_effect(&state, &group_id).await?.rules.limit;
+    let spent = match limit {
+        Some(l) => spent_in_period(&state, &group_id, l.per_secs).await.unwrap_or(None),
+        None => None,
+    };
+    Ok(AutoApprovalStatus { on, spent, limit })
+}
+
+/// Turn this device's automatic approvals within a group's spending limit on
+/// or off.
+#[tauri::command]
+pub async fn set_auto_approve(state: State<'_, AppState>, group_id: String, on: bool) -> AppResult<()> {
+    if on && in_effect(&state, &group_id).await?.rules.limit.is_none() {
+        return Err(AppError::new("rules", "the group has no spending limit to approve within"));
+    }
+    state
+        .update_private(|p| {
+            if on {
+                p.auto_approve.insert(group_id.clone());
+            } else {
+                p.auto_approve.remove(&group_id);
+            }
+        })
+        .await
+}
+
+/// Note that this device approved `cost` automatically in a group just now.
+pub(crate) async fn record_automatic_approval(state: &AppState, group_id: &str, cost: u64) {
+    let now = unix_now();
+    let mut ledger = state.auto_approvals.lock().await;
+    let entries = ledger.entry(group_id.to_string()).or_default();
+    entries.retain(|(at, _)| now.saturating_sub(*at) < IN_FLIGHT_SECS);
+    entries.push((now, cost));
 }
 
 /// Check the payments a verified transaction makes, asked of `asked` members,

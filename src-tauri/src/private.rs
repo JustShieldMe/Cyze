@@ -52,6 +52,10 @@ pub struct PrivateSettings {
     /// knows a group id could check it against the digest.
     #[serde(default)]
     pub backup_fingerprint: Option<String>,
+    /// Groups whose payments this device approves by itself within the
+    /// group's spending limit (`frost_app_core::rules::SpendingLimit`).
+    #[serde(default)]
+    pub auto_approve: std::collections::BTreeSet<String>,
 }
 
 impl AppState {
@@ -132,6 +136,7 @@ pub(crate) async fn migrate_plaintext(state: &AppState) {
         contact_aliases: std::mem::take(&mut settings.contact_aliases),
         verified_contacts: Default::default(),
         backup_fingerprint: settings.backup_fingerprint.take(),
+        auto_approve: Default::default(),
     };
     let had_legacy = !(legacy.network_birthdays.is_empty()
         && legacy.wallet_birthdays.is_empty()

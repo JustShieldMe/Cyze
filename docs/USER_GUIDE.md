@@ -370,6 +370,20 @@ A group can adopt **rules** for its payments, under **Rules** on Home:
 - **Larger payments wait for vetoes.** Payments over an amount have to be
   announced first, and can be sent only after a wait (an hour to a week) in
   which no member vetoed them.
+- **Small payments can be approved automatically.** Members who turn it on let
+  their app approve payments to trusted payees by itself, while the wallet has
+  sent less than a limit in a period (for example 1 ZEC a week).
+
+With a spending limit in effect, each member chooses whether their own app
+approves automatically: **Approve automatically on this device** under
+**Rules**, which also shows how much of the limit the wallet has used. An app
+approves by itself only when every payment goes to a trusted payee, no other
+rule needs more approvals or a wait, the fee is usual, and the payment and its
+fee fit in what's left of the limit. It counts everything the wallet sent in
+the period, however it was approved, so the limit holds however many members
+turn this on. It still verifies the transaction and checks every other rule
+first, needs Cyze open and unlocked, and tells you when it approves. If the
+wallet isn't synced, it doesn't approve anything by itself.
 
 With a wait in effect, the send form offers **Announce it** instead of
 **Review payment** for a payment over the amount. That starts a payment poll

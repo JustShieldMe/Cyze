@@ -42,6 +42,10 @@ breaking changes. Cyze is beta, unaudited software (see the README).
     its address as a payment needs approvals.
   - **Larger payments need more approvals**, for payments over an amount
     together in one transaction.
+  - **Small payments can be approved automatically:** within a spending limit
+    (counting everything the wallet sent in the period), members who turn it
+    on let their app approve payments to trusted payees by itself, and it
+    tells them.
   - **Larger payments wait for vetoes:** they're announced in a payment poll
     (**Announce it** on the send form) and can be sent once the wait has
     passed with no member choosing Don't pay. Each app counts the wait from

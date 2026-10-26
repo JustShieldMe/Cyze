@@ -18,6 +18,13 @@
 //! choosing "Don't pay". Each member's app measures the delay from when it
 //! received the announcement, so a backdated one gains nothing and everyone
 //! has the whole delay to object.
+//!
+//! A spending limit lets members have their apps approve routine payments by
+//! themselves: to trusted payees, up to an amount in a period, counting
+//! everything the wallet sent in it ([`GroupRules::may_approve_automatically`]).
+//! Each member turns it on for their own app; the others still approve by
+//! hand. An app that approves automatically still verifies the transaction
+//! and checks every other rule first.
 
 use serde::{Deserialize, Serialize};
 
@@ -26,6 +33,9 @@ pub const MAX_APPROVALS: u32 = 100;
 /// The shortest and longest delay a rule can set before a large payment.
 pub const MIN_DELAY_SECS: u64 = 60 * 60;
 pub const MAX_DELAY_SECS: u64 = 30 * 24 * 60 * 60;
+/// The shortest and longest period a spending limit can count over.
+pub const MIN_LIMIT_PERIOD_SECS: u64 = 60 * 60;
+pub const MAX_LIMIT_PERIOD_SECS: u64 = 90 * 24 * 60 * 60;
 
 /// A group's rules for its payments. The default is none: any payment as many
 /// members approve as the group needs goes through.
@@ -41,6 +51,62 @@ pub struct GroupRules {
     /// Larger payments are announced first, and wait for vetoes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delay: Option<Delay>,
+    /// Members' apps may approve routine payments automatically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<SpendingLimit>,
+}
+
+/// "A member's app may approve payments to trusted payees by itself while the
+/// wallet has sent less than `up_to_zatoshis` in the last `per_secs`, this
+/// payment and its fee included."
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpendingLimit {
+    pub up_to_zatoshis: u64,
+    pub per_secs: u64,
+}
+
+/// Why an app doesn't approve a payment automatically.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotAutomatic {
+    /// The group has no spending limit.
+    NoLimit,
+    /// It makes no payments (a transfer within the group).
+    NoPayments,
+    /// It pays an address that isn't a trusted payee.
+    Untrusted,
+    /// It's large enough that the rules need more approvals, or a wait.
+    Large,
+    /// Its fee is higher than a transaction like it needs.
+    Fee,
+    /// It would take the wallet's spending in the period over the limit.
+    OverLimit { spent: u64, cost: u64, limit: SpendingLimit },
+}
+
+impl std::fmt::Display for NotAutomatic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NotAutomatic::NoLimit => write!(f, "the group has no spending limit"),
+            NotAutomatic::NoPayments => write!(f, "it makes no payments"),
+            NotAutomatic::Untrusted => write!(f, "it pays an address that isn't a trusted payee"),
+            NotAutomatic::Large => write!(f, "it's large enough that the rules need more approvals or a wait"),
+            NotAutomatic::Fee => write!(f, "its fee is higher than usual"),
+            NotAutomatic::OverLimit { spent, cost, limit } => write!(
+                f,
+                "the wallet has sent {} in the last {}, and this would take it to {}, over the limit of {}",
+                coins(*spent),
+                duration(limit.per_secs),
+                coins(spent + cost),
+                coins(limit.up_to_zatoshis)
+            ),
+        }
+    }
+}
+
+/// The most a transaction making `payments` payments should pay in fees for
+/// an app to approve it by itself: ZIP 317 charges 5,000 zatoshis per action,
+/// so this allows a few notes spent per payment.
+pub fn usual_fee(payments: usize) -> u64 {
+    50_000 + 10_000 * (payments as u64 + 1)
 }
 
 /// "Payments of at least `from_zatoshis` together are announced in a payment
@@ -138,6 +204,40 @@ impl GroupRules {
         }
     }
 
+    /// Whether a member's app may approve a transaction by itself: its
+    /// `payments` (address, amount) all to trusted payees, routine (no extra
+    /// approvals or wait), a usual `fee`, and with the wallet having sent
+    /// `spent_in_period` in the limit's period, within the limit. Returns what
+    /// it costs against the limit (payments and fee).
+    pub fn may_approve_automatically(
+        &self,
+        payments: &[(&str, u64)],
+        fee: u64,
+        threshold: u32,
+        is_trusted: impl Fn(&str) -> bool,
+        spent_in_period: u64,
+    ) -> Result<u64, NotAutomatic> {
+        let limit = self.limit.ok_or(NotAutomatic::NoLimit)?;
+        if payments.is_empty() {
+            return Err(NotAutomatic::NoPayments);
+        }
+        if !payments.iter().all(|(address, _)| is_trusted(address)) {
+            return Err(NotAutomatic::Untrusted);
+        }
+        let total: u64 = payments.iter().map(|(_, amount)| amount).sum();
+        if self.approvals_needed(total, threshold) > threshold || self.delay_for(total).is_some() {
+            return Err(NotAutomatic::Large);
+        }
+        if fee > usual_fee(payments.len()) {
+            return Err(NotAutomatic::Fee);
+        }
+        let cost = total.saturating_add(fee);
+        if spent_in_period.saturating_add(cost) > limit.up_to_zatoshis {
+            return Err(NotAutomatic::OverLimit { spent: spent_in_period, cost, limit });
+        }
+        Ok(cost)
+    }
+
     /// The delay payments totalling `total_zatoshis` wait for, if any.
     pub fn delay_for(&self, total_zatoshis: u64) -> Option<Delay> {
         self.delay.filter(|d| total_zatoshis >= d.from_zatoshis)
@@ -178,6 +278,9 @@ impl GroupRules {
     pub fn is_valid(&self) -> bool {
         self.large.is_none_or(|l| l.from_zatoshis > 0 && (2..=MAX_APPROVALS).contains(&l.approvals))
             && self.delay.is_none_or(|d| d.from_zatoshis > 0 && (MIN_DELAY_SECS..=MAX_DELAY_SECS).contains(&d.secs))
+            && self.limit.is_none_or(|l| {
+                l.up_to_zatoshis > 0 && (MIN_LIMIT_PERIOD_SECS..=MAX_LIMIT_PERIOD_SECS).contains(&l.per_secs)
+            })
     }
 }
 
@@ -212,7 +315,7 @@ mod tests {
 
     #[test]
     fn only_trusted_payees_are_paid_when_the_rules_say_so() {
-        let rules = GroupRules { trusted_payees_only: true, large: None, delay: None };
+        let rules = GroupRules { trusted_payees_only: true, ..GroupRules::default() };
         let trusted = |a: &str| a == "u1auditor";
         assert_eq!(rules.check(&[("u1auditor", ZEC)], 2, 2, trusted, false), Ok(()));
         assert_eq!(
@@ -254,6 +357,33 @@ mod tests {
     }
 
     #[test]
+    fn an_app_approves_routine_payments_to_trusted_payees_by_itself_within_the_limit() {
+        let week = 7 * 86_400;
+        let limit = SpendingLimit { up_to_zatoshis: 10 * ZEC, per_secs: week };
+        let rules = GroupRules {
+            limit: Some(limit),
+            large: Some(LargePayments { from_zatoshis: 5 * ZEC, approvals: 3 }),
+            ..GroupRules::default()
+        };
+        let trusted = |a: &str| a != "u1stranger";
+        let auto = |payments: &[(&str, u64)], fee, spent| rules.may_approve_automatically(payments, fee, 2, trusted, spent);
+        assert_eq!(auto(&[("u1a", ZEC)], 15_000, 3 * ZEC), Ok(ZEC + 15_000));
+        assert_eq!(auto(&[], 15_000, 0), Err(NotAutomatic::NoPayments));
+        assert_eq!(auto(&[("u1a", ZEC), ("u1stranger", 1)], 15_000, 0), Err(NotAutomatic::Untrusted));
+        assert_eq!(auto(&[("u1a", 5 * ZEC)], 15_000, 0), Err(NotAutomatic::Large), "needs more approvals anyway");
+        assert_eq!(auto(&[("u1a", ZEC)], usual_fee(1) + 1, 0), Err(NotAutomatic::Fee));
+        // Up to the limit, the fee included, and not a zatoshi more.
+        assert_eq!(auto(&[("u1a", ZEC - 15_000)], 15_000, 9 * ZEC), Ok(ZEC));
+        let over = auto(&[("u1a", ZEC)], 15_000, 9 * ZEC);
+        assert_eq!(over, Err(NotAutomatic::OverLimit { spent: 9 * ZEC, cost: ZEC + 15_000, limit }));
+        assert_eq!(
+            over.unwrap_err().to_string(),
+            "the wallet has sent 9 in the last 7 days, and this would take it to 10.00015, over the limit of 10"
+        );
+        assert_eq!(GroupRules::default().may_approve_automatically(&[("u1a", 1)], 0, 2, trusted, 0), Err(NotAutomatic::NoLimit));
+    }
+
+    #[test]
     fn malformed_rules_are_never_valid() {
         assert!(GroupRules::default().is_valid());
         let large = |from_zatoshis, approvals| GroupRules { large: Some(LargePayments { from_zatoshis, approvals }), ..GroupRules::default() };
@@ -266,5 +396,9 @@ mod tests {
         assert!(!delay(ZEC, MIN_DELAY_SECS - 1).is_valid());
         assert!(!delay(ZEC, MAX_DELAY_SECS + 1).is_valid());
         assert!(!delay(0, MIN_DELAY_SECS).is_valid());
+        let limit = |up_to_zatoshis, per_secs| GroupRules { limit: Some(SpendingLimit { up_to_zatoshis, per_secs }), ..GroupRules::default() };
+        assert!(limit(ZEC, MIN_LIMIT_PERIOD_SECS).is_valid());
+        assert!(!limit(0, MIN_LIMIT_PERIOD_SECS).is_valid());
+        assert!(!limit(ZEC, MAX_LIMIT_PERIOD_SECS + 1).is_valid());
     }
 }

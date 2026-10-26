@@ -91,6 +91,16 @@ interface RulesCheck {
   asked: number;
 }
 
+/** This app's decision on approving a request by itself, within the group's
+ *  spending limit (commands::rules::AutoDecision). */
+interface AutoDecision {
+  approved: boolean;
+  reason: string | null;
+  spent: number;
+  cost: number;
+  limit: { up_to_zatoshis: number; per_secs: number };
+}
+
 /** Which of the group's rules a request was checked against. */
 function RulesMet({ rules }: { rules: RulesCheck }) {
   const parts = [
@@ -352,6 +362,7 @@ export default function Inbox() {
           const approval = detail.window as ApprovalWindow | null | undefined;
           const poll = detail.poll as PollCheck | undefined;
           const rules = detail.rules as RulesCheck | undefined;
+          const autoLimit = detail.auto_limit as AutoDecision | undefined;
           const refused = detail.refused as string | undefined;
           const autoApproved = detail.auto_approved === true;
           const messageHex = detail.message_hex as string | undefined;
@@ -402,6 +413,15 @@ export default function Inbox() {
                     {refused.replace(/^refused to sign: /, "").replace(/^./, (c) => c.toUpperCase())}
                   </span>
                 </div>
+              ) : awaiting && ceremonyId && autoApproved && autoLimit?.approved ? (
+                <div className="mt-3">
+                  {verified && <VerifiedSummary tx={verified} network={network} groupId={group?.id} />}
+                  <p className="ok mt-2">
+                    ✓ Approved automatically by your app: to trusted payees, within the group's spending limit. The
+                    wallet has now sent {formatZec(autoLimit.spent + autoLimit.cost, network)} of{" "}
+                    {formatZec(autoLimit.limit.up_to_zatoshis, network)} in the last {durationText(autoLimit.limit.per_secs)}.
+                  </p>
+                </div>
               ) : awaiting && ceremonyId && autoApproved ? (
                 <p className="ok mt-3">
                   ✓ Approved automatically: another note of a transaction you already
@@ -411,6 +431,9 @@ export default function Inbox() {
                 <div className="mt-3">
                   {poll && <PollStatus poll={poll} from={from} />}
                   {rules && <RulesMet rules={rules} />}
+                  {autoLimit && !autoLimit.approved && (
+                    <p className="dim text-sm mb-2">Not approved automatically: {autoLimit.reason}.</p>
+                  )}
                   {context?.reason && (
                     <p className="reason-claim">
                       <span className="dim">{from} says it's for:</span> {context.reason}
