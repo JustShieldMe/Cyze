@@ -22,8 +22,12 @@ use tokio::process::Command;
 
 use crate::error::{AppError, AppResult};
 
-/// The launcher's binary name.
-const BIN: &str = "thus-spoke-zakura";
+/// The launcher's binary names: `ths` from 0.4, the only one its install.sh
+/// installs, and `thus-spoke-zakura` before. Either reads the same instances.
+const BINS: [&str; 2] = ["ths", "thus-spoke-zakura"];
+
+/// What error messages call the launcher.
+const LAUNCHER: &str = "thus-spoke-zakura";
 
 /// How long any one CLI call may take. `endpoints` only reads a file, so this
 /// is generous; it just keeps a wedged CLI from hanging the settings screen.
@@ -51,18 +55,22 @@ pub enum Lookup {
 
 /// Candidate binary locations: PATH first, then where `install.sh` puts it.
 /// A GUI-launched app often doesn't inherit a shell PATH that includes
-/// `~/.local/bin`, so the install locations are tried explicitly.
+/// `~/.local/bin`, so the install locations are tried explicitly. Every `ths`
+/// comes before any `thus-spoke-zakura`, so a current launcher wins over an
+/// older one left on the machine.
 fn candidates() -> Vec<PathBuf> {
-    let mut c = vec![PathBuf::from(BIN)];
+    let mut dirs_tried = Vec::new();
     if let Some(dir) = std::env::var_os("TSZ_INSTALL_DIR") {
-        c.push(PathBuf::from(dir).join(BIN));
+        dirs_tried.push(PathBuf::from(dir));
     }
     if let Some(home) = dirs::home_dir() {
-        c.push(home.join(".local/bin").join(BIN));
+        dirs_tried.push(home.join(".local/bin"));
     }
-    c.push(PathBuf::from("/usr/local/bin").join(BIN));
-    c.push(PathBuf::from("/opt/homebrew/bin").join(BIN));
-    c
+    dirs_tried.push(PathBuf::from("/usr/local/bin"));
+    dirs_tried.push(PathBuf::from("/opt/homebrew/bin"));
+    BINS.iter()
+        .flat_map(|bin| std::iter::once(PathBuf::from(bin)).chain(dirs_tried.iter().map(move |d| d.join(bin))))
+        .collect()
 }
 
 /// The first candidate that answers `--version`, or `None` if not installed.
@@ -97,7 +105,7 @@ pub fn valid_instance_name(name: &str) -> bool {
 /// Parse `endpoints --json` output.
 pub fn parse_endpoints(stdout: &[u8]) -> AppResult<Endpoints> {
     serde_json::from_slice(stdout)
-        .map_err(|e| AppError::new("devnet", format!("unexpected `{BIN} endpoints --json` output: {e}")))
+        .map_err(|e| AppError::new("devnet", format!("unexpected `{LAUNCHER} endpoints --json` output: {e}")))
 }
 
 /// Ask the CLI where the devnet named `instance` is.
@@ -120,8 +128,8 @@ pub async fn lookup(instance: &str) -> AppResult<Lookup> {
         .stdin(Stdio::null());
     let out = tokio::time::timeout(CLI_TIMEOUT, cmd.output())
         .await
-        .map_err(|_| AppError::new("devnet", format!("`{BIN} endpoints` timed out")))?
-        .map_err(|e| AppError::new("devnet", format!("running `{BIN} endpoints`: {e}")))?;
+        .map_err(|_| AppError::new("devnet", format!("`{LAUNCHER} endpoints` timed out")))?
+        .map_err(|e| AppError::new("devnet", format!("running `{LAUNCHER} endpoints`: {e}")))?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         let reason = stderr
@@ -152,6 +160,18 @@ mod tests {
         assert_eq!(e.dashboard, "http://127.0.0.1:49153");
         assert!(parse_endpoints(b"not json").is_err());
         assert!(parse_endpoints(br#"{"dashboard":"x"}"#).is_err());
+    }
+
+    #[test]
+    fn the_current_launcher_name_is_tried_before_the_old_one() {
+        let names: Vec<String> = candidates()
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names[0], "ths", "PATH's ths first: {names:?}");
+        let last_ths = names.iter().rposition(|n| n == "ths").unwrap();
+        let first_old = names.iter().position(|n| n == "thus-spoke-zakura").unwrap();
+        assert!(last_ths < first_old, "every ths before any thus-spoke-zakura: {names:?}");
     }
 
     #[test]
