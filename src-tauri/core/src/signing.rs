@@ -493,6 +493,7 @@ async fn run_participant_generic<C: RandomizedCiphersuite + 'static>(
             message_hex: hex::encode(signing_package.message()),
             context,
             randomizer_hex: send_args.randomizer.first().map(|r| hex::encode(r.serialize())),
+            coordinator: hex::encode(&session_info.coordinator_pubkey.0),
         })
         .await;
     let approved = tokio::select! {

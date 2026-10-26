@@ -1032,3 +1032,9 @@ table.batch-payments td { vertical-align: top; }
 table.batch-payments .num { text-align: right; }
 .tx-payment + .tx-payment { margin-top: 4px; }
 .payment-row select.payee-pick { min-width: 200px; margin-bottom: 0; }
+
+/* Payments a poll proposes, and sending them once agreed. */
+.proposed-payments { border-left: 3px solid var(--gold-faint); padding: 6px 10px; margin: 8px 0 10px; background: var(--bg-input); border-radius: 0 6px 6px 0; }
+.proposed-payment { font-size: 13px; word-break: break-word; }
+.proposed-payment + .proposed-payment { margin-top: 3px; }
+.send-agreed { border-top: 1px solid var(--border); padding-top: 10px; }

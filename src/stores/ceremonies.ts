@@ -49,6 +49,8 @@ export interface SendMeta {
   /** A batch: every payment, made in one transaction (`recipient` is empty
    *  and `amountZatoshis` is the total). */
   payments?: { recipient: string; amountZatoshis: number; memo?: string }[];
+  /** The group poll whose agreed payments this sends. */
+  pollId?: string;
 }
 
 export interface CeremonyState {

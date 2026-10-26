@@ -144,3 +144,33 @@ test("an approver sees the payee's name from their own payees, and what the requ
     expect(document.querySelector(".payee-name")?.textContent).toBe("Auditor · group payee, added by Bob"),
   );
 });
+
+test("an approver sees that the group agreed to the payment a request sends", async () => {
+  fakeBackend({
+    list_pending_sessions: () => [
+      { session_id: "s1", kind: "signing", coordinator: "Alice", coordinator_pubkey: ALICE, matching_groups: [GROUP_ID] },
+    ],
+    join_signing_session: () => "c6",
+  });
+  const ui = await renderApp("/inbox");
+  await waitFor(() => expect(joinedAs("s1")).toBe("c6"));
+  await emit("signing:progress", {
+    ceremony_id: "c6",
+    event: {
+      phase: "awaiting_approval",
+      message_hex: "9f".repeat(32),
+      context: { network: "main", spend_index: 1, spend_total: 1, reason: "Pay the auditor for Q4?", poll_id: "p1" },
+      auto_approved: false,
+      verified: {
+        sighash_hex: "9f".repeat(32),
+        expiry_height: 3_500_040,
+        payments: [{ address: "u1payee", value_zatoshis: 250_000_000, transparent: false, memo: "Q4 audit" }],
+        spent_zatoshis: 1_000_000_000,
+        change_zatoshis: 749_985_000,
+        fee_zatoshis: 15_000,
+      },
+      poll: { poll_id: "p1", missing: false, title: "Pay the auditor for Q4?", agreed: true, declined: false, chose_pay: 2, threshold: 2 },
+    },
+  });
+  await ui.findByText(/✓ Agreed in the poll “Pay the auditor for Q4\?”: 2 chose Pay, 2 needed/);
+});

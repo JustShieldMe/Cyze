@@ -50,6 +50,7 @@ async fn records_from_a_newer_version_dont_hold_up_the_rest() {
         options,
         closes_at: 4_000_000_000,
         community: None,
+        payments: Vec::new(),
     };
     let future: serde_json::Value = serde_json::json!({ "kind": "from_the_future", "what": "a kind no version uses" });
     let batch = [

@@ -708,6 +708,7 @@ mod tests {
             pczt: None,
             reason: None,
             payments: Vec::new(),
+            poll_id: None,
         }
     }
 

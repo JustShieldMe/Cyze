@@ -129,6 +129,7 @@ async fn an_older_group_goes_private_and_moves_its_funds() {
             send_max: false,
             reason: None,
             payments: Vec::new(),
+            poll_id: None,
         },
     )
     .await

@@ -12,7 +12,9 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use frost_app_core::community_vote::{self, CommunityVotes};
-use frost_app_core::polls::{self, Channel, GroupLog, Message, PollView, Record, RecordBody};
+use frost_app_core::polls::{self, Channel, GroupLog, Message, PollView, ProposedPayment, Record, RecordBody};
+use frost_app_core::wallet::verify::{address_forms, VerifiedTransaction};
+use frost_app_core::wallet::WalletNetwork;
 use frost_client::api::PublicKey;
 use serde::Deserialize;
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
@@ -141,6 +143,10 @@ pub struct CreatePollArgs {
     pub options: Vec<String>,
     /// How long it stays open.
     pub open_for_secs: u64,
+    /// Payments it proposes: the options are then "Pay" and "Don't pay", and
+    /// once the group agrees to pay, this member can send exactly these.
+    #[serde(default)]
+    pub payments: Vec<ProposedPayment>,
 }
 
 /// Ask the group a question. Returns the poll's id.
@@ -148,13 +154,20 @@ pub struct CreatePollArgs {
 pub async fn create_poll<R: Runtime>(app: AppHandle<R>, args: CreatePollArgs) -> AppResult<String> {
     let poll_id = Uuid::new_v4().to_string();
     let open_for = args.open_for_secs.clamp(60 * 60, 90 * 24 * 60 * 60);
+    let payments = proposed_payments(&app.state::<AppState>(), args.payments)?;
+    let options = if payments.is_empty() {
+        args.options.iter().map(|o| o.trim().to_string()).filter(|o| !o.is_empty()).collect()
+    } else {
+        polls::PAYMENT_OPTIONS.map(String::from).to_vec()
+    };
     let body = RecordBody::Poll {
         poll_id: poll_id.clone(),
         title: args.title.trim().to_string(),
         details: args.details.trim().to_string(),
-        options: args.options.iter().map(|o| o.trim().to_string()).filter(|o| !o.is_empty()).collect(),
+        options,
         closes_at: unix_now() + open_for,
         community: None,
+        payments,
     };
     write(&app, &args.group_id, body).await?;
     Ok(poll_id)
@@ -208,6 +221,7 @@ pub async fn poll_community_round<R: Runtime>(
             options: proposal.options.iter().take(polls::MAX_OPTIONS).map(|o| o.chars().take(polls::MAX_OPTION).collect()).collect(),
             closes_at,
             community: Some(polls::CommunityRef { round_id: round.id.clone(), proposal_id: proposal.id }),
+            payments: Vec::new(),
         };
         write(&app, &group_id, body).await?;
         created += 1;
@@ -240,7 +254,51 @@ pub async fn close_poll<R: Runtime>(app: AppHandle<R>, group_id: String, poll_id
     write(&app, &group_id, RecordBody::Close { poll_id }).await
 }
 
-async fn find(state: &AppState, group_id: &str, poll_id: &str) -> AppResult<PollView> {
+/// Payments a new poll proposes, checked as a send would check them: each to
+/// an address on the configured network, for more than nothing. Memos are
+/// trimmed, and dropped for transparent addresses, as a send does.
+fn proposed_payments(state: &AppState, payments: Vec<ProposedPayment>) -> AppResult<Vec<ProposedPayment>> {
+    if payments.len() > polls::MAX_PROPOSED_PAYMENTS {
+        return Err(AppError::new("config", format!("a poll proposes up to {} payments", polls::MAX_PROPOSED_PAYMENTS)));
+    }
+    let network = crate::commands::wallet::configured_network(&state.load_settings());
+    payments
+        .into_iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let which = format!("payment {}", i + 1);
+            let forms = address_forms(network, &p.recipient).map_err(|e| AppError::new("config", format!("{which}: {}", AppError::from(e).message)))?;
+            if p.amount_zatoshis == 0 {
+                return Err(AppError::new("config", format!("{which}: the amount must be more than zero")));
+            }
+            let transparent = frost_app_core::wallet::is_transparent_address(network, &forms[0]);
+            let memo = p.memo.as_deref().map(str::trim).filter(|m| !transparent && !m.is_empty()).map(str::to_string);
+            if memo.as_ref().is_some_and(|m| m.len() > 512) {
+                return Err(AppError::new("config", format!("{which}: the memo is longer than 512 bytes")));
+            }
+            Ok(ProposedPayment { recipient: forms[0].clone(), amount_zatoshis: p.amount_zatoshis, memo })
+        })
+        .collect()
+}
+
+/// Whether `tx` makes exactly the payments `proposed`, each once and nothing
+/// else (in any order: outputs are shuffled).
+pub(crate) fn pays_what_was_proposed(network: WalletNetwork, proposed: &[ProposedPayment], tx: &VerifiedTransaction) -> bool {
+    if proposed.len() != tx.payments.len() {
+        return false;
+    }
+    let mut unmatched: Vec<_> = tx.payments.iter().collect();
+    proposed.iter().all(|p| {
+        let Ok(forms) = address_forms(network, &p.recipient) else { return false };
+        let memo = p.memo.as_deref().map(str::trim).filter(|m| !m.is_empty());
+        let found = unmatched.iter().position(|v| {
+            forms.contains(&v.address) && v.value_zatoshis == p.amount_zatoshis && (v.transparent || v.memo.as_deref() == memo)
+        });
+        found.map(|i| unmatched.swap_remove(i)).is_some()
+    })
+}
+
+pub(crate) async fn find(state: &AppState, group_id: &str, poll_id: &str) -> AppResult<PollView> {
     list_polls_in(state, group_id)
         .await?
         .into_iter()
@@ -435,4 +493,55 @@ pub(crate) async fn forget(state: &AppState, group_id: &str) -> AppResult<()> {
         frost_app_core::keystore::write_atomic(&state.data_dir.join(FILE), &sealed)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use frost_app_core::wallet::verify::VerifiedPayment;
+
+    const NET: WalletNetwork = WalletNetwork::Main;
+
+    fn address(seed: u8) -> String {
+        let sk = orchard::keys::SpendingKey::from_bytes([seed; 32]).unwrap();
+        let ak: [u8; 32] = orchard::keys::FullViewingKey::from(&sk).to_bytes()[..32].try_into().unwrap();
+        frost_app_core::zcash::derive_orchard_keys(&ak, None, NET.network_type()).unwrap().address
+    }
+    fn proposed(seed: u8, amount_zatoshis: u64, memo: Option<&str>) -> ProposedPayment {
+        ProposedPayment { recipient: address(seed), amount_zatoshis, memo: memo.map(String::from) }
+    }
+    fn verified(payments: &[(u8, u64, Option<&str>)]) -> VerifiedTransaction {
+        VerifiedTransaction {
+            sighash_hex: String::new(),
+            expiry_height: 0,
+            payments: payments
+                .iter()
+                .map(|(seed, value, memo)| VerifiedPayment {
+                    address: address(*seed),
+                    value_zatoshis: *value,
+                    transparent: false,
+                    memo: memo.map(String::from),
+                })
+                .collect(),
+            spent_zatoshis: 0,
+            change_zatoshis: 0,
+            fee_zatoshis: 0,
+            from_old_address: false,
+        }
+    }
+
+    #[test]
+    fn a_transaction_pays_what_was_proposed_only_if_it_makes_exactly_those_payments() {
+        let poll = [proposed(1, 100, Some("Q4 audit")), proposed(2, 250, None)];
+        // In any order.
+        assert!(pays_what_was_proposed(NET, &poll, &verified(&[(2, 250, None), (1, 100, Some("Q4 audit"))])));
+        assert!(!pays_what_was_proposed(NET, &poll, &verified(&[(1, 100, Some("Q4 audit"))])), "one missing");
+        assert!(!pays_what_was_proposed(NET, &poll, &verified(&[(1, 100, Some("Q4 audit")), (2, 251, None)])), "more");
+        assert!(!pays_what_was_proposed(NET, &poll, &verified(&[(1, 100, Some("Q5")), (2, 250, None)])), "another memo");
+        assert!(!pays_what_was_proposed(NET, &poll, &verified(&[(1, 100, Some("Q4 audit")), (3, 250, None)])), "elsewhere");
+        let extra = verified(&[(1, 100, Some("Q4 audit")), (2, 250, None), (3, 1, None)]);
+        assert!(!pays_what_was_proposed(NET, &poll, &extra), "and something else");
+        let twice = [proposed(1, 100, None), proposed(1, 100, None)];
+        assert!(!pays_what_was_proposed(NET, &twice, &verified(&[(1, 100, None), (2, 100, None)])), "each once");
+    }
 }

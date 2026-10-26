@@ -399,6 +399,12 @@ otherwise settle in a chat.
    needs to approve a payment (for a 2-of-3 group, two). The member who asked
    can **Close poll** early.
 
+A poll can also **propose a payment** (tick **Propose a payment** when asking).
+Members choose **Pay** or **Don't pay**; once Pay is agreed, the member who
+proposed it clicks **Send payment**, and each approver's app checks the
+transaction against the poll before they approve. See
+[Propose a payment](VOTING.md#propose-a-payment).
+
 Polls go through the group's coordination server, encrypted so only members
 can read them, and nothing goes on chain. A member who was offline gets each
 member's polls and votes once that member's app has been online too.

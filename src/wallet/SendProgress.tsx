@@ -50,6 +50,7 @@ export async function requestApprovals(meta: SendMeta): Promise<string> {
           })),
         }
       : {}),
+    ...(meta.pollId ? { poll_id: meta.pollId } : {}),
   });
   useCeremonies.getState().startSend(started.ceremony_id, {
     ...meta,

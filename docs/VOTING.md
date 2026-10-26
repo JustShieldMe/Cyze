@@ -3,13 +3,14 @@
 **Votes** in the sidebar has two kinds of vote:
 
 - **Group polls.** Ask the members of one of your groups a question and see
-  where everyone stands. Use it to signal, or to agree before someone sets up a
-  payment.
+  where everyone stands. Use it to signal, or to agree on a payment: a poll can
+  propose one, and once the group agrees, it's sent exactly as proposed.
 - **Zcash community votes.** See what Zcash coinholders are voting on through
   [Shielded Vote](https://valargroup.gitbook.io/shielded-vote-docs), and agree
   as a group on how your wallet would vote.
 
-Neither kind moves funds or puts anything on chain.
+Voting itself never moves funds or puts anything on chain. A payment a poll
+proposes still needs its own approvals.
 
 A red **!** next to **Votes** means a poll is waiting for your answer. If
 Cyze isn't in front when a new poll arrives, you also get a system
@@ -73,6 +74,43 @@ needs to approve a payment. In a 2-of-3 group, that's two members.
 - If no option reaches that number, nothing is agreed.
 - If someone changes their vote, the count follows it. An option can lose
   "agreed" while the poll is still open.
+
+### Propose a payment
+
+A poll can propose a payment, so the group agrees on exactly what to pay before
+anyone is asked to sign. It's how a group decides together and then acts: a
+grant, an invoice, a budget line.
+
+1. Click **New poll**, write the question (for example "Pay the auditor for
+   Q4?") and tick **Propose a payment**. It's offered for groups that have a
+   Zcash wallet.
+2. Enter the payments, as on the send form: who (an address, or one of the
+   group's payees), how much, and an optional memo for each. Up to 20, sent in
+   one transaction.
+3. Click **Ask the group**. The options are **Pay** and **Don't pay**.
+
+Members vote as on any poll. Once **Pay** is agreed (as many members choose it
+as a payment needs), the member who proposed it sees **Send payment**:
+
+1. Choose who to ask to approve. It starts with the members who chose Pay.
+2. Click **Send payment**. Cyze builds the transaction from the poll itself,
+   with the poll's question as its reason, and follows it on **Home** like any
+   other payment.
+
+Approving it is like approving any payment, with extra checks. Each approver's
+app compares the request with its own copy of the poll and **refuses
+automatically** if:
+
+- someone other than the member who proposed it sends it;
+- the transaction doesn't make exactly the payments the poll proposed;
+- the poll's payment was already sent.
+
+Otherwise it shows whether the group agreed ("Agreed in the poll …: 2 chose
+Pay, 2 needed"), or warns that it hasn't. Once the payment is sent, the poll
+shows **Paid**, and it can't be sent again.
+
+If the member who proposed it can't send it (they left, or lost their device),
+ask the group again in a new poll.
 
 ### Closing
 
@@ -195,7 +233,8 @@ open within the group. Only people outside the group can't see them.
 
 **Does voting cost anything, or touch the wallet?**
 No. Polls are messages between members. They don't spend funds, need fees, or
-put anything on chain.
+put anything on chain. A payment a poll proposes is sent separately, with its
+own approvals and fee, once the group agrees.
 
 **Can I poll a group that isn't a Zcash wallet?**
 Yes, any group can have polls. **Decide together** needs a Zcash wallet group,

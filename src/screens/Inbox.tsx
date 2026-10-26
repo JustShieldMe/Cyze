@@ -65,6 +65,51 @@ interface VerifiedTransaction {
   from_old_address?: boolean;
 }
 
+/** What the approver's app found about the group poll a request says it
+ *  sends the agreed payments of (commands::signing::PollCheck). The backend
+ *  already refused one that doesn't match its copy of the poll. */
+interface PollCheck {
+  poll_id: string;
+  missing: boolean;
+  title: string;
+  agreed: boolean;
+  declined: boolean;
+  chose_pay: number;
+  threshold: number;
+}
+
+/** Whether the group agreed to a poll-backed request, as this app sees it. */
+function PollStatus({ poll, from }: { poll: PollCheck; from: string }) {
+  if (poll.missing) {
+    return (
+      <div className="callout warn mb-3">
+        <span>
+          This says it sends the payment a group poll agreed to, but your app doesn't have that poll yet. Check
+          with {from} before approving.
+        </span>
+      </div>
+    );
+  }
+  if (poll.agreed) {
+    return (
+      <p className="ok mb-2">
+        ✓ Agreed in the poll “{poll.title}”: {poll.chose_pay} chose Pay, {poll.threshold} needed. The transaction makes
+        exactly the payments it proposed.
+      </p>
+    );
+  }
+  return (
+    <div className="callout warn mb-3">
+      <span>
+        {poll.declined
+          ? `The group decided not to pay in the poll “${poll.title}”.`
+          : `Not agreed yet in the poll “${poll.title}”: ${poll.chose_pay} chose Pay, ${poll.threshold} needed.`}{" "}
+        The transaction makes exactly the payments it proposed.
+      </span>
+    </div>
+  );
+}
+
 /** Format zatoshis in the request's network ticker (1 unit = 100,000,000
  *  zatoshis): ZEC, TAZ, or rZEC, so an approver never mistakes a test or
  *  devnet request for real ZEC. */
@@ -273,6 +318,7 @@ export default function Inbox() {
           const network = context?.network ?? "main";
           const verified = detail.verified as VerifiedTransaction | undefined;
           const approval = detail.window as ApprovalWindow | null | undefined;
+          const poll = detail.poll as PollCheck | undefined;
           const refused = detail.refused as string | undefined;
           const autoApproved = detail.auto_approved === true;
           const messageHex = detail.message_hex as string | undefined;
@@ -330,6 +376,7 @@ export default function Inbox() {
                 </p>
               ) : awaiting && ceremonyId && verified ? (
                 <div className="mt-3">
+                  {poll && <PollStatus poll={poll} from={from} />}
                   {context?.reason && (
                     <p className="reason-claim">
                       <span className="dim">{from} says it's for:</span> {context.reason}

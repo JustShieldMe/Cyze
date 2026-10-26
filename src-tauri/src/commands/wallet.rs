@@ -822,7 +822,7 @@ pub async fn wallet_prepare_payments(
         })
         .await?;
     let longest_reason = "x".repeat(frost_app_core::polls::MAX_REASON);
-    let others = context_besides_pczt(&draft, network, Some(&longest_reason));
+    let others = context_besides_pczt(&draft, network, Some(&longest_reason), Some(&Uuid::nil().to_string()));
     wallet::verify::pczt_for_signers_beside(&draft.pczt_hex, others, threshold)?;
     Ok(draft)
 }
@@ -844,9 +844,34 @@ fn claimed_payments(draft: &wallet::DraftTransaction) -> Vec<frost_app_core::eve
         .collect()
 }
 
+/// A poll this member asked that proposes payments the group agreed to make
+/// and that haven't been sent yet: what `wallet_send` may send for it.
+async fn agreed_payment_poll(state: &AppState, group_id: &str, poll_id: &str) -> AppResult<frost_app_core::polls::PollView> {
+    let poll = crate::commands::polls::find(state, group_id, poll_id).await?;
+    let me = hex::encode(&crate::commands::polls::group(state, group_id).await?.me.0);
+    if poll.payments.is_empty() {
+        return Err(AppError::new("config", "this poll doesn't propose a payment"));
+    }
+    if poll.author != me {
+        return Err(AppError::new("config", "only the member who proposed a payment can send it"));
+    }
+    if let Some(txid) = &poll.paid_txid {
+        return Err(AppError::new("config", format!("this poll's payment was already sent, in {txid}")));
+    }
+    if poll.agreed != Some(0) {
+        return Err(AppError::new("config", "the group hasn't agreed to pay"));
+    }
+    Ok(poll)
+}
+
 /// The bytes a signing request's context takes besides the attached PCZT
-/// (see `wallet::verify::MAX_SIGNER_CONTEXT`), with room to spare.
-fn context_besides_pczt(draft: &wallet::DraftTransaction, network: WalletNetwork, reason: Option<&str>) -> usize {
+/// (see `signing::signer_context_budget`), with room to spare.
+fn context_besides_pczt(
+    draft: &wallet::DraftTransaction,
+    network: WalletNetwork,
+    reason: Option<&str>,
+    poll_id: Option<&str>,
+) -> usize {
     let context = frost_app_core::events::SigningContext {
         recipient: draft.recipient.clone(),
         amount_zatoshis: draft.amount_zatoshis,
@@ -861,6 +886,7 @@ fn context_besides_pczt(draft: &wallet::DraftTransaction, network: WalletNetwork
         pczt: None,
         reason: reason.map(str::to_string),
         payments: claimed_payments(draft),
+        poll_id: poll_id.map(str::to_string),
     };
     serde_json::to_vec(&context).map_or(0, |json| json.len()) + 64
 }
@@ -941,6 +967,11 @@ pub struct WalletSendArgs {
     /// `amount_zatoshis` and `memo` are then ignored.
     #[serde(default)]
     pub payments: Vec<wallet::PaymentRequest>,
+    /// Send the payments a group poll this member asked proposes, once the
+    /// group agreed to pay: they come from the poll, and the other payment
+    /// fields are ignored. The reason defaults to the poll's question.
+    #[serde(default)]
+    pub poll_id: Option<String>,
 }
 
 /// What `wallet_send` started: the ceremony, and the transaction as it was
@@ -1000,6 +1031,16 @@ pub async fn wallet_send<R: tauri::Runtime>(
     let state = app.state::<AppState>();
     let (network, url, _ufvk) = group_wallet_ctx(&state, &args.group_id).await?;
     let db_key = state.wallet_db_key(&args.group_id).await?;
+    let mut args = args;
+    if let Some(poll_id) = &args.poll_id {
+        let poll = agreed_payment_poll(&state, &args.group_id, poll_id).await?;
+        args.payments = poll
+            .payments
+            .iter()
+            .map(|p| wallet::PaymentRequest { recipient: p.recipient.clone(), amount_zatoshis: p.amount_zatoshis, memo: p.memo.clone() })
+            .collect();
+        args.reason = args.reason.or(Some(poll.title));
+    }
     let reason = args.reason.as_deref().map(crate::commands::payees::payment_reason).transpose()?.flatten();
 
     // 1. Build the unsigned transaction (refreshes the chain tip so the expiry
@@ -1038,7 +1079,7 @@ pub async fn wallet_send<R: tauri::Runtime>(
     // Co-signers verify the transaction itself, not our description of it
     // (wallet::verify). Prepared now so an oversized transaction fails before
     // anyone is asked to sign, in the room the rest of the context leaves.
-    let others = context_besides_pczt(&draft, network, reason.as_deref());
+    let others = context_besides_pczt(&draft, network, reason.as_deref(), args.poll_id.as_deref());
     let signer_pczt = wallet::verify::pczt_for_signers_beside(&draft.pczt_hex, others, args.signers.len())?;
     // Each Orchard spend is re-randomized with its own α, so each needs its own
     // re-randomized FROST signature over the (shared) sighash.
@@ -1142,6 +1183,7 @@ pub async fn wallet_send<R: tauri::Runtime>(
     let ctx_is_unshield = draft.is_unshield;
     let ctx_network = network.as_str().to_string();
     let ctx_reason = reason.clone();
+    let ctx_poll = args.poll_id.clone();
     let plan_id = ceremony_id.to_string();
     tauri::async_runtime::spawn(async move {
         let fail = |error: String| {
@@ -1192,6 +1234,7 @@ pub async fn wallet_send<R: tauri::Runtime>(
                         pczt: Some(signer_pczt.clone()),
                         reason: ctx_reason.clone(),
                         payments: ctx_payments.clone(),
+                        poll_id: ctx_poll.clone(),
                     })
                     .unwrap_or_default();
                     let params = CoordinatorParams {
@@ -1301,7 +1344,14 @@ pub async fn wallet_send<R: tauri::Runtime>(
                         "signed_pczt_hex": signed_pczt_hex,
                     }),
                 );
-                // Every member's history says what it was for.
+                // Every member's history says what it was for, and a poll that
+                // proposed it shows it's paid, so it can't be sent twice.
+                if let Some(poll_id) = ctx_poll {
+                    let body = RecordBody::PollPaid { poll_id, txid: txid.to_lowercase() };
+                    if let Err(e) = crate::commands::polls::write(&task_app, &group_id, body).await {
+                        tracing::warn!("couldn't record that the poll's payment was sent: {}", e.message);
+                    }
+                }
                 if let Some(text) = reason {
                     let body = RecordBody::PaymentReason { txid: txid.to_lowercase(), text };
                     if let Err(e) = crate::commands::polls::write(&task_app, &group_id, body).await {

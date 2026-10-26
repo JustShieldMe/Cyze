@@ -28,6 +28,15 @@ breaking changes. Cyze is beta, unaudited software (see the README).
   - Each approver's app checks that the transaction makes exactly the payments
     described, in any order.
   - Activity shows a batch as its payments.
+- **Pay if agreed:** a group poll can propose payments, answered **Pay** or
+  **Don't pay**.
+  - Once Pay is agreed, the member who proposed it sends them with **Send
+    payment**, built from the poll itself.
+  - Each approver's app checks the request against its own copy of the poll:
+    it refuses one sent by another member, one that doesn't make exactly the
+    proposed payments, or one already paid, and shows whether the group
+    agreed.
+  - The poll then shows **Paid**, and can't be sent again.
 - **Reasons:** say what a payment is for, for the group only.
   - Approvers see it with the request, attributed to the member who asked.
   - Once sent, every member's **Activity** shows it. Any member can add
