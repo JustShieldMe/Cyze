@@ -58,6 +58,7 @@ export default function CeremonyListener() {
     queryClient.invalidateQueries({ queryKey: ["polls"] });
     queryClient.invalidateQueries({ queryKey: ["payees", group_id] });
     queryClient.invalidateQueries({ queryKey: ["payment-reasons", group_id] });
+    queryClient.invalidateQueries({ queryKey: ["group-rules", group_id] });
     if (new_polls > 0) notifyIfAway("A new poll in one of your groups.");
   });
 

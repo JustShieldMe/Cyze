@@ -8,6 +8,7 @@ pub mod keystore;
 pub mod notify;
 pub mod payees;
 pub mod polls;
+pub mod rules;
 pub mod server;
 pub mod signing;
 pub mod tor;

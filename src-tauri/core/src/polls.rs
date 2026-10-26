@@ -56,6 +56,8 @@ pub const MAX_OPTIONS: usize = 10;
 pub const MAX_PROPOSED_PAYMENTS: usize = 20;
 /// The options of a poll that proposes payments: agreeing on the first pays.
 pub const PAYMENT_OPTIONS: [&str; 2] = ["Pay", "Don't pay"];
+/// The options of a poll that proposes rules: agreeing on the first adopts them.
+pub const RULES_OPTIONS: [&str; 2] = ["Adopt", "Don't adopt"];
 pub const MAX_PAYEE_NAME: usize = 64;
 pub const MAX_ADDRESS: usize = 1_024;
 pub const MAX_REASON: usize = 500;
@@ -103,7 +105,15 @@ pub enum RecordBody {
         /// its author can send exactly these.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         payments: Vec<ProposedPayment>,
+        /// The rules it proposes, if any, replacing the group's: in effect
+        /// once the group agrees to adopt them (see [`rules_in_effect`]).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rules: Option<crate::rules::GroupRules>,
     },
+    /// The author trusting (or no longer trusting) a payee at this address,
+    /// which `owner` (hex communication key) added. A trust counts only while
+    /// the payee's address is still this one.
+    PayeeTrust { owner: String, payee_id: String, address: String, trusted: bool },
     /// The poll's author recording that they sent its payments, in `txid`.
     PollPaid { poll_id: String, txid: String },
     /// The author's answer: the latest one counts.
@@ -134,7 +144,7 @@ impl Record {
             return bad("records are numbered from 1");
         }
         match &self.body {
-            RecordBody::Poll { poll_id, title, details, options, closes_at, payments, .. } => {
+            RecordBody::Poll { poll_id, title, details, options, closes_at, payments, rules, .. } => {
                 if poll_id.is_empty() || poll_id.len() > 64 {
                     return bad("poll id");
                 }
@@ -151,6 +161,11 @@ impl Record {
                 }
                 if *closes_at <= self.at {
                     return bad("it closes before it opens");
+                }
+                if let Some(rules) = rules {
+                    if options.len() != RULES_OPTIONS.len() || !payments.is_empty() || !rules.is_valid() {
+                        return bad("proposed rules");
+                    }
                 }
                 if !payments.is_empty() {
                     if options.len() != PAYMENT_OPTIONS.len() || payments.len() > MAX_PROPOSED_PAYMENTS {
@@ -189,6 +204,17 @@ impl Record {
                 }
                 if name.trim().is_empty() || name.chars().count() > MAX_PAYEE_NAME {
                     return bad("payee name");
+                }
+                if address.is_empty() || address.len() > MAX_ADDRESS || !address.chars().all(|c| c.is_ascii_alphanumeric()) {
+                    return bad("payee address");
+                }
+            }
+            RecordBody::PayeeTrust { owner, payee_id, address, .. } => {
+                if owner.is_empty() || owner.len() > 128 || !owner.chars().all(|c| c.is_ascii_hexdigit()) {
+                    return bad("payee owner");
+                }
+                if payee_id.is_empty() || payee_id.len() > 64 {
+                    return bad("payee id");
                 }
                 if address.is_empty() || address.len() > MAX_ADDRESS || !address.chars().all(|c| c.is_ascii_alphanumeric()) {
                     return bad("payee address");
@@ -340,6 +366,8 @@ pub struct PollView {
     pub community: Option<CommunityRef>,
     /// The payments it proposes, if any (agreeing on option 0 pays them).
     pub payments: Vec<ProposedPayment>,
+    /// The rules it proposes, if any (agreeing on option 0 adopts them).
+    pub rules: Option<crate::rules::GroupRules>,
     /// The transaction its author sent them in, once they did.
     pub paid_txid: Option<String>,
 }
@@ -355,7 +383,7 @@ pub fn polls(group_id: &str, log: &GroupLog, members: &[String], threshold: u32,
     let mut out = Vec::new();
     for (author, records) in log.records.iter().filter(|(a, _)| current(a)) {
         for record in records.values().filter(valid) {
-            let RecordBody::Poll { poll_id, title, details, options, closes_at, community, payments } = &record.body else {
+            let RecordBody::Poll { poll_id, title, details, options, closes_at, community, payments, rules } = &record.body else {
                 continue;
             };
             // Paid: the author's first record of sending it.
@@ -413,6 +441,7 @@ pub fn polls(group_id: &str, log: &GroupLog, members: &[String], threshold: u32,
                 agreed,
                 community: community.clone(),
                 payments: payments.clone(),
+                rules: rules.clone(),
                 paid_txid,
             });
         }
@@ -420,6 +449,15 @@ pub fn polls(group_id: &str, log: &GroupLog, members: &[String], threshold: u32,
     // Open polls first, newest first within each.
     out.sort_by_key(|p| (p.closed, std::cmp::Reverse(p.created_at)));
     out
+}
+
+/// The poll whose rules are in effect: the latest one the group agreed to
+/// adopt. None if the group never adopted any, so it has none.
+pub fn rules_in_effect(polls: &[PollView]) -> Option<&PollView> {
+    polls
+        .iter()
+        .filter(|p| p.rules.is_some() && p.agreed == Some(0))
+        .max_by(|a, b| (a.created_at, &a.poll_id).cmp(&(b.created_at, &b.poll_id)))
 }
 
 /// Who a device sends as, and through which server.
@@ -516,6 +554,7 @@ mod tests {
             closes_at,
             community: None,
             payments: Vec::new(),
+            rules: None,
         }
     }
     fn vote(id: &str, choice: u32) -> RecordBody {
@@ -583,6 +622,7 @@ mod tests {
             closes_at: 100,
             community: None,
             payments: Vec::new(),
+            rules: None,
         };
         assert!(rec(1, 10, one_option).check().is_err());
         let message = Message::Record(rec(1, 10, vote("p", 0)));
@@ -600,6 +640,7 @@ mod tests {
             closes_at: 1_000,
             community: None,
             payments,
+            rules: None,
         }
     }
     fn pay(recipient: &str, amount_zatoshis: u64) -> ProposedPayment {
@@ -636,6 +677,51 @@ mod tests {
         assert!(rec(1, 10, payment_poll("p", too_many)).check().is_err());
         let memo = ProposedPayment { memo: Some("x".repeat(513)), ..pay("u1auditor", 1) };
         assert!(rec(1, 10, payment_poll("p", vec![memo])).check().is_err());
+    }
+
+    fn rules_poll(id: &str, rules: crate::rules::GroupRules) -> RecordBody {
+        RecordBody::Poll {
+            poll_id: id.into(),
+            title: "New rules".into(),
+            details: String::new(),
+            options: RULES_OPTIONS.map(String::from).to_vec(),
+            closes_at: 1_000,
+            community: None,
+            payments: Vec::new(),
+            rules: Some(rules),
+        }
+    }
+
+    #[test]
+    fn the_latest_rules_the_group_agreed_to_are_in_effect() {
+        use crate::rules::{GroupRules, LargePayments};
+        let trusted_only = GroupRules { trusted_payees_only: true, large: None };
+        let tiered = GroupRules { trusted_payees_only: false, large: Some(LargePayments { from_zatoshis: 1, approvals: 3 }) };
+        let mut log = GroupLog::default();
+        assert!(rules_in_effect(&polls(G, &log, &members(), 2, "bob", 500)).is_none(), "none adopted: no rules");
+        log.insert("alice", rec(1, 100, rules_poll("r1", trusted_only.clone())));
+        log.insert("alice", rec(2, 101, vote("r1", 0)));
+        log.insert("bob", rec(1, 102, vote("r1", 0)));
+        log.insert("bob", rec(2, 200, rules_poll("r2", tiered.clone())));
+        log.insert("bob", rec(3, 201, vote("r2", 0)));
+        let views = polls(G, &log, &members(), 2, "bob", 500);
+        assert_eq!(rules_in_effect(&views).and_then(|p| p.rules.clone()), Some(trusted_only), "r2 isn't agreed yet");
+        log.insert("carol", rec(1, 202, vote("r2", 0)));
+        let views = polls(G, &log, &members(), 2, "bob", 500);
+        assert_eq!(rules_in_effect(&views).and_then(|p| p.rules.clone()), Some(tiered), "the later one");
+    }
+
+    #[test]
+    fn a_poll_proposing_rules_is_refused_unless_well_formed() {
+        use crate::rules::{GroupRules, LargePayments};
+        assert!(rec(1, 10, rules_poll("r", GroupRules::default())).check().is_ok(), "no rules at all is a valid proposal");
+        let impossible = GroupRules { trusted_payees_only: false, large: Some(LargePayments { from_zatoshis: 0, approvals: 3 }) };
+        assert!(rec(1, 10, rules_poll("r", impossible)).check().is_err());
+        let mut with_payments = rules_poll("r", GroupRules::default());
+        if let RecordBody::Poll { payments, .. } = &mut with_payments {
+            payments.push(pay("u1auditor", 1));
+        }
+        assert!(rec(1, 10, with_payments).check().is_err(), "rules and payments don't mix");
     }
 
     /// What a newer version might send: a kind of record this one doesn't

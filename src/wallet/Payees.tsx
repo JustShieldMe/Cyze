@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { removePayee, savePayee, AppError, GroupSummary, Payee, WalletNetwork } from "../ipc/commands";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { getIdentity, removePayee, savePayee, trustPayee, AppError, GroupSummary, Payee, WalletNetwork } from "../ipc/commands";
 import { MAX_PAYEE_NAME, useMemberName, usePayees } from "../lib/payees";
 import { ADDRESS_PLACEHOLDER, checkRecipient } from "./address";
 
@@ -16,8 +16,14 @@ export function GroupPayees({ group, network }: { group: GroupSummary; network: 
   const memberName = useMemberName();
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState<Payee | "new" | null>(null);
+  const identity = useQuery({ queryKey: ["identity"], queryFn: getIdentity });
+  const me = identity.data?.pubkey ?? null;
   const remove = useMutation({
     mutationFn: (p: Payee) => removePayee(group.id, p.payee_id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["payees", group.id] }),
+  });
+  const trust = useMutation({
+    mutationFn: ({ p, trusted }: { p: Payee; trusted: boolean }) => trustPayee(group.id, p.author, p.payee_id, trusted),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["payees", group.id] }),
   });
   if (!group.ciphersuite.includes("Pallas")) return null;
@@ -35,7 +41,9 @@ export function GroupPayees({ group, network }: { group: GroupSummary; network: 
       </div>
       <p className="dim text-sm">
         Addresses the group pays, with a name every member sees. When a payment goes to one, approvers see its
-        name. Only the member who added a payee can change or remove it.
+        name. Only the member who added a payee can change or remove it. A payee is trusted once{" "}
+        {group.threshold} members trust its address.
+
       </p>
       {editing && (
         <PayeeForm
@@ -52,6 +60,7 @@ export function GroupPayees({ group, network }: { group: GroupSummary; network: 
               <th>Name</th>
               <th>Address</th>
               <th>Added by</th>
+              <th>Trust</th>
               <th />
             </tr>
           </thead>
@@ -63,6 +72,24 @@ export function GroupPayees({ group, network }: { group: GroupSummary; network: 
                   {shortAddress(p.address)}
                 </td>
                 <td className="dim">{memberName(p.author)}</td>
+                <td title={p.trusted_by.map(memberName).join(", ")}>
+                  {p.trusted ? (
+                    <span className="badge green">trusted</span>
+                  ) : (
+                    <span className="dim text-sm">
+                      {p.trusted_by.length} of {group.threshold}
+                    </span>
+                  )}
+                  {!p.mine && me && (
+                    <button
+                      className="link-button ml-2"
+                      disabled={trust.isPending}
+                      onClick={() => trust.mutate({ p, trusted: !p.trusted_by.includes(me) })}
+                    >
+                      {p.trusted_by.includes(me) ? "Stop trusting" : "Trust"}
+                    </button>
+                  )}
+                </td>
                 <td className="text-right">
                   {p.mine && (
                     <>
@@ -87,7 +114,9 @@ export function GroupPayees({ group, network }: { group: GroupSummary; network: 
       ) : (
         !editing && <p className="dim m-0">No payees yet.</p>
       )}
-      {remove.error && <div className="error">{(remove.error as unknown as AppError).message}</div>}
+      {(remove.error || trust.error) && (
+        <div className="error">{((remove.error ?? trust.error) as unknown as AppError).message}</div>
+      )}
     </div>
   );
 }

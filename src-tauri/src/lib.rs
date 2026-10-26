@@ -84,6 +84,8 @@ pub fn run() {
             commands::payees::remove_payee,
             commands::payees::list_payment_reasons,
             commands::payees::set_payment_reason,
+            commands::payees::trust_payee,
+            commands::rules::group_rules,
             commands::tor::set_use_tor,
             commands::backup::backup_status,
             commands::backup::export_backup,

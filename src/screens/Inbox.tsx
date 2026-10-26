@@ -78,6 +78,23 @@ interface PollCheck {
   threshold: number;
 }
 
+/** The group's rules a request met (commands::signing::RulesCheck). The
+ *  backend already refused one that breaks them. */
+interface RulesCheck {
+  trusted_payees_only: boolean;
+  needed: number;
+  asked: number;
+}
+
+/** Which of the group's rules a request was checked against. */
+function RulesMet({ rules }: { rules: RulesCheck }) {
+  const parts = [
+    ...(rules.trusted_payees_only ? ["pays only trusted payees"] : []),
+    `${rules.needed} approvals needed, ${rules.asked} asked`,
+  ];
+  return <p className="ok mb-2">✓ Meets the group's rules: {parts.join(" · ")}.</p>;
+}
+
 /** Whether the group agreed to a poll-backed request, as this app sees it. */
 function PollStatus({ poll, from }: { poll: PollCheck; from: string }) {
   if (poll.missing) {
@@ -319,6 +336,7 @@ export default function Inbox() {
           const verified = detail.verified as VerifiedTransaction | undefined;
           const approval = detail.window as ApprovalWindow | null | undefined;
           const poll = detail.poll as PollCheck | undefined;
+          const rules = detail.rules as RulesCheck | undefined;
           const refused = detail.refused as string | undefined;
           const autoApproved = detail.auto_approved === true;
           const messageHex = detail.message_hex as string | undefined;
@@ -377,6 +395,7 @@ export default function Inbox() {
               ) : awaiting && ceremonyId && verified ? (
                 <div className="mt-3">
                   {poll && <PollStatus poll={poll} from={from} />}
+                  {rules && <RulesMet rules={rules} />}
                   {context?.reason && (
                     <p className="reason-claim">
                       <span className="dim">{from} says it's for:</span> {context.reason}

@@ -23,10 +23,12 @@ import { resolveParticipant } from "../lib/participants";
 import { useCeremonies, selectActiveSend } from "../stores/ceremonies";
 import { useAdvancedMode } from "../lib/advanced";
 import { MAX_REASON, payeeFor, useMemberName, usePayees } from "../lib/payees";
+import { approvalsNeeded, payeeRuleError, useGroupRules } from "../lib/rules";
 import { WalletTxHistory } from "./Activity";
 import { BatchSend } from "./Batch";
 import { ReviewNotesTab } from "./Notes";
 import { GroupPayees, PayeeForm } from "./Payees";
+import { GroupRulesCard } from "./Rules";
 import { ViewingKeyCallout } from "./Privacy";
 import { ReceiveShieldCard } from "./Receive";
 import { requestApprovals, SendSessionPanel } from "./SendProgress";
@@ -71,6 +73,7 @@ export function WalletView({ group }: { group: GroupSummary }) {
       <GroupWallet group={group} network={network} />
       <WalletTxHistory group={group} network={network} />
       <GroupPayees group={group} network={network} />
+      <GroupRulesCard group={group} network={network} />
     </div>
   );
 }
@@ -422,6 +425,8 @@ function EnterSend({
   const needsLookup = isName && !zns;
   const check = needsLookup ? { transparent: false, error: null } : checkRecipient(address, network);
   const payee = payeeFor(payees.data, address);
+  const rules = useGroupRules(group.id);
+  const forbidden = needsLookup || check.error ? null : payeeRuleError(rules.data?.rules, payees.data, address);
   const zats = all ? spendable : Math.round(Number(amount) * 1e8);
   const tooMuch = !all && zats > 0 && zats > spendable;
 
@@ -482,6 +487,7 @@ function EnterSend({
         }}
       />
       {check.error && <div className="error pull-up">{check.error}</div>}
+      {forbidden && <div className="error pull-up">{forbidden}</div>}
       {payee ? (
         <p className="ok pull-up text-sm">
           {payee.name} · a group payee, added by {memberName(payee.author)}
@@ -578,7 +584,7 @@ function EnterSend({
       <button
         onClick={() => prepare.mutate()}
         disabled={
-          !!blocked || prepare.isPending || !address || !(zats > 0) || tooMuch || needsLookup || !!check.error
+          !!blocked || prepare.isPending || !address || !(zats > 0) || tooMuch || needsLookup || !!check.error || !!forbidden
         }
       >
         {prepare.isPending ? "Preparing…" : "Review payment"}
@@ -609,6 +615,7 @@ function ReviewSend({
   const identity = useQuery({ queryKey: ["identity"], queryFn: getIdentity });
   const payees = usePayees(group.id);
   const memberName = useMemberName();
+  const rules = useGroupRules(group.id);
   const contacts = useQuery({ queryKey: ["contacts"], queryFn: listContacts });
   const members = useMemo(
     () =>
@@ -633,6 +640,8 @@ function ReviewSend({
   const [checked, setChecked] = useState(false);
   const selfSend = kind === "consolidation" || kind === "migration" || kind === "move";
   const needsCheck = network === "main" && !selfSend;
+  // A transfer within the group makes no payments, so the rules don't apply.
+  const needed = selfSend ? group.threshold : approvalsNeeded(rules.data?.rules, draft.amount_zatoshis, group.threshold);
 
   const send = useMutation({
     mutationFn: () =>
@@ -737,7 +746,8 @@ function ReviewSend({
       )}
 
       <label className="mt-4">
-        Ask to approve ({group.threshold} of {group.num_participants} needed)
+        Ask to approve ({needed} of {group.num_participants} needed
+        {needed > group.threshold ? ", by the group's rules for larger payments" : ""})
       </label>
       {members.map((m) => (
         <label key={m.pubkey} className="member-pick mb-2">
@@ -755,9 +765,9 @@ function ReviewSend({
           <span className="dim code-inline">{m.short}</span>
         </label>
       ))}
-      {signers.size < group.threshold ? (
+      {signers.size < needed ? (
         <p className="dim text-sm">
-          Choose {group.threshold - signers.size} more. Each must be online to approve.
+          Choose {needed - signers.size} more. Each must be online to approve.
         </p>
       ) : (
         windowMinutes !== null &&
@@ -781,7 +791,7 @@ function ReviewSend({
         </button>
         <button
           onClick={() => send.mutate()}
-          disabled={send.isPending || signers.size < group.threshold || (needsCheck && !checked)}
+          disabled={send.isPending || signers.size < needed || (needsCheck && !checked)}
         >
           {send.isPending ? "Starting…" : "Request approvals"}
         </button>

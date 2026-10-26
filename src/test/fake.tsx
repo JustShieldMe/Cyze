@@ -82,6 +82,7 @@ const defaults: Record<string, Handler> = {
   community_votes: () => ({ open: [], recent: [] }),
   list_payees: () => [],
   list_payment_reasons: () => [],
+  group_rules: () => ({ rules: {}, poll_id: null, title: null, threshold: 2, members: 3 }),
 };
 
 /** What wallet_send returns: the ceremony, the transaction as built, and
@@ -106,6 +107,8 @@ export const payee = (name: string, address: string, author: string, extra: Reco
   changed_at: 1_760_000_000,
   forms: [address],
   mine: author === ME,
+  trusted_by: [author],
+  trusted: false,
   ...extra,
 });
 

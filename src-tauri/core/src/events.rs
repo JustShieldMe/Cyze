@@ -146,6 +146,9 @@ pub enum ParticipantEvent {
         /// Hex communication key of the member who asked: the session's
         /// coordinator, whose key the request's encryption authenticates.
         coordinator: String,
+        /// How many members' approvals it takes: the signers committed in the
+        /// signing package, each of whose shares the signature needs.
+        signers: u32,
     },
     /// Share computed and sent to the coordinator.
     ShareSent,

@@ -26,14 +26,14 @@ pub struct PayeeDto {
     pub mine: bool,
 }
 
-async fn payees_in(state: &AppState, group_id: &str) -> AppResult<Vec<PayeeDto>> {
+pub(crate) async fn payees_in(state: &AppState, group_id: &str) -> AppResult<Vec<PayeeDto>> {
     let network = configured_network(&state.load_settings());
     let logs = state.load_polls().await?;
     let Some(log) = logs.get(group_id) else { return Ok(Vec::new()) };
     let g = group(state, group_id).await?;
     let me = hex::encode(&g.me.0);
     // A payee saved on another network isn't one here.
-    Ok(payees::payees(log, &g.member_hexes())
+    Ok(payees::payees(log, &g.member_hexes(), g.threshold)
         .into_iter()
         .filter_map(|payee| {
             let forms = address_forms(network, &payee.address).ok()?;
@@ -97,6 +97,30 @@ pub async fn remove_payee<R: Runtime>(app: AppHandle<R>, group_id: String, payee
         return Err(AppError::new("config", "only the member who added a payee can remove it"));
     }
     write(&app, &group_id, RecordBody::PayeeRemoved { payee_id }).await
+}
+
+/// Trust a payee another member added, at its current address, or stop
+/// trusting it. A payee is trusted once as many members trust it as a payment
+/// needs approvals.
+#[tauri::command]
+pub async fn trust_payee<R: Runtime>(
+    app: AppHandle<R>,
+    group_id: String,
+    owner: String,
+    payee_id: String,
+    trusted: bool,
+) -> AppResult<()> {
+    let state = app.state::<AppState>();
+    let payee = payees_in(&state, &group_id)
+        .await?
+        .into_iter()
+        .find(|p| p.payee.author == owner && p.payee.payee_id == payee_id)
+        .ok_or_else(|| AppError::new("config", "payee not found"))?;
+    if payee.mine {
+        return Err(AppError::new("config", "you trust the payees you add"));
+    }
+    let address = payee.payee.address;
+    write(&app, &group_id, RecordBody::PayeeTrust { owner, payee_id, address, trusted }).await
 }
 
 /// What the group's members say its transactions were for.

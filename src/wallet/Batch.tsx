@@ -13,6 +13,7 @@ import {
 } from "../ipc/commands";
 import { unit } from "../network";
 import { MAX_REASON, payeeFor, usePayees } from "../lib/payees";
+import { payeeRuleError, useGroupRules } from "../lib/rules";
 import { ADDRESS_PLACEHOLDER, checkRecipient } from "./address";
 import { SyncErrorView, zec } from "./common";
 
@@ -27,10 +28,12 @@ export const emptyRow = (): PaymentRow => ({ recipient: "", amount: "", memo: ""
 
 /** The payments a set of rows describes, what's wrong with each row, and
  *  their total. Empty rows are skipped; `payments` is only complete when no
- *  row has an error. */
+ *  row has an error. `ruleError` says why the group's rules forbid paying an
+ *  address, if they do. */
 export function checkRows(
   rows: PaymentRow[],
   network: WalletNetwork,
+  ruleError: (recipient: string) => string | null = () => null,
 ): { payments: PaymentRequest[]; errors: (string | null)[]; total: number } {
   const payments: PaymentRequest[] = [];
   let total = 0;
@@ -41,6 +44,8 @@ export function checkRows(
     const check = checkRecipient(recipient, network);
     if (check.error) return check.error;
     if (/\.zcash$/i.test(recipient)) return "Use the address here; names are looked up one payment at a time.";
+    const forbidden = ruleError(recipient);
+    if (forbidden) return forbidden;
     const zats = Math.round(Number(row.amount) * 1e8);
     if (!(zats > 0)) return "Enter an amount.";
     total += zats;
@@ -70,6 +75,13 @@ export function parseList(text: string, payees: Payee[] | undefined): { rows: Pa
   return { rows, bad };
 }
 
+/** Why the group's rules forbid paying an address, if they do. */
+export function useRuleError(groupId: string): (recipient: string) => string | null {
+  const payees = usePayees(groupId);
+  const rules = useGroupRules(groupId);
+  return (recipient) => payeeRuleError(rules.data?.rules, payees.data, recipient);
+}
+
 /** Rows of payments: to (typed, or one of the group's payees), amount and an
  *  optional memo each. */
 export function PaymentRows({
@@ -84,7 +96,8 @@ export function PaymentRows({
   onChange: (rows: PaymentRow[]) => void;
 }) {
   const payees = usePayees(groupId);
-  const { errors } = checkRows(rows, network);
+  const ruleError = useRuleError(groupId);
+  const { errors } = checkRows(rows, network, ruleError);
   const [pasting, setPasting] = useState(false);
   const [pasted, setPasted] = useState("");
   const [badLines, setBadLines] = useState<string[]>([]);
@@ -230,7 +243,8 @@ export function BatchSend({
   const [rows, setRows] = useState<PaymentRow[]>([emptyRow(), emptyRow()]);
   const [reason, setReason] = useState("");
   const [err, setErr] = useState<string | null>(null);
-  const { payments, errors, total } = checkRows(rows, network);
+  const ruleError = useRuleError(group.id);
+  const { payments, errors, total } = checkRows(rows, network, ruleError);
   const tooMuch = total > spendable;
   const prepare = useMutation({
     mutationFn: () => walletPreparePayments(group.id, payments),

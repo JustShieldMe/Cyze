@@ -21,8 +21,9 @@ import {
 import { asNetwork, unit } from "../network";
 import { resolveParticipant } from "../lib/participants";
 import { payeeFor, usePayees } from "../lib/payees";
+import { approvalsNeeded, describeRules, useGroupRules } from "../lib/rules";
 import { selectActiveSend, useCeremonies } from "../stores/ceremonies";
-import { checkRows, emptyRow, PaymentRow, PaymentRows } from "../wallet/Batch";
+import { checkRows, emptyRow, PaymentRow, PaymentRows, useRuleError } from "../wallet/Batch";
 import { zec } from "../wallet/common";
 import { shortAddress } from "../wallet/Payees";
 import { requestApprovals } from "../wallet/SendProgress";
@@ -123,7 +124,8 @@ function NewPoll({ groups, onDone }: { groups: GroupSummary[]; onDone: () => voi
   const isWallet = !!groups.find((g) => g.id === group)?.ciphersuite.includes("Pallas");
   const [proposing, setProposing] = useState(false);
   const [rows, setRows] = useState<PaymentRow[]>([emptyRow()]);
-  const proposal = checkRows(rows, network);
+  const ruleError = useRuleError(group);
+  const proposal = checkRows(rows, network, ruleError);
   const paying = proposing && isWallet;
   const create = useMutation({
     mutationFn: () =>
@@ -270,6 +272,7 @@ function PollCard({ poll, groupName, group }: { poll: PollView; groupName: strin
       <h3 className="m-0 mt-2 mb-1">{poll.title}</h3>
       {poll.details && <p className="dim poll-details">{poll.details}</p>}
       {!!poll.payments?.length && <ProposedPayments poll={poll} />}
+      {poll.rules && <ProposedRules poll={poll} />}
       <div className="poll-options">
         {poll.options.map((option, i) => {
           const count = poll.tally[i] ?? 0;
@@ -312,6 +315,7 @@ function PollCard({ poll, groupName, group }: { poll: PollView; groupName: strin
       </div>
       {(vote.error || close.error) && <div className="error">{errText(vote.error ?? close.error)}</div>}
       {!!poll.payments?.length && <PaymentOutcome poll={poll} mine={mine} group={group} />}
+      {poll.rules && <RulesOutcome poll={poll} />}
     </div>
   );
 }
@@ -354,6 +358,39 @@ function ProposedPayments({ poll }: { poll: PollView }) {
   );
 }
 
+/** The rules a poll proposes, replacing the group's. */
+function ProposedRules({ poll }: { poll: PollView }) {
+  const walletConfig = useQuery({ queryKey: ["wallet-config"], queryFn: getWalletConfig });
+  const u = unit(asNetwork(walletConfig.data?.network));
+  const lines = describeRules(poll.rules!, (z) => `${zec(z)} ${u}`);
+  return (
+    <div className="proposed-payments">
+      <div className="dim text-sm mb-1">Proposes these rules, replacing the group's</div>
+      {lines.length ? (
+        lines.map((line) => (
+          <div key={line} className="proposed-payment">
+            {line}
+          </div>
+        ))
+      ) : (
+        <div className="proposed-payment">No rules: any payment the threshold approves goes through.</div>
+      )}
+    </div>
+  );
+}
+
+/** Whether a poll's rules were adopted, and are still the ones in effect. */
+function RulesOutcome({ poll }: { poll: PollView }) {
+  const inEffect = useGroupRules(poll.group_id);
+  if (poll.agreed === 1) return <p className="dim mt-3 mb-0">The group decided not to adopt these.</p>;
+  if (poll.agreed !== 0) return null;
+  return inEffect.data?.poll_id === poll.poll_id ? (
+    <p className="ok mt-3 mb-0">✓ Adopted: these rules are in effect.</p>
+  ) : (
+    <p className="dim mt-3 mb-0">Adopted, then replaced by later rules.</p>
+  );
+}
+
 /** What happens to a poll's proposed payments: sent, sendable by its author
  *  once agreed, or declined. */
 function PaymentOutcome({ poll, mine, group }: { poll: PollView; mine: boolean; group?: GroupSummary }) {
@@ -387,6 +424,8 @@ function SendAgreed({ poll, group }: { poll: PollView; group: GroupSummary }) {
   const [picked, setPicked] = useState<Set<string> | null>(null);
   const signers = picked ?? new Set([...(me ? [me] : []), ...chosePay]);
   const payments = poll.payments ?? [];
+  const rules = useGroupRules(poll.group_id);
+  const needed = approvalsNeeded(rules.data?.rules, payments.reduce((t, p) => t + p.amount_zatoshis, 0), group.threshold);
   const send = useMutation({
     mutationFn: () =>
       requestApprovals({
@@ -421,7 +460,8 @@ function SendAgreed({ poll, group }: { poll: PollView; group: GroupSummary }) {
     <div className="send-agreed mt-3">
       <p className="ok mb-2">The group agreed. You can send it now.</p>
       <div className="dim text-sm mb-1">
-        Ask to approve ({group.threshold} of {group.num_participants} needed)
+        Ask to approve ({needed} of {group.num_participants} needed
+        {needed > group.threshold ? ", by the group's rules for larger payments" : ""})
       </div>
       {Object.values(group.participants).map((pk) => (
         <label key={pk} className="member-pick mb-2">
@@ -441,7 +481,7 @@ function SendAgreed({ poll, group }: { poll: PollView; group: GroupSummary }) {
       ))}
       {busy && <p className="dim text-sm">Another payment from this wallet is in progress. Send this one once it's done.</p>}
       {send.error && <div className="error">{errText(send.error)}</div>}
-      <button onClick={() => send.mutate()} disabled={busy || signers.size < group.threshold || send.isPending}>
+      <button onClick={() => send.mutate()} disabled={busy || signers.size < needed || send.isPending}>
         {send.isPending ? "Starting…" : "Send payment"}
       </button>
     </div>
