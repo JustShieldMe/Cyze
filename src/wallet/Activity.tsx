@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   getIdentity,
   listContacts,
+  saveCsv,
   setPaymentReason,
   walletGroupStatus,
   walletHistory,
@@ -17,6 +18,7 @@ import {
 import { unit } from "../network";
 import { resolveParticipant } from "../lib/participants";
 import { MAX_REASON, payeeFor, reasonsFor, useMemberName, usePayees, usePaymentReasons } from "../lib/payees";
+import { historyCsv } from "../lib/csv";
 import {
   useCeremonies,
   type CeremonyState,
@@ -114,6 +116,22 @@ export function WalletTxHistory({ group, network }: { group: GroupSummary; netwo
     [ceremonies, group.id, activeId, onchainTxids, now]
   );
 
+  const memberName = useMemberName();
+  const exportCsv = useMutation({
+    mutationFn: () => {
+      const rows = (history.data ?? []).map((tx) => withWhatWasSent(tx, sentHere.get(tx.txid)));
+      const csv = historyCsv(rows, {
+        unit: unit(network),
+        payees: payees.data,
+        reasons: reasons.data,
+        signers: txSigners,
+        name: memberName,
+      });
+      const day = new Date().toISOString().slice(0, 10);
+      return saveCsv(`${group.description || "Wallet"} history ${day}.csv`, csv);
+    },
+  });
+
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const toggle = useCallback(
     (key: string) => setExpandedKey((prev) => (prev === key ? null : key)),
@@ -127,7 +145,16 @@ export function WalletTxHistory({ group, network }: { group: GroupSummary; netwo
 
   return (
     <div className="card mt-4">
-      <h3 className="mt-0">Activity</h3>
+      <div className="row between items-center">
+        <h3 className="m-0">Activity</h3>
+        {history.isSuccess && onchainRows.length > 0 && (
+          <button className="link-button" onClick={() => exportCsv.mutate()} disabled={exportCsv.isPending}>
+            {exportCsv.isPending ? "Exporting…" : "Export CSV"}
+          </button>
+        )}
+      </div>
+      {exportCsv.data && <p className="ok text-sm">Saved to {exportCsv.data}</p>}
+      {exportCsv.error && <p className="error">{(exportCsv.error as unknown as AppError).message}</p>}
 
       {history.isLoading && <p className="dim">Loading…</p>}
       {history.isError && (

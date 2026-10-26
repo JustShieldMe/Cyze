@@ -407,6 +407,22 @@ for shielded funds. They stop a careless approval, a swapped address or one
 compromised device. They can't stop as many members as a payment needs
 acting together, who could change the rules or run apps that ignore them.
 
+### Accounting export and read-only access
+
+- **Export CSV**, at the top of **Activity**, saves the wallet's history as a
+  spreadsheet: date, block, type, amount and fee (with all eight decimals),
+  payee, address, memo, the reasons members gave, who signed (for payments
+  this device sent) and the transaction ID. A batch has one row per payment,
+  with its fee on the first. The file isn't encrypted: keep it somewhere safe.
+- **Share read-only access**, on the group's page under **Groups**, gives an
+  accountant or auditor the wallet's viewing key. With it, a Zcash wallet that
+  can watch a unified viewing key (`uview…`) shows the balance and every
+  payment in and out, with amounts and memos, but can't spend. Cyze shows the
+  key only after you confirm you understand that whoever has it sees all of the
+  wallet's payments, past and future, and that it can't be taken back: cutting
+  someone off means moving the funds to a new wallet. Agree with the group
+  before sharing it.
+
 ### Make an older group private
 
 A group created before Cyze 0.3 derives its viewing key from its group ID, so

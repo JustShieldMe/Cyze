@@ -14,6 +14,7 @@ import {
   GroupSummary,
   Identity,
 } from "../ipc/commands";
+import { QRCodeSVG } from "qrcode.react";
 import { resolveParticipant } from "../lib/participants";
 import Contacts from "./Contacts";
 import { KeyRow } from "../wallet/common";
@@ -23,7 +24,8 @@ function isOrchard(group: GroupSummary): boolean {
 }
 
 /** The group's public key material and, for Orchard groups, its derived
- *  unified address and full viewing key. */
+ *  unified address. Its viewing key is shared through ReadOnlyAccess, with
+ *  what that reveals spelled out first. */
 export function GroupKeys({ group, masked = false }: { group: GroupSummary; masked?: boolean }) {
   const orchard = isOrchard(group);
   const keys = useQuery({
@@ -41,16 +43,10 @@ export function GroupKeys({ group, masked = false }: { group: GroupSummary; mask
       {orchard && keys.data && (
         <>
           <KeyRow label="Unified address" value={keys.data.address} masked={masked} />
-          <KeyRow
-            label="Viewing key"
-            value={keys.data.ufvk}
-            masked={masked}
-          />
           <div className="callout mt-3">
             <span>
-              Funds sent here can be spent only when enough members approve. The
-              viewing key shows the wallet's balance and payments to whoever has
-              it: keep it within the group.
+              Funds sent here can be spent only when enough members approve. The wallet's viewing key, which shows
+              its balance and payments to whoever has it, is under Share read-only access.
             </span>
           </div>
         </>
@@ -58,6 +54,59 @@ export function GroupKeys({ group, masked = false }: { group: GroupSummary; mask
       {orchard && keys.isError && (
         <div className="error">
           Could not derive the address for this group.
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Giving someone outside the group (an accountant, an auditor) read-only
+ *  access: the wallet's viewing key, shown once the member confirms they know
+ *  what it reveals, which can't be taken back. */
+function ReadOnlyAccess({ group }: { group: GroupSummary }) {
+  const [open, setOpen] = useState(false);
+  const [understood, setUnderstood] = useState(false);
+  const keys = useQuery({
+    queryKey: ["orchard-keys", group.id],
+    queryFn: () => groupOrchardKeys(group.id),
+    enabled: open && understood,
+    staleTime: Infinity,
+  });
+  return (
+    <div className="section-rule mt-4">
+      <button className="secondary" onClick={() => setOpen((o) => !o)}>
+        {open ? "Close" : "Share read-only access"}
+      </button>
+      {open && (
+        <div className="mt-3">
+          <p className="mt-0">
+            For an accountant or auditor: the wallet's <strong>viewing key</strong> lets them see its balance and every
+            payment in and out, with amounts and memos, in a Zcash wallet that can watch a unified viewing key
+            (<span className="code-inline">uview…</span>). It can't spend anything.
+          </p>
+          <ul className="dim text-sm">
+            <li>They see the wallet's whole history, and every payment from now on.</li>
+            <li>
+              It can't be taken back. To cut someone off, the group has to move its funds to a new wallet with a new
+              key.
+            </li>
+            <li>Agree with the group before you share it, and send it privately.</li>
+          </ul>
+          <label className="row confirm items-start">
+            <input type="checkbox" className="w-auto mt-1" checked={understood} onChange={(e) => setUnderstood(e.target.checked)} />
+            <span>I understand whoever has it sees all of this wallet's payments, for good.</span>
+          </label>
+          {understood && keys.data && (
+            <>
+              <KeyRow label="Viewing key" value={keys.data.ufvk} />
+              {/* A viewing key is longer than an address: a larger code, low error
+                  correction, keeps its modules readable by a phone camera. */}
+              <div className="qr-frame mt-2">
+                <QRCodeSVG value={keys.data.ufvk} size={260} level="L" marginSize={4} bgColor="#ffffff" fgColor="#000000" />
+              </div>
+            </>
+          )}
+          {understood && keys.isError && <div className="error">Couldn't get the viewing key.</div>}
         </div>
       )}
     </div>
@@ -341,6 +390,8 @@ export function GroupCard({
         <summary>Keys and addresses</summary>
         <GroupKeys group={group} />
       </details>
+
+      {isOrchard(group) && <ReadOnlyAccess group={group} />}
 
       <ShareRepairGuide group={group} />
 

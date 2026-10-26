@@ -53,6 +53,11 @@ breaking changes. Cyze is beta, unaudited software (see the README).
   - The sender's app checks the rules before asking anyone, and each
     approver's app checks them again and refuses a payment that breaks them.
     Approvers see which rules a request met.
+- **Accounting export:** **Export CSV** on Activity saves the history, one row
+  per payment, with fees, payees, memos, reasons and who signed.
+- **Read-only access:** **Share read-only access** on a group's page gives an
+  accountant or auditor the viewing key, once you confirm what it reveals. The
+  key no longer shows under Keys and addresses.
 - **Reasons:** say what a payment is for, for the group only.
   - Approvers see it with the request, attributed to the member who asked.
   - Once sent, every member's **Activity** shows it. Any member can add

@@ -97,8 +97,10 @@ and skip kinds they don't know.
       own copy, by the verified address (`verify::address_forms`).
 - [x] **Payment reasons** — `SigningContext.reason` for approvers, then a
       `PaymentReason` record keyed by txid once sent; any member can add theirs.
-- [ ] **Accounting export** — CSV of history with payees, reasons and signers.
-- [ ] **Read-only access** — export the group's viewing key for an accountant.
+- [x] **Accounting export** — `historyCsv` (`src/lib/csv.ts`), saved by
+      `commands::export::save_csv`.
+- [x] **Read-only access** — `ReadOnlyAccess` on the group page: the viewing
+      key, after a confirmation of what it reveals.
 - [x] **Batch payments** — `wallet::prepare_payments` (single sends are a batch
       of one), `SigningContext.payments` matched as an unordered set by
       `check_coordinator_claims`, `src/wallet/Batch.tsx`. Up to
