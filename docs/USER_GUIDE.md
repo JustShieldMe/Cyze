@@ -35,7 +35,7 @@ npm install
 npm run tauri build          # native installer, or `npm run tauri dev` to run
 ```
 
-See the [README](../README.md) for build prerequisites (Rust, Node, and the
+See [Development](DEVELOPMENT.md) for build prerequisites (Rust, Node, and the
 Linux system packages).
 
 **Testing setup.** Cyze coordinates multiple people, so most flows need two

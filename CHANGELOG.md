@@ -67,6 +67,10 @@ breaking changes. Cyze is beta, unaudited software (see the README).
   everything to it for the usual approvals. Approvers see **Your group “…”**
   when a payment goes to a group they're in, checked against that group's
   keys on their own device.
+- **Shorter README**, with the details in new pages under `docs/`:
+  [Features](docs/FEATURE_LIST.md), [How it works](docs/HOW_IT_WORKS.md), the
+  [Security model](docs/SECURITY_MODEL.md) and
+  [Development](docs/DEVELOPMENT.md).
 - **Accounting export:** **Export CSV** on Activity saves the history, one row
   per payment, with fees, payees, memos, reasons and who signed.
 - **Read-only access:** **Share read-only access** on a group's page gives an
