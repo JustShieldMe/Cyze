@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
+  copyPayees,
+  createPoll,
   exportMyContact,
   getIdentity,
   groupOrchardKeys,
@@ -25,6 +27,7 @@ import { resolveParticipant } from "../lib/participants";
 import Contacts from "./Contacts";
 import { KeyRow } from "../wallet/common";
 import { useCeremonies } from "../stores/ceremonies";
+import { noRules, useGroupRules } from "../lib/rules";
 
 function isOrchard(group: GroupSummary): boolean {
   return group.ciphersuite.includes("Pallas");
@@ -162,6 +165,134 @@ function ShareRepairGuide({
             </li>
           </ul>
           {repairable && <RepairMember group={group} identity={identity} contacts={contacts} />}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Changing a group's members or threshold: FROST fixes both when a group
+ *  forms, so the group moves to a new one. Its payees and rules can be carried
+ *  over, then the funds move with this group's usual approvals. */
+function ChangeMembersGuide({ group }: { group: GroupSummary }) {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [to, setTo] = useState("");
+  const groups = useQuery({ queryKey: ["groups"], queryFn: listGroups });
+  const others = (groups.data ?? []).filter((g) => g.id !== group.id && isOrchard(g));
+  const target = others.find((g) => g.id === to);
+  const privacy = useQuery({ queryKey: ["viewing-key", to], queryFn: () => viewingKeyStatus(to), enabled: !!target });
+  const rules = useGroupRules(group.id);
+  const copy = useMutation({
+    mutationFn: () => copyPayees(group.id, to),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["payees", to] }),
+  });
+  const propose = useMutation({
+    mutationFn: () =>
+      createPoll({
+        group_id: to,
+        title: `Adopt the rules of “${group.description}”`,
+        details: "",
+        options: [],
+        open_for_secs: 7 * 86_400,
+        rules: rules.data!.rules,
+      }),
+  });
+  const move = useMutation({
+    mutationFn: async () => {
+      await setActiveWallet(group.id);
+      await queryClient.invalidateQueries({ queryKey: ["active-wallet"] });
+    },
+    onSuccess: () => navigate("/", { state: { moveTo: { id: target!.id, name: target!.description } } }),
+  });
+  const notPrivate = privacy.data && !privacy.data.private;
+  const errText = (e: unknown) => (e as AppError)?.message ?? String(e);
+
+  return (
+    <div className="section-rule mt-4">
+      <button className="secondary" onClick={() => setOpen((o) => !o)}>
+        {open ? "Hide" : "Change members or threshold"}
+      </button>
+      {open && (
+        <div className="mt-3">
+          <p className="mt-0">
+            A group's members and threshold are fixed when it's created. To change them, create a new group and move
+            the funds to it.
+          </p>
+          <ol className="guide-list">
+            <li>
+              <Link to="/groups/new">Create the new group</Link> with the members and threshold you want.
+            </li>
+            <li>
+              Choose it here:{" "}
+              {others.length ? (
+                <select aria-label="New group" value={to} onChange={(e) => setTo(e.target.value)}>
+                  <option value="">Choose a group…</option>
+                  {others.map((g) => (
+                    <option key={g.id} value={g.id}>
+                      {g.description} ({g.threshold} of {g.num_participants})
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <span className="dim">your other Zcash groups show here once they're created.</span>
+              )}
+            </li>
+            {target && (
+              <>
+                <li>
+                  Carry over what the group uses. Payees arrive untrusted: the new group's members trust them again.
+                  <div className="row gap-2 mt-2">
+                    <button className="secondary" onClick={() => copy.mutate()} disabled={copy.isPending || copy.isSuccess}>
+                      Copy payees
+                    </button>
+                    {!noRules(rules.data?.rules) && (
+                      <button
+                        className="secondary"
+                        onClick={() => propose.mutate()}
+                        disabled={propose.isPending || propose.isSuccess}
+                      >
+                        Propose the same rules
+                      </button>
+                    )}
+                  </div>
+                  {copy.isSuccess && (
+                    <p className="ok text-sm mb-0">
+                      {copy.data === 0
+                        ? "The new group has these payees already."
+                        : `Copied ${copy.data} ${copy.data === 1 ? "payee" : "payees"}.`}
+                    </p>
+                  )}
+                  {propose.isSuccess && (
+                    <p className="ok text-sm mb-0">
+                      Asked the new group in <Link to="/votes">Votes</Link>.
+                    </p>
+                  )}
+                  {(copy.error || propose.error) && <div className="error">{errText(copy.error ?? propose.error)}</div>}
+                  <p className="dim text-sm mb-0">
+                    Scheduled payments stay with this group: stop them here, and schedule them again in the new one.
+                  </p>
+                </li>
+                <li>
+                  Move the funds. This sends everything to “{target.description}”, approved by this group's members
+                  as usual. Each approver who's in both groups sees that it goes to their own group.
+                  {notPrivate && (
+                    <p className="callout warn text-sm">
+                      Make the new group's viewing key private first, from its wallet on Home, so the funds arrive at
+                      its private address.
+                    </p>
+                  )}
+                  <div className="mt-2">
+                    <button onClick={() => move.mutate()} disabled={move.isPending || !privacy.data || !!notPrivate}>
+                      Move the funds
+                    </button>
+                  </div>
+                </li>
+                <li>Once the funds have arrived, members can remove this group.</li>
+              </>
+            )}
+          </ol>
         </div>
       )}
     </div>
@@ -434,6 +565,8 @@ export function GroupCard({
       {isOrchard(group) && <ReadOnlyAccess group={group} />}
 
       <ShareRepairGuide group={group} identity={identity} contacts={contacts} />
+
+      {isOrchard(group) && <ChangeMembersGuide group={group} />}
 
       <div className="mt-3">
         <button

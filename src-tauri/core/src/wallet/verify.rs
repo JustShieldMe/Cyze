@@ -97,6 +97,13 @@ pub fn group_fvk(group_ak_hex: &str, seed: Option<&crate::zcash::ViewingSeed>) -
         .ok_or_else(|| fail("the group key is not a valid Orchard spend validating key"))
 }
 
+/// Whether `address` is one the group receives at under its current viewing
+/// key (any of its diversified addresses): what a member's app checks to say a
+/// payment goes to one of their own groups.
+pub fn is_address_of(group_ak_hex: &str, seed: Option<&crate::zcash::ViewingSeed>, address: &str) -> bool {
+    group_fvk(group_ak_hex, seed).is_ok_and(|fvk| is_group_address(address, &fvk))
+}
+
 /// The viewing keys a group's notes can be under: its current one and, for a
 /// group with a viewing seed, the one derived from its id alone, which held its
 /// funds if it made its viewing key private after it was created.
@@ -568,6 +575,23 @@ mod tests {
     fn payee() -> orchard::Address {
         let sk = SpendingKey::from_bytes([9; 32]).unwrap();
         FullViewingKey::from(&sk).address_at(0u32, Scope::External)
+    }
+
+    #[test]
+    fn an_address_is_recognised_as_the_group_it_belongs_to() {
+        let (ak, fvk) = group(1);
+        let net = DEVNET.network_type();
+        let rotated = crate::zcash::derive_orchard_address_at(&ak, None, net, 7).unwrap();
+        for address in [ua(fvk.address_at(0u32, Scope::External)), rotated] {
+            assert!(is_address_of(&ak, None, &address));
+            assert!(!is_address_of(&group(2).0, None, &address), "another group's");
+        }
+        let seed = [5u8; 32];
+        let private = crate::zcash::derive_orchard_keys_hex(&ak, Some(&seed), net).unwrap().address;
+        assert!(is_address_of(&ak, Some(&seed), &private));
+        assert!(!is_address_of(&ak, None, &private), "not under the key derived from its id alone");
+        assert!(!is_address_of(&ak, None, &ua(payee())));
+        assert!(!is_address_of(&ak, None, "tmNotAUnifiedAddress"));
     }
 
     fn ua(addr: orchard::Address) -> String {

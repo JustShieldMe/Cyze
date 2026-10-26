@@ -123,6 +123,32 @@ pub async fn trust_payee<R: Runtime>(
     write(&app, &group_id, RecordBody::PayeeTrust { owner, payee_id, address, trusted }).await
 }
 
+/// Add a group's payees to another of this member's groups, moving to a new
+/// group: each that isn't there already by name or address, as this member's.
+/// Trust isn't copied: the other group's members trust them afresh. Returns
+/// how many were added.
+#[tauri::command]
+pub async fn copy_payees<R: Runtime>(app: AppHandle<R>, group_id: String, to_group_id: String) -> AppResult<u32> {
+    let state = app.state::<AppState>();
+    if group_id == to_group_id {
+        return Err(AppError::new("config", "choose another group"));
+    }
+    group(&state, &to_group_id).await?;
+    let mut there = payees_in(&state, &to_group_id).await?;
+    let mut added = 0;
+    for p in payees_in(&state, &group_id).await? {
+        let name = p.payee.name.to_lowercase();
+        if there.iter().any(|t| t.payee.name.to_lowercase() == name || t.forms.iter().any(|f| p.forms.contains(f))) {
+            continue;
+        }
+        let body = RecordBody::Payee { payee_id: Uuid::new_v4().to_string(), name: p.payee.name.clone(), address: p.payee.address.clone() };
+        write(&app, &to_group_id, body).await?;
+        there.push(p);
+        added += 1;
+    }
+    Ok(added)
+}
+
 /// What the group's members say its transactions were for.
 #[tauri::command]
 pub async fn list_payment_reasons(state: State<'_, AppState>, group_id: String) -> AppResult<Vec<PaymentReason>> {

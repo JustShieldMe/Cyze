@@ -1,8 +1,19 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getIdentity, removePayee, savePayee, trustPayee, AppError, GroupSummary, Payee, WalletNetwork } from "../ipc/commands";
-import { MAX_PAYEE_NAME, useMemberName, usePayees } from "../lib/payees";
+import { MAX_PAYEE_NAME, useMemberName, useOwnGroup, usePayees } from "../lib/payees";
 import { ADDRESS_PLACEHOLDER, checkRecipient } from "./address";
+
+/** Says a payment goes to one of this member's own groups, when it does. */
+export function OwnGroupName({ address }: { address: string | null | undefined }) {
+  const own = useOwnGroup(address);
+  if (!own) return null;
+  return (
+    <div className="payee-name">
+      Your group “{own.description}” <span className="dim">· its address, checked on this device</span>
+    </div>
+  );
+}
 
 /** An address shortened for a table cell; the full one is in its title. */
 export function shortAddress(address: string): string {

@@ -145,6 +145,25 @@ test("an approver sees the payee's name from their own payees, and what the requ
   );
 });
 
+test("an approver sees that a payment goes to one of their own groups, checked against its keys", async () => {
+  const backend = fakeBackend({
+    list_pending_sessions: () => [request],
+    join_signing_session: () => "c20",
+    own_group_for_address: ({ address }) => (address === "u1payee" ? { group_id: "6e" + "1".repeat(62), description: "Treasury 2" } : null),
+  });
+  const ui = await renderApp("/inbox");
+  await waitFor(() => expect(joinedAs("s1")).toBe("c20"));
+  await emit("signing:progress", {
+    ceremony_id: "c20",
+    event: { phase: "awaiting_approval", message_hex: "9f".repeat(32), context, auto_approved: false, verified },
+  });
+  await ui.findByText(/Verified: this is exactly what your signature would authorize/);
+  await waitFor(() =>
+    expect(document.querySelector(".payee-name")?.textContent).toBe("Your group “Treasury 2” · its address, checked on this device"),
+  );
+  expect(backend.calls("own_group_for_address")).toContainEqual({ address: "u1payee" });
+});
+
 test("an approver sees that the group agreed to the payment a request sends", async () => {
   fakeBackend({
     list_pending_sessions: () => [

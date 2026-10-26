@@ -669,6 +669,19 @@ export const removePayee = (groupId: string, payeeId: string) => invoke<void>("r
 /** Trust (or stop trusting) a payee another member added, at its address. */
 export const trustPayee = (groupId: string, owner: string, payeeId: string, trusted: boolean) =>
   invoke<void>("trust_payee", { groupId, owner, payeeId, trusted });
+/** Add a group's payees to another of your groups (moving to a new group):
+ *  those not there already, as yours, untrusted. Returns how many. */
+export const copyPayees = (groupId: string, toGroupId: string) =>
+  invoke<number>("copy_payees", { groupId, toGroupId });
+/** One of your groups, named. */
+export interface OwnGroup {
+  group_id: string;
+  description: string;
+}
+/** Which of your Zcash groups receives at an address, if any, worked out from
+ *  each group's own viewing key on this device. */
+export const ownGroupForAddress = (address: string) =>
+  invoke<OwnGroup | null>("own_group_for_address", { address });
 
 /** A group's rules for its payments (core/src/rules.rs), which each member's
  *  app applies when deciding whether to sign. */

@@ -518,6 +518,32 @@ The app keeps watching the old address, so anything sent there later shows up
 on Home to move as well. Payments made before the move stay visible to anyone
 who knows the group ID.
 
+### Change members or threshold
+
+A group's members and threshold are fixed when it's created. To add or remove
+members, or change how many must approve, create a new group and move the
+funds to it. **Change members or threshold** on the group's page walks
+through it:
+
+1. **Create the new group** with the members and threshold you want (see
+   [DKG ceremony](#5-dkg-ceremony-create-a-group)).
+2. Choose the new group from your other Zcash groups.
+3. **Copy payees** adds this group's payees to the new one, as yours. They
+   arrive untrusted, so the new group's members trust them again.
+   **Propose the same rules** asks the new group to adopt this group's rules
+   in a poll. Scheduled payments stay behind: stop them here, and schedule them
+   again in the new group.
+4. **Move the funds** opens this wallet on Home with a payment of everything to
+   the new group's address, for review. It's approved by this group's members,
+   under this group's rules. If a rule makes larger payments wait for vetoes,
+   announce it first.
+5. Once the funds have arrived, members can remove the old group.
+
+An approver whose app also holds the new group sees **Your group “…”** on the
+request. Their app checks the address against that group's keys itself. The
+new group's viewing key has to be private before the move, so the funds land
+at its private address.
+
 ---
 
 ## 7. Votes

@@ -130,8 +130,14 @@ and skip kinds they don't know.
       (`commands::rules::poll_permits`).
 - [x] **Tiered approvals** — `GroupRules.large`; approvers count the signers
       committed in the signing package (`AwaitingApproval.signers`).
-- [ ] **Change members or threshold** — a new group, then move the funds
-      (reusing the viewing-key move, `commands/viewing.rs`).
+- [x] **Change members or threshold** — a new group (DKG), then send
+      everything to it (`ChangeMembersGuide` in `src/screens/Groups.tsx`, the
+      send-all review on Home). `commands::payees::copy_payees` carries payees
+      over untrusted; rules go to a poll in the new group.
+      `commands::groups::own_group_for_address` (`verify::is_address_of`) shows
+      approvers and the sender that a payment goes to one of their groups.
+      Follow-up: carry scheduled payments over; mark the old group as moved
+      for members who aren't in the new one.
 - [x] **Share repair** — `core/src/repair.rs` (RTS over a `REPAIR_SESSION`),
       `commands/repair.rs`; helpers vouch for the new key (`MemberKey`
       records, `polls::vouched_member_keys`) so other members switch too.

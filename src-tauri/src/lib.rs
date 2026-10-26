@@ -85,6 +85,8 @@ pub fn run() {
             commands::payees::list_payment_reasons,
             commands::payees::set_payment_reason,
             commands::payees::trust_payee,
+            commands::payees::copy_payees,
+            commands::groups::own_group_for_address,
             commands::rules::group_rules,
             commands::schedules::list_schedules,
             commands::schedules::due_schedules,
