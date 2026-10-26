@@ -32,6 +32,7 @@ async fn members_poll_each_other() {
             details: "Quotes attached in the group chat.".into(),
             options: vec!["Yes".into(), "No".into()],
             open_for_secs: 3 * 24 * 60 * 60,
+            payments: Vec::new(),
         },
     )
     .await
@@ -70,6 +71,7 @@ async fn members_poll_each_other() {
             details: String::new(),
             options: vec!["Yes".into(), "No".into(), "Later".into()],
             open_for_secs: 24 * 60 * 60,
+            payments: Vec::new(),
         },
     )
     .await

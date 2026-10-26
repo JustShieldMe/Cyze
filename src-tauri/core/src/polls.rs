@@ -51,6 +51,11 @@ pub const MAX_TITLE: usize = 200;
 pub const MAX_DETAILS: usize = 2_000;
 pub const MAX_OPTION: usize = 100;
 pub const MAX_OPTIONS: usize = 10;
+/// The most payments a poll proposes: as many as one transaction makes
+/// (`wallet::MAX_PAYMENTS`).
+pub const MAX_PROPOSED_PAYMENTS: usize = 20;
+/// The options of a poll that proposes payments: agreeing on the first pays.
+pub const PAYMENT_OPTIONS: [&str; 2] = ["Pay", "Don't pay"];
 pub const MAX_PAYEE_NAME: usize = 64;
 pub const MAX_ADDRESS: usize = 1_024;
 pub const MAX_REASON: usize = 500;
@@ -94,7 +99,13 @@ pub enum RecordBody {
         /// The Zcash community vote proposal it asks about, if any.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         community: Option<CommunityRef>,
+        /// The payments it proposes, if any: once the group agrees to pay,
+        /// its author can send exactly these.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        payments: Vec<ProposedPayment>,
     },
+    /// The poll's author recording that they sent its payments, in `txid`.
+    PollPaid { poll_id: String, txid: String },
     /// The author's answer: the latest one counts.
     Vote { poll_id: String, choice: u32 },
     /// The poll's author closing it early.
@@ -123,7 +134,7 @@ impl Record {
             return bad("records are numbered from 1");
         }
         match &self.body {
-            RecordBody::Poll { poll_id, title, details, options, closes_at, .. } => {
+            RecordBody::Poll { poll_id, title, details, options, closes_at, payments, .. } => {
                 if poll_id.is_empty() || poll_id.len() > 64 {
                     return bad("poll id");
                 }
@@ -140,6 +151,31 @@ impl Record {
                 }
                 if *closes_at <= self.at {
                     return bad("it closes before it opens");
+                }
+                if !payments.is_empty() {
+                    if options.len() != PAYMENT_OPTIONS.len() || payments.len() > MAX_PROPOSED_PAYMENTS {
+                        return bad("proposed payments");
+                    }
+                    for p in payments {
+                        let address = &p.recipient;
+                        if address.is_empty() || address.len() > MAX_ADDRESS || !address.chars().all(|c| c.is_ascii_alphanumeric()) {
+                            return bad("a proposed payment's address");
+                        }
+                        if p.amount_zatoshis == 0 || p.amount_zatoshis > MAX_ZATOSHIS {
+                            return bad("a proposed payment's amount");
+                        }
+                        if p.memo.as_ref().is_some_and(|m| m.len() > 512) {
+                            return bad("a proposed payment's memo");
+                        }
+                    }
+                }
+            }
+            RecordBody::PollPaid { poll_id, txid } => {
+                if poll_id.is_empty() || poll_id.len() > 64 {
+                    return bad("poll id");
+                }
+                if txid.len() != 64 || !txid.chars().all(|c| c.is_ascii_hexdigit()) {
+                    return bad("transaction id");
                 }
             }
             RecordBody::Vote { poll_id, .. } | RecordBody::Close { poll_id } => {
@@ -201,6 +237,18 @@ pub fn decode_batch(bytes: &[u8]) -> Result<Vec<Message>, CoreError> {
                 .ok()
         })
         .collect())
+}
+
+/// The most zatoshis there will ever be (21 million coins).
+const MAX_ZATOSHIS: u64 = 21_000_000 * 100_000_000;
+
+/// A payment a poll proposes, as the group would make it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProposedPayment {
+    pub recipient: String,
+    pub amount_zatoshis: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memo: Option<String>,
 }
 
 /// A Zcash community vote proposal (`crate::community_vote`) a poll asks the
@@ -290,6 +338,10 @@ pub struct PollView {
     pub agreed: Option<u32>,
     /// The Zcash community vote proposal it asks about, if any.
     pub community: Option<CommunityRef>,
+    /// The payments it proposes, if any (agreeing on option 0 pays them).
+    pub payments: Vec<ProposedPayment>,
+    /// The transaction its author sent them in, once they did.
+    pub paid_txid: Option<String>,
 }
 
 /// Work out every poll in a group from its records. Only current members'
@@ -303,9 +355,14 @@ pub fn polls(group_id: &str, log: &GroupLog, members: &[String], threshold: u32,
     let mut out = Vec::new();
     for (author, records) in log.records.iter().filter(|(a, _)| current(a)) {
         for record in records.values().filter(valid) {
-            let RecordBody::Poll { poll_id, title, details, options, closes_at, community } = &record.body else {
+            let RecordBody::Poll { poll_id, title, details, options, closes_at, community, payments } = &record.body else {
                 continue;
             };
+            // Paid: the author's first record of sending it.
+            let paid_txid = records.values().filter(valid).find_map(|r| match &r.body {
+                RecordBody::PollPaid { poll_id: p, txid } if p == poll_id => Some(txid.clone()),
+                _ => None,
+            });
             // Closed early: the author's first Close for it.
             let closed_at = records
                 .values()
@@ -355,6 +412,8 @@ pub fn polls(group_id: &str, log: &GroupLog, members: &[String], threshold: u32,
                 threshold,
                 agreed,
                 community: community.clone(),
+                payments: payments.clone(),
+                paid_txid,
             });
         }
     }
@@ -456,6 +515,7 @@ mod tests {
             options: vec!["Yes".into(), "No".into()],
             closes_at,
             community: None,
+            payments: Vec::new(),
         }
     }
     fn vote(id: &str, choice: u32) -> RecordBody {
@@ -522,12 +582,60 @@ mod tests {
             options: vec!["only".into()],
             closes_at: 100,
             community: None,
+            payments: Vec::new(),
         };
         assert!(rec(1, 10, one_option).check().is_err());
         let message = Message::Record(rec(1, 10, vote("p", 0)));
         let json = serde_json::to_string(&message).unwrap();
         assert_eq!(serde_json::from_str::<Message>(&json).unwrap(), message);
         assert!(json.contains(r#""cyze_poll":"record""#), "{json}");
+    }
+
+    fn payment_poll(id: &str, payments: Vec<ProposedPayment>) -> RecordBody {
+        RecordBody::Poll {
+            poll_id: id.into(),
+            title: "Pay the auditor?".into(),
+            details: String::new(),
+            options: PAYMENT_OPTIONS.map(String::from).to_vec(),
+            closes_at: 1_000,
+            community: None,
+            payments,
+        }
+    }
+    fn pay(recipient: &str, amount_zatoshis: u64) -> ProposedPayment {
+        ProposedPayment { recipient: recipient.into(), amount_zatoshis, memo: None }
+    }
+
+    #[test]
+    fn a_poll_proposes_payments_and_only_its_author_marks_it_paid() {
+        let txid = "ab".repeat(32);
+        let mut log = GroupLog::default();
+        log.insert("alice", rec(1, 100, payment_poll("p", vec![pay("u1auditor", 250_000_000)])));
+        log.insert("alice", rec(2, 110, vote("p", 0)));
+        log.insert("bob", rec(1, 120, vote("p", 0)));
+        log.insert("bob", rec(2, 130, RecordBody::PollPaid { poll_id: "p".into(), txid: "cd".repeat(32) }));
+        let p = &polls(G, &log, &members(), 2, "bob", 500)[0];
+        assert_eq!(p.payments, vec![pay("u1auditor", 250_000_000)]);
+        assert_eq!(p.agreed, Some(0), "agreed to pay");
+        assert_eq!(p.paid_txid, None, "Bob didn't propose it, so Bob can't mark it paid");
+        log.insert("alice", rec(3, 140, RecordBody::PollPaid { poll_id: "p".into(), txid: txid.clone() }));
+        assert_eq!(polls(G, &log, &members(), 2, "bob", 500)[0].paid_txid, Some(txid));
+    }
+
+    #[test]
+    fn a_poll_proposing_payments_is_refused_unless_well_formed() {
+        assert!(rec(1, 10, payment_poll("p", vec![pay("u1auditor", 1)])).check().is_ok());
+        let mut three_options = payment_poll("p", vec![pay("u1auditor", 1)]);
+        if let RecordBody::Poll { options, .. } = &mut three_options {
+            options.push("Later".into());
+        }
+        assert!(rec(1, 10, three_options).check().is_err());
+        assert!(rec(1, 10, payment_poll("p", vec![pay("u1auditor", 0)])).check().is_err());
+        assert!(rec(1, 10, payment_poll("p", vec![pay("u1 auditor", 1)])).check().is_err());
+        let too_many = (0..=MAX_PROPOSED_PAYMENTS).map(|_| pay("u1auditor", 1)).collect();
+        assert!(rec(1, 10, payment_poll("p", too_many)).check().is_err());
+        let memo = ProposedPayment { memo: Some("x".repeat(513)), ..pay("u1auditor", 1) };
+        assert!(rec(1, 10, payment_poll("p", vec![memo])).check().is_err());
     }
 
     /// What a newer version might send: a kind of record this one doesn't

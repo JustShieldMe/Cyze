@@ -40,6 +40,9 @@ The app has five places: **Home**, **Approvals**, **Votes**, **Groups** and
   - **Activity** lists payments with their memos and fees.
   - **Payees:** the group keeps a shared list of the addresses it pays, by
     name. Pick one when sending; approvers and the history show its name.
+  - **Pay if agreed:** a group poll can propose payments. Once the group
+    agrees, its author sends exactly those, and each approver's app checks the
+    transaction against the poll.
   - **Reasons:** a payment can say what it's for. Approvers see it, and so
     does every member's history. It never goes on chain.
   - With several groups, a switcher at the top picks the one wallet the app

@@ -55,6 +55,10 @@ pub struct SigningContext {
     /// order. Empty for one payment, which the fields above describe.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub payments: Vec<ClaimedPayment>,
+    /// The group poll whose agreed payments this sends, if any: each signer
+    /// checks the transaction against its own copy of the poll.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poll_id: Option<String>,
 }
 
 /// One payment of a batch, as the coordinator describes it. Without its memo:
@@ -139,6 +143,9 @@ pub enum ParticipantEvent {
         /// RedPallas spends.
         #[serde(skip_serializing_if = "Option::is_none")]
         randomizer_hex: Option<String>,
+        /// Hex communication key of the member who asked: the session's
+        /// coordinator, whose key the request's encryption authenticates.
+        coordinator: String,
     },
     /// Share computed and sent to the coordinator.
     ShareSent,

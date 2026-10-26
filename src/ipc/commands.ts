@@ -410,6 +410,9 @@ export const walletSend = (args: {
   /** Several payments in one transaction (recipient, amount and memo are
    *  ignored). */
   payments?: PaymentRequest[];
+  /** Send the payments a poll this member asked proposes, once the group
+   *  agreed to pay (the other payment fields are ignored). */
+  poll_id?: string | null;
 }) => invoke<SendStarted>("wallet_send", { args });
 /** Build several payments as one transaction, for review (nothing is sent). */
 export const walletPreparePayments = (groupId: string, payments: PaymentRequest[]) =>
@@ -583,6 +586,11 @@ export interface PollView {
   agreed: number | null;
   /** The Zcash community vote proposal it asks about, if any. */
   community: { round_id: string; proposal_id: number } | null;
+  /** The payments it proposes, if any: agreeing on option 0 ("Pay") lets its
+   *  author send exactly these. */
+  payments?: PaymentRequest[];
+  /** The transaction its author sent them in, once they did. */
+  paid_txid?: string | null;
 }
 export const listPolls = (groupId: string | null) => invoke<PollView[]>("list_polls", { groupId });
 export const createPoll = (args: {
@@ -591,6 +599,8 @@ export const createPoll = (args: {
   details: string;
   options: string[];
   open_for_secs: number;
+  /** Payments it proposes: the options become "Pay" and "Don't pay". */
+  payments?: PaymentRequest[];
 }) => invoke<string>("create_poll", { args });
 export const votePoll = (groupId: string, pollId: string, choice: number) =>
   invoke<void>("vote_poll", { groupId, pollId, choice });

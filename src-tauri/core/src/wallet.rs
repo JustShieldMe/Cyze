@@ -2323,6 +2323,12 @@ async fn open_for_send(
     Ok((db, account_id, tip_height))
 }
 
+/// Whether `address` is a transparent address on `network` (a payment to it
+/// is public and carries no memo).
+pub fn is_transparent_address(network: WalletNetwork, address: &str) -> bool {
+    matches!(decode_recipient(network, address), Ok(zcash_keys::address::Address::Transparent(_)))
+}
+
 /// Parse a recipient address for `network`, explaining a mismatch when the
 /// address clearly belongs to another network.
 pub(crate) fn decode_recipient(network: WalletNetwork, recipient: &str) -> Result<zcash_keys::address::Address, CoreError> {

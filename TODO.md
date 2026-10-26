@@ -105,8 +105,12 @@ and skip kinds they don't know.
       `MAX_PAYMENTS` (20); the request is sized exactly against one frostd
       message (`signing::signer_context_budget`) and refused at review when it
       can't fit.
-- [ ] **Pay if agreed** — a poll that carries a payment; once agreed, approvers
-      see the poll and a check that the transaction matches it exactly.
+- [x] **Pay if agreed** — `Poll.payments` and a `PollPaid` record
+      (`core/src/polls.rs`); `wallet_send` with `poll_id` builds from the poll
+      (its author only, once agreed, once); approvers' `check_poll`
+      (`commands/signing.rs`) refuses another sender, other payments, or a
+      paid poll. Follow-up: let members who voted Pay have their app approve
+      it automatically (with the spending-limit rules below).
 - [ ] **Trusted payees only** — adding a payee needs a threshold of members to
       accept; apps warn about or refuse payments to anyone else.
 - [ ] **Spending limits** — approve automatically up to X per week to trusted

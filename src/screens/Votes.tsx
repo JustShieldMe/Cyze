@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   closePoll,
@@ -6,6 +7,7 @@ import {
   createPoll,
   getActiveWallet,
   getIdentity,
+  getWalletConfig,
   listContacts,
   listGroups,
   listPolls,
@@ -16,7 +18,14 @@ import {
   GroupSummary,
   PollView,
 } from "../ipc/commands";
+import { asNetwork, unit } from "../network";
 import { resolveParticipant } from "../lib/participants";
+import { payeeFor, usePayees } from "../lib/payees";
+import { selectActiveSend, useCeremonies } from "../stores/ceremonies";
+import { checkRows, emptyRow, PaymentRow, PaymentRows } from "../wallet/Batch";
+import { zec } from "../wallet/common";
+import { shortAddress } from "../wallet/Payees";
+import { requestApprovals } from "../wallet/SendProgress";
 
 /** "in 2 days", "in 3 hours", "2 days ago". */
 function relative(unix: number): string {
@@ -65,7 +74,7 @@ export default function Votes() {
 
       {polls.isError && <div className="error">Couldn't load polls: {errText(polls.error)}</div>}
       {open.map((p) => (
-        <PollCard key={`${p.group_id}/${p.poll_id}`} poll={p} groupName={groupName(p.group_id)} />
+        <PollCard key={`${p.group_id}/${p.poll_id}`} poll={p} groupName={groupName(p.group_id)} group={groups.data?.find((g) => g.id === p.group_id)} />
       ))}
       {polls.isSuccess && !open.length && !creating && (
         <div className="card">
@@ -83,7 +92,7 @@ export default function Votes() {
         <details className="closed-polls">
           <summary>Closed polls ({closed.length})</summary>
           {closed.map((p) => (
-            <PollCard key={`${p.group_id}/${p.poll_id}`} poll={p} groupName={groupName(p.group_id)} />
+            <PollCard key={`${p.group_id}/${p.poll_id}`} poll={p} groupName={groupName(p.group_id)} group={groups.data?.find((g) => g.id === p.group_id)} />
           ))}
         </details>
       )}
@@ -108,8 +117,24 @@ function NewPoll({ groups, onDone }: { groups: GroupSummary[]; onDone: () => voi
   const [options, setOptions] = useState(["Yes", "No"]);
   const [duration, setDuration] = useState(DURATIONS[1].secs);
   const filled = options.map((o) => o.trim()).filter(Boolean);
+  // Proposing payments: the group's wallet can then send them once it agrees.
+  const walletConfig = useQuery({ queryKey: ["wallet-config"], queryFn: getWalletConfig });
+  const network = asNetwork(walletConfig.data?.network);
+  const isWallet = !!groups.find((g) => g.id === group)?.ciphersuite.includes("Pallas");
+  const [proposing, setProposing] = useState(false);
+  const [rows, setRows] = useState<PaymentRow[]>([emptyRow()]);
+  const proposal = checkRows(rows, network);
+  const paying = proposing && isWallet;
   const create = useMutation({
-    mutationFn: () => createPoll({ group_id: group, title: title.trim(), details: details.trim(), options: filled, open_for_secs: duration }),
+    mutationFn: () =>
+      createPoll({
+        group_id: group,
+        title: title.trim(),
+        details: details.trim(),
+        options: paying ? [] : filled,
+        open_for_secs: duration,
+        ...(paying ? { payments: proposal.payments } : {}),
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["polls"] });
       onDone();
@@ -131,31 +156,55 @@ function NewPoll({ groups, onDone }: { groups: GroupSummary[]; onDone: () => voi
         </>
       )}
       <label>Question</label>
-      <input type="text" placeholder="e.g. Hire an auditor before launch?" value={title} maxLength={200} onChange={(e) => setTitle(e.target.value)} />
+      <input
+        type="text"
+        placeholder={paying ? "e.g. Pay the auditor for Q4?" : "e.g. Hire an auditor before launch?"}
+        value={title}
+        maxLength={200}
+        onChange={(e) => setTitle(e.target.value)}
+      />
       <label>Details (optional)</label>
       <textarea rows={3} value={details} maxLength={2000} onChange={(e) => setDetails(e.target.value)} />
-      <label>Options</label>
-      {options.map((o, i) => (
-        <div className="row mb-2" key={i}>
-          <input
-            type="text"
-            value={o}
-            maxLength={100}
-            placeholder={`Option ${i + 1}`}
-            onChange={(e) => setOptions(options.map((x, j) => (j === i ? e.target.value : x)))}
-            className="m-0"
-          />
-          {options.length > 2 && (
-            <button className="link-button" onClick={() => setOptions(options.filter((_, j) => j !== i))} aria-label={`Remove option ${i + 1}`}>
-              Remove
+      {isWallet && (
+        <label className="row confirm items-start">
+          <input type="checkbox" className="w-auto mt-1" checked={proposing} onChange={(e) => setProposing(e.target.checked)} />
+          <span>Propose a payment</span>
+        </label>
+      )}
+      {paying ? (
+        <>
+          <p className="dim text-sm">
+            Members choose <strong>Pay</strong> or <strong>Don't pay</strong>. Once enough choose Pay, you can send
+            exactly these payments, and each approver's app checks the transaction against them.
+          </p>
+          <PaymentRows groupId={group} network={network} rows={rows} onChange={setRows} />
+        </>
+      ) : (
+        <>
+          <label>Options</label>
+          {options.map((o, i) => (
+            <div className="row mb-2" key={i}>
+              <input
+                type="text"
+                value={o}
+                maxLength={100}
+                placeholder={`Option ${i + 1}`}
+                onChange={(e) => setOptions(options.map((x, j) => (j === i ? e.target.value : x)))}
+                className="m-0"
+              />
+              {options.length > 2 && (
+                <button className="link-button" onClick={() => setOptions(options.filter((_, j) => j !== i))} aria-label={`Remove option ${i + 1}`}>
+                  Remove
+                </button>
+              )}
+            </div>
+          ))}
+          {options.length < 10 && (
+            <button className="link-button" onClick={() => setOptions([...options, ""])}>
+              Add an option
             </button>
           )}
-        </div>
-      ))}
-      {options.length < 10 && (
-        <button className="link-button" onClick={() => setOptions([...options, ""])}>
-          Add an option
-        </button>
+        </>
       )}
       <label className="mt-3">Open for</label>
       <select value={duration} onChange={(e) => setDuration(Number(e.target.value))}>
@@ -167,7 +216,14 @@ function NewPoll({ groups, onDone }: { groups: GroupSummary[]; onDone: () => voi
       </select>
       {create.error && <div className="error">{errText(create.error)}</div>}
       <div className="row mt-3">
-        <button onClick={() => create.mutate()} disabled={!title.trim() || filled.length < 2 || create.isPending}>
+        <button
+          onClick={() => create.mutate()}
+          disabled={
+            !title.trim() ||
+            create.isPending ||
+            (paying ? !proposal.payments.length || proposal.errors.some(Boolean) : filled.length < 2)
+          }
+        >
           {create.isPending ? "Asking…" : "Ask the group"}
         </button>
         <button className="secondary" onClick={onDone}>
@@ -178,7 +234,7 @@ function NewPoll({ groups, onDone }: { groups: GroupSummary[]; onDone: () => voi
   );
 }
 
-function PollCard({ poll, groupName }: { poll: PollView; groupName: string }) {
+function PollCard({ poll, groupName, group }: { poll: PollView; groupName: string; group?: GroupSummary }) {
   const queryClient = useQueryClient();
   const name = useNames();
   const identity = useQuery({ queryKey: ["identity"], queryFn: getIdentity });
@@ -213,6 +269,7 @@ function PollCard({ poll, groupName }: { poll: PollView; groupName: string }) {
       </div>
       <h3 className="m-0 mt-2 mb-1">{poll.title}</h3>
       {poll.details && <p className="dim poll-details">{poll.details}</p>}
+      {!!poll.payments?.length && <ProposedPayments poll={poll} />}
       <div className="poll-options">
         {poll.options.map((option, i) => {
           const count = poll.tally[i] ?? 0;
@@ -254,6 +311,139 @@ function PollCard({ poll, groupName }: { poll: PollView; groupName: string }) {
         )}
       </div>
       {(vote.error || close.error) && <div className="error">{errText(vote.error ?? close.error)}</div>}
+      {!!poll.payments?.length && <PaymentOutcome poll={poll} mine={mine} group={group} />}
+    </div>
+  );
+}
+
+/** The payments a poll proposes, named where they're the group's payees. */
+function ProposedPayments({ poll }: { poll: PollView }) {
+  const payees = usePayees(poll.group_id);
+  const walletConfig = useQuery({ queryKey: ["wallet-config"], queryFn: getWalletConfig });
+  const u = unit(asNetwork(walletConfig.data?.network));
+  const payments = poll.payments ?? [];
+  const total = payments.reduce((t, p) => t + p.amount_zatoshis, 0);
+  return (
+    <div className="proposed-payments">
+      <div className="dim text-sm mb-1">Proposes paying</div>
+      {payments.map((p, i) => {
+        const payee = payeeFor(payees.data, p.recipient);
+        return (
+          <div key={i} className="proposed-payment">
+            <span className="nowrap">
+              {zec(p.amount_zatoshis)} {u}
+            </span>{" "}
+            to{" "}
+            {payee ? (
+              <strong>{payee.name}</strong>
+            ) : (
+              <span className="code-inline" title={p.recipient}>
+                {shortAddress(p.recipient)}
+              </span>
+            )}
+            {p.memo && <span className="dim"> · memo “{p.memo}”</span>}
+          </div>
+        );
+      })}
+      {payments.length > 1 && (
+        <div className="dim text-sm mt-1">
+          {payments.length} payments · {zec(total)} {u} in all, in one transaction
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** What happens to a poll's proposed payments: sent, sendable by its author
+ *  once agreed, or declined. */
+function PaymentOutcome({ poll, mine, group }: { poll: PollView; mine: boolean; group?: GroupSummary }) {
+  const name = useNames();
+  if (poll.paid_txid) {
+    return (
+      <p className="ok mt-3 mb-0">
+        ✓ Paid, in transaction <span className="mono">{poll.paid_txid.slice(0, 10)}…{poll.paid_txid.slice(-6)}</span>
+      </p>
+    );
+  }
+  if (poll.agreed === 1) return <p className="dim mt-3 mb-0">The group decided not to pay.</p>;
+  if (poll.agreed !== 0) return null;
+  if (!mine || !group) return <p className="dim mt-3 mb-0">Agreed to pay. {name(poll.author)} can send it now.</p>;
+  return <SendAgreed poll={poll} group={group} />;
+}
+
+/** Send a poll's agreed payments: choose who approves (those who chose Pay,
+ *  to start with) and ask them. The payments come from the poll. */
+function SendAgreed({ poll, group }: { poll: PollView; group: GroupSummary }) {
+  const name = useNames();
+  const identity = useQuery({ queryKey: ["identity"], queryFn: getIdentity });
+  const me = identity.data?.pubkey;
+  const busy = useCeremonies((s) => {
+    const active = selectActiveSend(s, poll.group_id);
+    return !!active && !active.done && !active.failed;
+  });
+  const chosePay = Object.entries(poll.votes)
+    .filter(([, c]) => c === 0)
+    .map(([pk]) => pk);
+  const [picked, setPicked] = useState<Set<string> | null>(null);
+  const signers = picked ?? new Set([...(me ? [me] : []), ...chosePay]);
+  const payments = poll.payments ?? [];
+  const send = useMutation({
+    mutationFn: () =>
+      requestApprovals({
+        groupId: poll.group_id,
+        recipient: payments.length === 1 ? payments[0].recipient : "",
+        amountZatoshis: payments.reduce((t, p) => t + p.amount_zatoshis, 0),
+        feeZatoshis: 0,
+        sighashHex: "",
+        memo: payments.length === 1 ? (payments[0].memo ?? undefined) : undefined,
+        signers: [...signers],
+        reason: poll.title,
+        pollId: poll.poll_id,
+        ...(payments.length > 1
+          ? {
+              payments: payments.map((p) => ({
+                recipient: p.recipient,
+                amountZatoshis: p.amount_zatoshis,
+                memo: p.memo ?? undefined,
+              })),
+            }
+          : {}),
+      }),
+  });
+  if (send.isSuccess) {
+    return (
+      <p className="ok mt-3 mb-0">
+        Payment started. Follow its approvals on <Link to="/">Home</Link>.
+      </p>
+    );
+  }
+  return (
+    <div className="send-agreed mt-3">
+      <p className="ok mb-2">The group agreed. You can send it now.</p>
+      <div className="dim text-sm mb-1">
+        Ask to approve ({group.threshold} of {group.num_participants} needed)
+      </div>
+      {Object.values(group.participants).map((pk) => (
+        <label key={pk} className="member-pick mb-2">
+          <input
+            type="checkbox"
+            checked={signers.has(pk)}
+            onChange={(e) => {
+              const next = new Set(signers);
+              if (e.target.checked) next.add(pk);
+              else next.delete(pk);
+              setPicked(next);
+            }}
+          />
+          <span>{name(pk)}</span>
+          {chosePay.includes(pk) && <span className="dim text-sm">chose Pay</span>}
+        </label>
+      ))}
+      {busy && <p className="dim text-sm">Another payment from this wallet is in progress. Send this one once it's done.</p>}
+      {send.error && <div className="error">{errText(send.error)}</div>}
+      <button onClick={() => send.mutate()} disabled={busy || signers.size < group.threshold || send.isPending}>
+        {send.isPending ? "Starting…" : "Send payment"}
+      </button>
     </div>
   );
 }

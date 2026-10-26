@@ -260,7 +260,7 @@ pub async fn join_signing_session<R: tauri::Runtime>(
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.recv().await {
             let mut payload = serde_json::json!({ "ceremony_id": ceremony_id, "event": event });
-            if let (true, ParticipantEvent::AwaitingApproval { message_hex, context, randomizer_hex }) =
+            if let (true, ParticipantEvent::AwaitingApproval { message_hex, context, randomizer_hex, coordinator }) =
                 (wallet_group, &event)
             {
                 gate_wallet_request(
@@ -270,6 +270,7 @@ pub async fn join_signing_session<R: tauri::Runtime>(
                     message_hex,
                     context.as_deref(),
                     randomizer_hex.as_deref(),
+                    coordinator,
                 )
                 .await
                 .annotate(&mut payload["event"]);
@@ -310,7 +311,7 @@ pub async fn join_signing_session<R: tauri::Runtime>(
 enum Verdict {
     /// The transaction verified; the user decides, unless it is another round
     /// of a transaction they already approved.
-    Verified { tx: VerifiedTransaction, auto_approved: bool, window: Option<ApprovalWindow> },
+    Verified { tx: VerifiedTransaction, auto_approved: bool, window: Option<ApprovalWindow>, poll: Option<PollCheck> },
     /// No transaction attached, and raw signing is allowed (advanced options).
     Raw,
     /// Refused automatically, for this reason.
@@ -321,15 +322,81 @@ impl Verdict {
     /// Add the decision to the `awaiting_approval` event the UI receives.
     fn annotate(&self, event: &mut serde_json::Value) {
         match self {
-            Verdict::Verified { tx, auto_approved, window } => {
+            Verdict::Verified { tx, auto_approved, window, poll } => {
                 event["verified"] = serde_json::json!(tx);
                 event["auto_approved"] = serde_json::json!(auto_approved);
                 event["window"] = serde_json::json!(window);
+                if let Some(poll) = poll {
+                    event["poll"] = serde_json::json!(poll);
+                }
             }
             Verdict::Raw => event["unverified"] = serde_json::json!(true),
             Verdict::Refused(reason) => event["refused"] = serde_json::json!(reason),
         }
     }
+}
+
+/// What an approver's app found about the group poll a request says it sends
+/// the agreed payments of, from its own copy of the poll.
+#[derive(serde::Serialize)]
+struct PollCheck {
+    poll_id: String,
+    /// This device doesn't have the poll (yet): nothing to check it against.
+    missing: bool,
+    title: String,
+    /// The group agreed to pay.
+    agreed: bool,
+    /// The group agreed not to.
+    declined: bool,
+    /// How many members chose "Pay", and how many it takes.
+    chose_pay: u32,
+    threshold: u32,
+}
+
+/// Check a request that says it sends a poll's agreed payments against this
+/// device's copy of the poll. Err (refuse) if it was proposed by another
+/// member, was already paid, or the transaction doesn't make exactly the
+/// payments it proposed.
+async fn check_poll(
+    state: &AppState,
+    network: frost_app_core::wallet::WalletNetwork,
+    group_id: &str,
+    poll_id: &str,
+    coordinator: &str,
+    tx: &VerifiedTransaction,
+) -> Result<PollCheck, String> {
+    let Ok(poll) = crate::commands::polls::find(state, group_id, poll_id).await else {
+        return Ok(PollCheck {
+            poll_id: poll_id.to_string(),
+            missing: true,
+            title: String::new(),
+            agreed: false,
+            declined: false,
+            chose_pay: 0,
+            threshold: 0,
+        });
+    };
+    if poll.payments.is_empty() {
+        return Err("refused to sign: the request names a poll that doesn't propose a payment".into());
+    }
+    if poll.author != coordinator {
+        return Err("refused to sign: only the member who proposed a payment can send it, and another member asked".into());
+    }
+    if let Some(txid) = &poll.paid_txid {
+        return Err(format!("refused to sign: the poll's payment was already sent, in {txid}"));
+    }
+    if !crate::commands::polls::pays_what_was_proposed(network, &poll.payments, tx) {
+        return Err("refused to sign: the transaction doesn't make the payments the poll proposed".into());
+    }
+    Ok(PollCheck {
+        poll_id: poll.poll_id,
+        missing: false,
+        title: poll.title,
+        agreed: poll.agreed == Some(0),
+        declined: poll.agreed == Some(1),
+        chose_pay: poll.tally.first().copied().unwrap_or(0),
+        threshold: poll.threshold,
+    })
 }
 
 /// Verify a wallet signing request before its approval can be given (see
@@ -342,6 +409,7 @@ async fn gate_wallet_request<R: tauri::Runtime>(
     message_hex: &str,
     context: Option<&SigningContext>,
     randomizer_hex: Option<&str>,
+    coordinator: &str,
 ) -> Verdict {
     let state = app.state::<AppState>();
     let settings = state.load_settings();
@@ -353,7 +421,7 @@ async fn gate_wallet_request<R: tauri::Runtime>(
     let verdict = match context.and_then(|c| c.pczt.as_deref().map(|pczt| (c, pczt))) {
         Some((claimed, pczt)) => verify::verify_signing_request(network, group_id, seed.as_deref(), pczt, message_hex, randomizer_hex)
             .and_then(|tx| verify::check_coordinator_claims(network, group_id, seed.as_deref(), &tx, claimed).map(|()| tx))
-            .map_or_else(|e| Verdict::Refused(e.to_string()), |tx| Verdict::Verified { tx, auto_approved: false, window: None }),
+            .map_or_else(|e| Verdict::Refused(e.to_string()), |tx| Verdict::Verified { tx, auto_approved: false, window: None, poll: None }),
         None if settings.advanced_mode.unwrap_or(false) => Verdict::Raw,
         None => Verdict::Refused(
             "refused to sign: the request has no transaction attached, so there's no way to check \
@@ -364,8 +432,17 @@ async fn gate_wallet_request<R: tauri::Runtime>(
 
     let verdict = match verdict {
         Verdict::Verified { tx, auto_approved, .. } => {
-            let window = approval_window(&state, group_id, tx.expiry_height).await;
-            Verdict::Verified { tx, auto_approved, window }
+            let poll = match context.and_then(|c| c.poll_id.as_deref()) {
+                Some(poll_id) => Some(check_poll(&state, network, group_id, poll_id, coordinator, &tx).await),
+                None => None,
+            };
+            match poll.transpose() {
+                Err(reason) => Verdict::Refused(reason),
+                Ok(poll) => {
+                    let window = approval_window(&state, group_id, tx.expiry_height).await;
+                    Verdict::Verified { tx, auto_approved, window, poll }
+                }
+            }
         }
         other => other,
     };
@@ -375,7 +452,7 @@ async fn gate_wallet_request<R: tauri::Runtime>(
         return verdict;
     };
     match verdict {
-        Verdict::Verified { tx, window, .. } => {
+        Verdict::Verified { tx, window, poll, .. } => {
             let approved_before = state
                 .approved_sighashes
                 .lock()
@@ -385,7 +462,7 @@ async fn gate_wallet_request<R: tauri::Runtime>(
             handle.gate = ApprovalGate::Verified { sighash_hex: tx.sighash_hex.clone() };
             let auto_approved = approved_before
                 && handle.approval.take().is_some_and(|approval| approval.send(true).is_ok());
-            Verdict::Verified { tx, auto_approved, window }
+            Verdict::Verified { tx, auto_approved, window, poll }
         }
         Verdict::Raw => {
             handle.gate = ApprovalGate::Open;
