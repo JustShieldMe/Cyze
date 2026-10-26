@@ -263,6 +263,9 @@ warning the first time you open the app.
 - **[Sync design](docs/SYNC_OPTIMIZATION.md):** how the wallet syncs, with
   measurements.
 
+**🗳️ [Voting in Cyze](docs/VOTING.md)**: group polls and Zcash community
+votes, step by step.
+
 ## Building
 
 Prerequisites:
