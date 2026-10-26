@@ -40,8 +40,8 @@ bundled `frostd` and `cloudflared`. That includes, among others:
 - recovering a key share, the communication key or a viewing seed;
 - reading the keystore, a backup or a wallet database without the passphrase
   or recovery code;
-- a group member or server learning more than the security model in the
-  README says it can.
+- a group member or server learning more than the
+  [security model](docs/SECURITY_MODEL.md) says it can.
 
 Bugs in upstream projects (the Zakura/Zcash crates, frost-tools, Tauri, Arti,
 lightwalletd) are best reported to them; tell us too if Cyze is affected.
