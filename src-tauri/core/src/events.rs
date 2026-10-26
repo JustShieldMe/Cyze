@@ -51,6 +51,22 @@ pub struct SigningContext {
     /// only: not in the transaction, so a claim, never verified.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Every payment of a transaction making more than one (a batch), in any
+    /// order. Empty for one payment, which the fields above describe.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub payments: Vec<ClaimedPayment>,
+}
+
+/// One payment of a batch, as the coordinator describes it. Without its memo:
+/// approvers see each memo from the transaction itself, and twenty of them
+/// would take a large part of the request's size.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimedPayment {
+    pub recipient: String,
+    pub amount_zatoshis: u64,
+    /// To a transparent address: amount and recipient are public.
+    #[serde(default)]
+    pub transparent: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

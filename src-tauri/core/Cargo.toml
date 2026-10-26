@@ -78,6 +78,9 @@ zcash_keys = { package = "zakura-keys", version = "=4.0.0", optional = true, fea
 # `local-consensus` exposes `LocalNetwork`, the regtest parameters used for a
 # local devnet (see `WalletNetwork::Regtest`).
 zcash_protocol = { package = "zakura-protocol", version = "=4.0.0", optional = true, features = ["local-consensus"] }
+# Payment requests with several recipients (batch payments). Already in the tree
+# under zakura-client-backend, at this version.
+zip321 = { package = "zakura-zip321", version = "=4.0.0", optional = true }
 tonic = { version = "0.14", optional = true, default-features = false, features = ["transport", "tls-webpki-roots"] }
 # SQLCipher (bundled amalgamation) so the per-group wallet database is encrypted
 # at rest. Feature-unifies with zcash_client_sqlite's `bundled` rusqlite: the
@@ -105,6 +108,7 @@ wallet = [
     "dep:zcash_client_sqlite",
     "dep:zcash_keys",
     "dep:zcash_protocol",
+    "dep:zip321",
     "dep:tonic",
     "dep:rusqlite",
     "dep:prost",

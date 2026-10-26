@@ -283,6 +283,17 @@ members to approve it.
 5. Click **Request approvals.** The payment shows who has approved, then its
    progress to **Sent**.
 
+**Pay several at once.** For payroll, grants or a stack of invoices, click
+**Pay several at once** on the send form. Enter up to 20 payments, each with
+its own recipient (typed, or a saved payee), amount and optional memo, or click
+**Paste a list** and paste one per line: `address or payee name, amount, memo`.
+One reason covers them all. The group approves the whole batch once, as a single
+transaction, and each approver's app checks every payment in it.
+
+A signing request has to fit in one message to each approver. Twenty payments
+fit; memos make it larger, so with a memo on every payment about ten fit. If a
+batch is too large, review says so before anyone is asked: split it in two.
+
 **Approvals have about 50 minutes.** Every Zcash transaction carries a public
 expiry height, and Cyze keeps the standard one other wallets use, so the group's
 payments look like anyone else's on-chain. The payment shows when approvals are

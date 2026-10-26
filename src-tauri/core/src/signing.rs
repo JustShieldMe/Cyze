@@ -70,6 +70,15 @@ pub struct SigningOutput {
     pub signature: Vec<u8>,
 }
 
+/// The largest signing-request context (`events::SigningContext` as JSON) that
+/// fits one frostd message beside the commitments of `signers` signers. The
+/// context travels hex-encoded inside the signing package, which doubles it;
+/// Noise adds a 16-byte tag; frostd and Noise cap a message at 65,535 bytes.
+pub fn signer_context_budget(signers: usize) -> usize {
+    let commitments = 512 + 320 * signers;
+    (api::MAX_MSG_SIZE - 16).saturating_sub(commitments) / 2
+}
+
 pub async fn run_coordinator(
     suite: Suite,
     params: CoordinatorParams,
@@ -592,6 +601,27 @@ mod tests {
                 (*id, share)
             })
             .collect()
+    }
+
+    /// A signing request whose context takes the whole budget still fits one
+    /// frostd message, for small groups and large ones.
+    #[test]
+    fn a_context_within_the_budget_fits_one_message() {
+        for n in [2u16, 3, 5, 10, 20, 40] {
+            let (shares, _) = generate_with_dealer::<C, _>(n, n, IdentifierList::Default, &mut OsRng).unwrap();
+            let commitments: BTreeMap<_, _> = shares
+                .iter()
+                .map(|(id, s)| (*id, frost_core::round1::commit(KeyPackage::try_from(s.clone()).unwrap().signing_share(), &mut OsRng).1))
+                .collect();
+            let package = SigningPackage::new(commitments, &[0x9f; 32]);
+            let args = frost_client::api::SendSigningPackageArgs::<C> {
+                randomizer: vec![Randomizer::new(OsRng, &package).unwrap()],
+                signing_package: vec![package],
+                aux_msg: vec![b'x'; super::signer_context_budget(n as usize)],
+            };
+            let message = serde_json::to_vec(&args).unwrap();
+            assert!(message.len() + 16 <= frost_client::api::MAX_MSG_SIZE, "{n} signers: {} bytes", message.len());
+        }
     }
 
     #[test]
