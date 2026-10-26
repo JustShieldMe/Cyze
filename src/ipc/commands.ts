@@ -591,6 +591,9 @@ export interface PollView {
   payments?: PaymentRequest[];
   /** The transaction its author sent them in, once they did. */
   paid_txid?: string | null;
+  /** The rules it proposes, if any: agreeing on option 0 ("Adopt") puts them
+   *  in effect. */
+  rules?: GroupRules | null;
 }
 export const listPolls = (groupId: string | null) => invoke<PollView[]>("list_polls", { groupId });
 export const createPoll = (args: {
@@ -601,6 +604,8 @@ export const createPoll = (args: {
   open_for_secs: number;
   /** Payments it proposes: the options become "Pay" and "Don't pay". */
   payments?: PaymentRequest[];
+  /** Rules it proposes: the options become "Adopt" and "Don't adopt". */
+  rules?: GroupRules;
 }) => invoke<string>("create_poll", { args });
 export const votePoll = (groupId: string, pollId: string, choice: number) =>
   invoke<void>("vote_poll", { groupId, pollId, choice });
@@ -624,12 +629,37 @@ export interface Payee {
   forms: string[];
   /** This device's member added it. */
   mine: boolean;
+  /** Members (communication keys) trusting its address, its author first. */
+  trusted_by: string[];
+  /** As many members trust it as a payment needs approvals. */
+  trusted: boolean;
 }
 export const listPayees = (groupId: string) => invoke<Payee[]>("list_payees", { groupId });
 /** Add a payee, or change one this member added. Returns its id. */
 export const savePayee = (groupId: string, payeeId: string | null, name: string, address: string) =>
   invoke<string>("save_payee", { groupId, payeeId, name, address });
 export const removePayee = (groupId: string, payeeId: string) => invoke<void>("remove_payee", { groupId, payeeId });
+/** Trust (or stop trusting) a payee another member added, at its address. */
+export const trustPayee = (groupId: string, owner: string, payeeId: string, trusted: boolean) =>
+  invoke<void>("trust_payee", { groupId, owner, payeeId, trusted });
+
+/** A group's rules for its payments (core/src/rules.rs), which each member's
+ *  app applies when deciding whether to sign. */
+export interface GroupRules {
+  /** Pay only trusted payees. */
+  trusted_payees_only?: boolean;
+  /** Payments of at least `from_zatoshis` together need `approvals` approvals. */
+  large?: { from_zatoshis: number; approvals: number } | null;
+}
+/** The rules in effect in a group, and the poll that adopted them. */
+export interface RulesInEffect {
+  rules: GroupRules;
+  poll_id: string | null;
+  title: string | null;
+  threshold: number;
+  members: number;
+}
+export const groupRules = (groupId: string) => invoke<RulesInEffect>("group_rules", { groupId });
 
 /** What a member says a transaction was for. */
 export interface PaymentReason {

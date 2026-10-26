@@ -112,6 +112,14 @@ shows **Paid**, and it can't be sent again.
 If the member who proposed it can't send it (they left, or lost their device),
 ask the group again in a new poll.
 
+### Propose rules
+
+A poll can also propose the group's **rules** for payments: paying only trusted
+payees, and more approvals for larger payments. Start one from **Rules** on
+Home with **Propose rules**. Its options are **Adopt** and **Don't adopt**, and
+the latest rules the group agreed to adopt are the ones in effect. See
+[Rules](USER_GUIDE.md#rules).
+
 ### Closing
 
 A poll closes when its time is up. The member who asked can also close it

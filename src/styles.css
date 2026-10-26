@@ -1038,3 +1038,10 @@ table.batch-payments .num { text-align: right; }
 .proposed-payment { font-size: 13px; word-break: break-word; }
 .proposed-payment + .proposed-payment { margin-top: 3px; }
 .send-agreed { border-top: 1px solid var(--border); padding-top: 10px; }
+
+/* Group rules: the list in effect, and the amount row when proposing. */
+.rules-list { margin: 8px 0; padding-left: 20px; font-size: 14px; }
+.rules-list li + li { margin-top: 2px; }
+.rules-tier { flex-wrap: wrap; margin: 0 0 10px 26px; }
+.rules-tier input { width: 140px; margin: 0; }
+.rules-tier select { width: auto; margin: 0; }

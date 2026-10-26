@@ -111,13 +111,18 @@ and skip kinds they don't know.
       (`commands/signing.rs`) refuses another sender, other payments, or a
       paid poll. Follow-up: let members who voted Pay have their app approve
       it automatically (with the spending-limit rules below).
-- [ ] **Trusted payees only** — adding a payee needs a threshold of members to
-      accept; apps warn about or refuse payments to anyone else.
+- [x] **Group rules** — `core/src/rules.rs`, adopted by poll (`Poll.rules`,
+      `polls::rules_in_effect`); checked by `commands::rules::check` in the
+      sender's `wallet_send` (against its own verified draft) and the
+      approvers' gate.
+- [x] **Trusted payees only** — `PayeeTrust` records; a payee is trusted once
+      threshold members trust its current address.
 - [ ] **Spending limits** — approve automatically up to X per week to trusted
       payees (the approver's app must be open).
 - [ ] **Delay with veto** — large payments announced first and signable only
       after a delay; any member can veto meanwhile.
-- [ ] **Tiered approvals** — e.g. over 100 ZEC needs 4 of 5 on a 3-of-5 key.
+- [x] **Tiered approvals** — `GroupRules.large`; approvers count the signers
+      committed in the signing package (`AwaitingApproval.signers`).
 - [ ] **Change members or threshold** — a new group, then move the funds
       (reusing the viewing-key move, `commands/viewing.rs`).
 - [ ] **Share repair** — a member who lost their device gets a new share from

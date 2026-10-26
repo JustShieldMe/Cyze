@@ -345,6 +345,10 @@ under **Payees** on Home.
   it up from the address the transaction verifiably pays, so a request can't
   pass off one address under another's name.
 - **Payees belong to a network.** One saved on testnet doesn't show on mainnet.
+- **Trusted payees.** A payee is *trusted* once as many members trust its
+  address as a payment needs approvals. The member who added it trusts it; the
+  others click **Trust** next to it under **Payees**. A trust is in the
+  address: if the payee's address changes, the others have to trust it again.
 
 A **reason** says what a payment was for. Only members of the group see it,
 and it never goes on chain.
@@ -354,6 +358,29 @@ and it never goes on chain.
 - **Any member can add theirs** to any transaction, received ones included:
   open the transaction under **Activity** and click **Say what it was for**.
   **Change yours** edits it; saving it empty takes it back.
+
+### Rules
+
+A group can adopt **rules** for its payments, under **Rules** on Home:
+
+- **Pay only trusted payees.** Approvers' apps refuse a payment to any address
+  that isn't a trusted payee.
+- **Larger payments need more approvals.** For example, in a 3-of-5 group,
+  payments of 100 ZEC or more (together, in one transaction) need 4 approvals.
+
+To adopt or change them, click **Propose rules**, choose them, and **Ask the
+group**. That starts a poll with **Adopt** and **Don't adopt**; the new rules
+replace the old ones once as many members adopt them as a payment needs. A rule
+set with nothing ticked removes all rules the same way.
+
+The sender's app checks a payment against the rules before asking anyone, and
+each approver's app checks it again, against the rules as it sees them, before
+showing it. A payment that breaks them is refused automatically, saying why.
+
+Rules are enforced by each member's app, not on chain: Zcash has no contracts
+for shielded funds. They stop a careless approval, a swapped address or one
+compromised device. They can't stop as many members as a payment needs
+acting together, who could change the rules or run apps that ignore them.
 
 ### Make an older group private
 

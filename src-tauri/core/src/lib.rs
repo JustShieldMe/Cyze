@@ -18,6 +18,7 @@ pub mod neterr;
 pub mod payees;
 pub mod polls;
 pub mod redact;
+pub mod rules;
 pub mod safety;
 pub mod sealed;
 pub mod signing;

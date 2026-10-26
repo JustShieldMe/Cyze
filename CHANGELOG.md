@@ -37,6 +37,14 @@ breaking changes. Cyze is beta, unaudited software (see the README).
     proposed payments, or one already paid, and shows whether the group
     agreed.
   - The poll then shows **Paid**, and can't be sent again.
+- **Group rules**, adopted by poll (**Rules** on Home, then **Propose rules**):
+  - **Pay only trusted payees.** A payee is trusted once as many members trust
+    its address as a payment needs approvals.
+  - **Larger payments need more approvals**, for payments over an amount
+    together in one transaction.
+  - The sender's app checks the rules before asking anyone, and each
+    approver's app checks them again and refuses a payment that breaks them.
+    Approvers see which rules a request met.
 - **Reasons:** say what a payment is for, for the group only.
   - Approvers see it with the request, attributed to the member who asked.
   - Once sent, every member's **Activity** shows it. Any member can add

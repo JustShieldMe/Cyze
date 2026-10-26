@@ -63,8 +63,8 @@ impl AppState {
 
 /// A group's members and threshold, and who this device is.
 pub(crate) struct Group {
-    members: Vec<PublicKey>,
-    threshold: u32,
+    pub(crate) members: Vec<PublicKey>,
+    pub(crate) threshold: u32,
     pub(crate) me: PublicKey,
 }
 
@@ -147,6 +147,10 @@ pub struct CreatePollArgs {
     /// once the group agrees to pay, this member can send exactly these.
     #[serde(default)]
     pub payments: Vec<ProposedPayment>,
+    /// Rules it proposes, replacing the group's: the options are then "Adopt"
+    /// and "Don't adopt", and they're in effect once the group agrees.
+    #[serde(default)]
+    pub rules: Option<frost_app_core::rules::GroupRules>,
 }
 
 /// Ask the group a question. Returns the poll's id.
@@ -154,8 +158,14 @@ pub struct CreatePollArgs {
 pub async fn create_poll<R: Runtime>(app: AppHandle<R>, args: CreatePollArgs) -> AppResult<String> {
     let poll_id = Uuid::new_v4().to_string();
     let open_for = args.open_for_secs.clamp(60 * 60, 90 * 24 * 60 * 60);
-    let payments = proposed_payments(&app.state::<AppState>(), args.payments)?;
-    let options = if payments.is_empty() {
+    let state = app.state::<AppState>();
+    let payments = proposed_payments(&state, args.payments)?;
+    if let Some(rules) = &args.rules {
+        check_proposed_rules(&state, &args.group_id, rules, &payments).await?;
+    }
+    let options = if args.rules.is_some() {
+        polls::RULES_OPTIONS.map(String::from).to_vec()
+    } else if payments.is_empty() {
         args.options.iter().map(|o| o.trim().to_string()).filter(|o| !o.is_empty()).collect()
     } else {
         polls::PAYMENT_OPTIONS.map(String::from).to_vec()
@@ -168,6 +178,7 @@ pub async fn create_poll<R: Runtime>(app: AppHandle<R>, args: CreatePollArgs) ->
         closes_at: unix_now() + open_for,
         community: None,
         payments,
+        rules: args.rules,
     };
     write(&app, &args.group_id, body).await?;
     Ok(poll_id)
@@ -222,6 +233,7 @@ pub async fn poll_community_round<R: Runtime>(
             closes_at,
             community: Some(polls::CommunityRef { round_id: round.id.clone(), proposal_id: proposal.id }),
             payments: Vec::new(),
+            rules: None,
         };
         write(&app, &group_id, body).await?;
         created += 1;
@@ -252,6 +264,36 @@ pub async fn close_poll<R: Runtime>(app: AppHandle<R>, group_id: String, poll_id
         return Err(AppError::new("config", "only the member who asked can close a poll early"));
     }
     write(&app, &group_id, RecordBody::Close { poll_id }).await
+}
+
+/// Rules a new poll proposes: well formed, and possible for this group. Larger
+/// payments need more approvals than the threshold, but no more than it has
+/// members.
+async fn check_proposed_rules(
+    state: &AppState,
+    group_id: &str,
+    rules: &frost_app_core::rules::GroupRules,
+    payments: &[ProposedPayment],
+) -> AppResult<()> {
+    if !payments.is_empty() {
+        return Err(AppError::new("config", "a poll proposes rules or payments, not both"));
+    }
+    if !rules.is_valid() {
+        return Err(AppError::new("config", "those rules aren't valid"));
+    }
+    if let Some(large) = rules.large {
+        let g = group(state, group_id).await?;
+        if large.approvals <= g.threshold {
+            return Err(AppError::new(
+                "config",
+                format!("larger payments need more approvals than the group's {}", g.threshold),
+            ));
+        }
+        if large.approvals as usize > g.members.len() {
+            return Err(AppError::new("config", format!("the group has {} members", g.members.len())));
+        }
+    }
+    Ok(())
 }
 
 /// Payments a new poll proposes, checked as a send would check them: each to
@@ -306,7 +348,7 @@ pub(crate) async fn find(state: &AppState, group_id: &str, poll_id: &str) -> App
         .ok_or_else(|| AppError::new("config", "poll not found"))
 }
 
-async fn list_polls_in(state: &AppState, group_id: &str) -> AppResult<Vec<PollView>> {
+pub(crate) async fn list_polls_in(state: &AppState, group_id: &str) -> AppResult<Vec<PollView>> {
     let logs = state.load_polls().await?;
     let g = group(state, group_id).await?;
     Ok(logs

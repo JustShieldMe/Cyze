@@ -33,6 +33,7 @@ async fn members_poll_each_other() {
             options: vec!["Yes".into(), "No".into()],
             open_for_secs: 3 * 24 * 60 * 60,
             payments: Vec::new(),
+            rules: None,
         },
     )
     .await
@@ -72,6 +73,7 @@ async fn members_poll_each_other() {
             options: vec!["Yes".into(), "No".into(), "Later".into()],
             open_for_secs: 24 * 60 * 60,
             payments: Vec::new(),
+            rules: None,
         },
     )
     .await

@@ -9,7 +9,9 @@
 //! about as large a request as co-signers can verify, after one too large for
 //! that is refused at review. Then a payment proposed in a group poll: sent
 //! once both agree, only by Alice, who proposed it, checked by Bob's app
-//! against his copy of the poll, and only once. Then "send all".
+//! against his copy of the poll, and only once. Then the group adopts a rule
+//! to pay only trusted payees: a payment to anyone else is refused before
+//! anyone is asked, and "send all" to the trusted auditor goes through.
 //!
 //! Needs thus-spoke-zakura 0.3.x (NU6.3 from block 1) or 0.4.x (NU7 from block
 //! 1, with `CYZE_DEVNET_UPGRADE=nu7`). Ignored by default; run in release mode,
@@ -268,6 +270,7 @@ async fn a_two_of_two_send_is_verified_signed_and_mined() {
                 amount_zatoshis: 10_000_000,
                 memo: Some(" Q4 audit ".into()),
             }],
+            rules: None,
         },
     )
     .await
@@ -309,7 +312,55 @@ async fn a_two_of_two_send_is_verified_signed_and_mined() {
         assert!(started.elapsed() < Duration::from_secs(180), "the poll payment's change never became spendable: {s:?}");
     }
 
-    let txid = send_with_bobs_approval(
+    // Rules: pay only trusted payees. Bob trusts the auditor Alice saved, and
+    // both adopt the rule.
+    let auditor = commands::payees::list_payees(alice.clone(), group_id.clone()).await.unwrap().remove(0).payee;
+    commands::payees::trust_payee(p.bob.app.handle().clone(), group_id.clone(), auditor.author, auditor.payee_id, true)
+        .await
+        .unwrap();
+    let rules = frost_app_core::rules::GroupRules { trusted_payees_only: true, large: None };
+    let adopt = commands::polls::create_poll(
+        p.alice.app.handle().clone(),
+        commands::polls::CreatePollArgs {
+            group_id: group_id.clone(),
+            title: "Pay only trusted payees".into(),
+            details: String::new(),
+            options: Vec::new(),
+            open_for_secs: 24 * 60 * 60,
+            payments: Vec::new(),
+            rules: Some(rules.clone()),
+        },
+    )
+    .await
+    .unwrap();
+    until(&p, &group_id, "Bob never got the rules", async || polls_of(&bob).await.iter().any(|q| q.poll_id == adopt)).await;
+    for user in [&p.alice, &p.bob] {
+        commands::polls::vote_poll(user.app.handle().clone(), group_id.clone(), adopt.clone(), 0).await.unwrap();
+    }
+    let in_effect = async |state: &tauri::State<'_, AppState>| {
+        commands::rules::group_rules(state.clone(), group_id.clone()).await.unwrap().rules
+    };
+    until(&p, &group_id, "the rules never took effect", async || {
+        let trusted = commands::payees::list_payees(bob.clone(), group_id.clone()).await.unwrap()[0].payee.trusted;
+        trusted && in_effect(&alice).await == rules && in_effect(&bob).await == rules
+    })
+    .await;
+    let untrusted = commands::wallet::WalletSendArgs {
+        group_id: group_id.clone(),
+        recipient: outside_recipient_at(7),
+        amount_zatoshis: 1_000_000,
+        signers: vec![p.alice_pubkey.clone(), p.bob_pubkey.clone()],
+        memo: None,
+        from_old_address: false,
+        send_max: false,
+        reason: None,
+        payments: Vec::new(),
+        poll_id: None,
+    };
+    let refusal = refused(commands::wallet::wallet_send(p.alice.app.handle().clone(), untrusted).await);
+    assert!(refusal.contains("only to trusted payees"), "{refusal}");
+
+    let (txid, bob_saw) = send_and_see_what_bob_saw(
         &p,
         commands::wallet::WalletSendArgs {
             group_id: group_id.clone(),
@@ -327,6 +378,9 @@ async fn a_two_of_two_send_is_verified_signed_and_mined() {
     )
     .await;
     eprintln!("sent everything in {txid}");
+    // Bob's app checked it against the rules: to a trusted payee, asking both.
+    assert_eq!(bob_saw["rules"]["trusted_payees_only"], true, "{bob_saw}");
+    assert_eq!((bob_saw["rules"]["needed"].as_u64(), bob_saw["rules"]["asked"].as_u64()), (Some(2), Some(2)));
     ths(&["mine", "2"]);
     let started = Instant::now();
     loop {
@@ -373,6 +427,15 @@ fn poll_send(p: &common::Pair, group_id: &str, poll_id: &str, recipient: &str) -
 /// checks the one payment Bob's app verified is that much to the recipient,
 /// with the memo; without, that it's everything spent, less the fee.
 async fn send_with_bobs_approval(p: &common::Pair, args: commands::wallet::WalletSendArgs, amount: Option<u64>) -> String {
+    send_and_see_what_bob_saw(p, args, amount).await.0
+}
+
+/// [`send_with_bobs_approval`], with the last request Bob's app showed him.
+async fn send_and_see_what_bob_saw(
+    p: &common::Pair,
+    args: commands::wallet::WalletSendArgs,
+    amount: Option<u64>,
+) -> (String, Value) {
     let bob = p.bob.app.state::<AppState>();
     let (group_id, recipient, memo) = (args.group_id.clone(), args.recipient.clone(), args.memo.clone());
     let reason = args.reason.clone();
@@ -391,7 +454,15 @@ async fn send_with_bobs_approval(p: &common::Pair, args: commands::wallet::Walle
             panic!("send failed: {v}");
         }
         if let Some((_, v)) = alice_events.lock().unwrap().iter().find(|(n, _)| n == "send:complete") {
-            return v["txid"].as_str().unwrap().to_string();
+            let seen = bob_events
+                .lock()
+                .unwrap()
+                .iter()
+                .rev()
+                .find(|(_, v)| v["event"]["phase"] == "awaiting_approval")
+                .map(|(_, v)| v["event"].clone())
+                .unwrap_or_default();
+            return (v["txid"].as_str().unwrap().to_string(), seen);
         }
         if let Some((_, v)) = bob_events.lock().unwrap().iter().find(|(n, _)| n == "signing:failed") {
             panic!("Bob's signing failed: {v}");

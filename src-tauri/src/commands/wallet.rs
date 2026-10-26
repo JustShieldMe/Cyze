@@ -1081,6 +1081,22 @@ pub async fn wallet_send<R: tauri::Runtime>(
     // anyone is asked to sign, in the room the rest of the context leaves.
     let others = context_besides_pczt(&draft, network, reason.as_deref(), args.poll_id.as_deref());
     let signer_pczt = wallet::verify::pczt_for_signers_beside(&draft.pczt_hex, others, args.signers.len())?;
+    // The group's rules, checked against the payments the transaction
+    // verifiably makes, as each approver's app will check them: refused here
+    // rather than by them.
+    let seed = state.viewing_seed(&args.group_id).await?;
+    let first_alpha = draft.spends.first().map(|s| s.alpha_hex.as_str());
+    let verified = wallet::verify::verify_signing_request(
+        network,
+        &args.group_id,
+        seed.as_deref(),
+        &signer_pczt,
+        &draft.sighash_hex,
+        first_alpha,
+    )?;
+    if let (_, Err(broken)) = crate::commands::rules::check(&state, &args.group_id, &verified, args.signers.len() as u32).await? {
+        return Err(AppError::new("rules", broken.to_string()));
+    }
     // Each Orchard spend is re-randomized with its own α, so each needs its own
     // re-randomized FROST signature over the (shared) sighash.
     let spends = draft

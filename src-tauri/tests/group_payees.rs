@@ -1,7 +1,8 @@
 //! A group's shared payees and payment reasons between two members' apps over
 //! a real frostd: a payee one member saves reaches the other, only the member
 //! who added it can change or remove it, a name or address can't be saved
-//! twice, and what a member says a payment was for reaches the others.
+//! twice, it's trusted once both trust it, the group adopts rules by poll, and
+//! what a member says a payment was for reaches the others.
 
 mod common;
 
@@ -62,6 +63,50 @@ async fn members_share_payees_and_what_payments_were_for() {
     assert!(err(same_address.await).contains("already a payee: Auditor"));
     let not_an_address = commands::payees::save_payee(bob_app(), group_id.clone(), None, "Typo".into(), "u1nope".into());
     assert!(not_an_address.await.is_err());
+
+    // Bob trusts it; with Alice, who added it, that's both of a 2-of-2.
+    assert!(!payees_of(&alice).await[0].payee.trusted);
+    commands::payees::trust_payee(bob_app(), group_id.clone(), p.alice_pubkey.clone(), auditor.clone(), true).await.unwrap();
+    until(&p, &group_id, "Alice never saw Bob's trust", async || payees_of(&alice).await[0].payee.trusted).await;
+    assert_eq!(payees_of(&alice).await[0].payee.trusted_by, vec![p.alice_pubkey.clone(), p.bob_pubkey.clone()]);
+
+    // Rules are proposed in a poll, and in effect once both adopt them. A
+    // rule needing more approvals than the group has members is refused.
+    use frost_app_core::rules::{GroupRules, LargePayments};
+    let propose = |rules: GroupRules| {
+        commands::polls::create_poll(
+            p.alice.app.handle().clone(),
+            commands::polls::CreatePollArgs {
+                group_id: group_id.clone(),
+                title: "Rules for the treasury".into(),
+                details: String::new(),
+                options: Vec::new(),
+                open_for_secs: 24 * 60 * 60,
+                payments: Vec::new(),
+                rules: Some(rules),
+            },
+        )
+    };
+    let impossible = GroupRules { trusted_payees_only: false, large: Some(LargePayments { from_zatoshis: 1, approvals: 3 }) };
+    assert!(propose(impossible).await.unwrap_err().message.contains("the group has 2 members"));
+    let rules = GroupRules { trusted_payees_only: true, large: None };
+    let poll_id = propose(rules.clone()).await.unwrap();
+    let in_effect = async |state: &tauri::State<'_, AppState>| {
+        commands::rules::group_rules(state.clone(), group_id.clone()).await.unwrap()
+    };
+    assert!(in_effect(&alice).await.rules.is_empty(), "not until the group agrees");
+    until(&p, &group_id, "Bob never got the proposal", async || {
+        commands::polls::list_polls(bob.clone(), None).await.unwrap().iter().any(|q| q.poll_id == poll_id)
+    })
+    .await;
+    for app in [p.alice.app.handle().clone(), bob_app()] {
+        commands::polls::vote_poll(app, group_id.clone(), poll_id.clone(), 0).await.unwrap();
+    }
+    until(&p, &group_id, "the rules never took effect", async || {
+        in_effect(&alice).await.rules == rules && in_effect(&bob).await.rules == rules
+    })
+    .await;
+    assert_eq!(in_effect(&bob).await.poll_id, Some(poll_id));
 
     // Alice renames it, then removes it; Bob's app follows.
     commands::payees::save_payee(

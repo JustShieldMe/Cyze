@@ -174,3 +174,21 @@ test("an approver sees that the group agreed to the payment a request sends", as
   });
   await ui.findByText(/✓ Agreed in the poll “Pay the auditor for Q4\?”: 2 chose Pay, 2 needed/);
 });
+
+test("an approver sees which of the group's rules a request meets", async () => {
+  fakeBackend({ list_pending_sessions: () => [request], join_signing_session: () => "c7" });
+  const ui = await renderApp("/inbox");
+  await waitFor(() => expect(joinedAs("s1")).toBe("c7"));
+  await emit("signing:progress", {
+    ceremony_id: "c7",
+    event: {
+      phase: "awaiting_approval",
+      message_hex: "9f".repeat(32),
+      context,
+      auto_approved: false,
+      verified,
+      rules: { trusted_payees_only: true, needed: 3, asked: 3 },
+    },
+  });
+  await ui.findByText("✓ Meets the group's rules: pays only trusted payees · 3 approvals needed, 3 asked.");
+});

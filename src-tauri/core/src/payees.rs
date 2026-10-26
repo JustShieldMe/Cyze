@@ -7,6 +7,12 @@
 //! one, and a payment's payee is looked up on each member's own device from
 //! the address the payment verifiably pays, never taken from the request.
 //!
+//! A payee is *trusted* once as many members as a payment needs approvals
+//! trust its address: the member who added it, and others who said so
+//! ([`RecordBody::PayeeTrust`]). A trust is in an address, so changing a
+//! payee's address leaves it trusted only by the member who changed it. A
+//! group's rules can allow payments only to trusted payees ([`crate::rules`]).
+//!
 //! A payment reason is what a member says a transaction was for. Usually the
 //! member who started the payment, as it's sent; any member can add theirs.
 
@@ -26,6 +32,10 @@ pub struct Payee {
     pub address: String,
     pub added_at: u64,
     pub changed_at: u64,
+    /// Members (hex communication keys) trusting its address, its author first.
+    pub trusted_by: Vec<String>,
+    /// As many members trust it as a payment needs approvals.
+    pub trusted: bool,
 }
 
 /// What a member says a transaction was for.
@@ -38,6 +48,12 @@ pub struct PaymentReason {
     pub at: u64,
 }
 
+/// A member's word on a payee: trusting it at `address`, or not.
+struct Trust<'a> {
+    address: &'a str,
+    trusted: bool,
+}
+
 /// The records of current members that pass [`Record::check`], by author, in
 /// the order each wrote them.
 fn current<'a>(log: &'a GroupLog, members: &[String]) -> impl Iterator<Item = (&'a String, Vec<&'a Record>)> {
@@ -48,8 +64,19 @@ fn current<'a>(log: &'a GroupLog, members: &[String]) -> impl Iterator<Item = (&
         .map(|(author, records)| (author, records.values().filter(|r| r.check().is_ok()).collect()))
 }
 
-/// Every payee in the group, by name.
-pub fn payees(log: &GroupLog, members: &[String]) -> Vec<Payee> {
+/// Every payee in the group, by name, with who trusts it; trusted once
+/// `threshold` members do.
+pub fn payees(log: &GroupLog, members: &[String], threshold: u32) -> Vec<Payee> {
+    // Each member's latest word on each payee: (owner, payee id) → member →
+    // (address, trusted).
+    let mut trusts: BTreeMap<(&str, &str), BTreeMap<&str, Trust>> = BTreeMap::new();
+    for (author, records) in current(log, members) {
+        for record in records {
+            if let RecordBody::PayeeTrust { owner, payee_id, address, trusted } = &record.body {
+                trusts.entry((owner, payee_id)).or_default().insert(author, Trust { address, trusted: *trusted });
+            }
+        }
+    }
     let mut out = Vec::new();
     for (author, records) in current(log, members) {
         let mut theirs: BTreeMap<&str, Option<Payee>> = BTreeMap::new();
@@ -64,6 +91,8 @@ pub fn payees(log: &GroupLog, members: &[String]) -> Vec<Payee> {
                         address: address.clone(),
                         added_at,
                         changed_at: record.at,
+                        trusted_by: Vec::new(),
+                        trusted: false,
                     };
                     theirs.insert(payee_id, Some(payee));
                 }
@@ -74,6 +103,19 @@ pub fn payees(log: &GroupLog, members: &[String]) -> Vec<Payee> {
             }
         }
         out.extend(theirs.into_values().flatten());
+    }
+    for payee in &mut out {
+        let others = trusts.get(&(payee.author.as_str(), payee.payee_id.as_str()));
+        payee.trusted_by = std::iter::once(payee.author.clone())
+            .chain(
+                others
+                    .into_iter()
+                    .flatten()
+                    .filter(|(member, trust)| trust.trusted && trust.address == payee.address && **member != payee.author)
+                    .map(|(member, _)| member.to_string()),
+            )
+            .collect();
+        payee.trusted = threshold > 0 && payee.trusted_by.len() >= threshold as usize;
     }
     out.sort_by_key(|p| (p.name.to_lowercase(), p.added_at));
     out
@@ -131,7 +173,7 @@ mod tests {
         log.insert("bob", rec(1, 30, payee("p", "Acme Ltd", "u1bob")));
         log.insert("bob", rec(2, 40, RecordBody::PayeeRemoved { payee_id: "p".into() }));
         log.insert("mallory", rec(1, 50, payee("m", "Acme Ltd", "u1mallory")));
-        let shown = payees(&log, &members());
+        let shown = payees(&log, &members(), 2);
         assert_eq!(shown.len(), 1, "{shown:?}");
         let p = &shown[0];
         assert_eq!((p.author.as_str(), p.name.as_str(), p.address.as_str()), ("alice", "Acme Ltd", "u1acmenew"));
@@ -143,9 +185,9 @@ mod tests {
         let mut log = GroupLog::default();
         log.insert("alice", rec(1, 10, payee("p", "Acme", "u1acme")));
         log.insert("alice", rec(2, 20, RecordBody::PayeeRemoved { payee_id: "p".into() }));
-        assert!(payees(&log, &members()).is_empty());
+        assert!(payees(&log, &members(), 2).is_empty());
         log.insert("alice", rec(3, 30, payee("p", "Acme", "u1acme")));
-        assert_eq!(payees(&log, &members())[0].added_at, 30);
+        assert_eq!(payees(&log, &members(), 2)[0].added_at, 30);
     }
 
     #[test]
@@ -155,8 +197,36 @@ mod tests {
         log.insert("bob", rec(1, 20, payee("a", "Auditor", "u1a")));
         log.insert("bob", rec(2, 30, payee("bad", "Spaces", "u1 with spaces")));
         log.insert("bob", rec(3, 40, payee("blank", "  ", "u1blank")));
-        let names: Vec<_> = payees(&log, &members()).into_iter().map(|p| p.name).collect();
+        let names: Vec<_> = payees(&log, &members(), 2).into_iter().map(|p| p.name).collect();
         assert_eq!(names, ["Auditor", "zebra fund"]);
+    }
+
+    fn trust(owner: &str, id: &str, address: &str, trusted: bool) -> RecordBody {
+        RecordBody::PayeeTrust { owner: owner.into(), payee_id: id.into(), address: address.into(), trusted }
+    }
+
+    #[test]
+    fn a_payee_is_trusted_once_enough_members_trust_its_address() {
+        // Trust names the payee's owner by key, so these members have real ones.
+        let (alice, bob, mallory) = ("aa".repeat(32), "bb".repeat(32), "cc".repeat(32));
+        let members = vec![alice.clone(), bob.clone()];
+        let mut log = GroupLog::default();
+        log.insert(&alice, rec(1, 10, payee("p", "Auditor", "u1acme")));
+        let first = &payees(&log, &members, 2)[0];
+        assert_eq!((first.trusted_by.clone(), first.trusted), (vec![alice.clone()], false), "its author's trust alone");
+        log.insert(&mallory, rec(1, 20, trust(&alice, "p", "u1acme", true)));
+        assert!(!payees(&log, &members, 2)[0].trusted, "only members count");
+        log.insert(&bob, rec(1, 30, trust(&alice, "p", "u1acme", true)));
+        assert!(payees(&log, &members, 2)[0].trusted);
+
+        // A new address isn't the one Bob trusted.
+        log.insert(&alice, rec(2, 40, payee("p", "Auditor", "u1elsewhere")));
+        let moved = &payees(&log, &members, 2)[0];
+        assert_eq!((moved.trusted_by.clone(), moved.trusted), (vec![alice.clone()], false));
+        log.insert(&bob, rec(2, 50, trust(&alice, "p", "u1elsewhere", true)));
+        assert!(payees(&log, &members, 2)[0].trusted);
+        log.insert(&bob, rec(3, 60, trust(&alice, "p", "u1elsewhere", false)));
+        assert!(!payees(&log, &members, 2)[0].trusted, "Bob took it back");
     }
 
     #[test]
