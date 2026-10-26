@@ -24,6 +24,7 @@ import { useCeremonies, selectActiveSend } from "../stores/ceremonies";
 import { useAdvancedMode } from "../lib/advanced";
 import { MAX_REASON, payeeFor, useMemberName, usePayees } from "../lib/payees";
 import { WalletTxHistory } from "./Activity";
+import { BatchSend } from "./Batch";
 import { ReviewNotesTab } from "./Notes";
 import { GroupPayees, PayeeForm } from "./Payees";
 import { ViewingKeyCallout } from "./Privacy";
@@ -58,7 +59,7 @@ type Panel = "receive" | "send" | "notes";
  *  "max" pays everything spendable; "migration" moves old-pool Orchard funds
  *  into Ironwood; "move" empties the group's old (publicly viewable) address
  *  into its private one. */
-type DraftKind = "payment" | "max" | "consolidation" | "migration" | "move";
+type DraftKind = "payment" | "max" | "batch" | "consolidation" | "migration" | "move";
 
 /** A group's Zcash wallet: balance, receive, send, and activity. Shown on Home
  *  for the active wallet. */
@@ -120,6 +121,8 @@ export function GroupWallet({ group, network }: { group: GroupSummary; network: 
   const [draftKind, setDraftKind] = useState<DraftKind>("payment");
   /** What the payment is for, for the group (not in the transaction). */
   const [reason, setReason] = useState<string | undefined>(undefined);
+  /** Entering several payments at once rather than one. */
+  const [batch, setBatch] = useState(false);
   const review = (d: DraftTransaction, kind: DraftKind, why?: string) => {
     setErr(null);
     setDraft(d);
@@ -277,6 +280,7 @@ export function GroupWallet({ group, network }: { group: GroupSummary; network: 
           onDismiss={() => {
             clearSend(group.id);
             setDraft(null);
+            setBatch(false);
             setPanel(null);
           }}
           network={network}
@@ -294,6 +298,21 @@ export function GroupWallet({ group, network }: { group: GroupSummary; network: 
             onBack={() => setDraft(null)}
             onError={setErr}
           />
+        ) : batch ? (
+          <BatchSend
+            group={group}
+            network={network}
+            spendable={spendable}
+            blocked={sendBlocked({
+              caughtUp,
+              blocksRemaining,
+              spendable,
+              pending: s.orchard.pending_zatoshis + s.ironwood.pending_zatoshis,
+              network,
+            })}
+            onPrepared={(d, why) => review(d, "batch", why)}
+            onSingle={() => setBatch(false)}
+          />
         ) : (
           <EnterSend
             group={group}
@@ -303,6 +322,7 @@ export function GroupWallet({ group, network }: { group: GroupSummary; network: 
             caughtUp={caughtUp}
             blocksRemaining={blocksRemaining}
             onPrepared={(d, all, why) => review(d, all ? "max" : "payment", why)}
+            onBatch={() => setBatch(true)}
           />
         )
       ) : panel === "notes" && advanced ? (
@@ -324,6 +344,30 @@ export function GroupWallet({ group, network }: { group: GroupSummary; network: 
   );
 }
 
+/** Why nothing can be sent right now, if so: the wallet is still catching up,
+ *  or has nothing spendable yet. */
+function sendBlocked({
+  caughtUp,
+  blocksRemaining,
+  spendable,
+  pending,
+  network,
+}: {
+  caughtUp: boolean;
+  blocksRemaining: number;
+  spendable: number;
+  pending: number;
+  network: WalletNetwork;
+}): string | null {
+  return !caughtUp
+    ? `Sending unlocks once the wallet catches up${blocksRemaining > 0 ? ` (${blocksRemaining.toLocaleString()} blocks to go)` : ""}.`
+    : spendable <= 0
+      ? pending > 0
+        ? `${zec(pending)} ${unit(network)} is still waiting for confirmations. Received funds need 10.`
+        : "Nothing to send yet. Receive funds first."
+      : null;
+}
+
 /** Step 1 of a payment: who (typed, or one of the group's payees), how much,
  *  an optional memo for the recipient, and an optional reason for the group. */
 function EnterSend({
@@ -334,6 +378,7 @@ function EnterSend({
   caughtUp,
   blocksRemaining,
   onPrepared,
+  onBatch,
 }: {
   group: GroupSummary;
   network: WalletNetwork;
@@ -342,6 +387,8 @@ function EnterSend({
   caughtUp: boolean;
   blocksRemaining: number;
   onPrepared: (draft: DraftTransaction, all: boolean, reason?: string) => void;
+  /** Switch to entering several payments at once. */
+  onBatch: () => void;
 }) {
   const [recipient, setRecipient] = useState("");
   const [reason, setReason] = useState("");
@@ -392,17 +439,16 @@ function EnterSend({
     },
   });
 
-  const blocked = !caughtUp
-    ? `Sending unlocks once the wallet catches up${blocksRemaining > 0 ? ` (${blocksRemaining.toLocaleString()} blocks to go)` : ""}.`
-    : spendable <= 0
-      ? pending > 0
-        ? `${zec(pending)} ${unit(network)} is still waiting for confirmations. Received funds need 10.`
-        : "Nothing to send yet. Receive funds first."
-      : null;
+  const blocked = sendBlocked({ caughtUp, blocksRemaining, spendable, pending, network });
 
   return (
     <div className="card panel">
-      <h3 className="mt-0">Send</h3>
+      <div className="row between items-center">
+        <h3 className="m-0">Send</h3>
+        <button className="link-button" onClick={onBatch}>
+          Pay several at once
+        </button>
+      </div>
       <div className="row between">
         <label>To</label>
         {!!payees.data?.length && (
@@ -603,6 +649,15 @@ function ReviewSend({
         sendMax: kind === "max",
         fromOldAddress: kind === "move",
         reason,
+        ...(kind === "batch"
+          ? {
+              payments: (draft.payments ?? []).map((p) => ({
+                recipient: p.recipient,
+                amountZatoshis: p.amount_zatoshis,
+                memo: p.memo ?? undefined,
+              })),
+            }
+          : {}),
       }),
     onSuccess: () => onError(null),
     onError: (e) => onError((e as unknown as AppError).message),
@@ -614,6 +669,7 @@ function ReviewSend({
   const title = {
     payment: "Review payment",
     max: "Review payment",
+    batch: `Review ${draft.payments?.length ?? 0} payments`,
     consolidation: "Review: combine notes",
     migration: "Review: move funds",
     move: "Review: move to the private address",
@@ -634,19 +690,22 @@ function ReviewSend({
           Moves everything at the group's old address to its new, private one. The fee comes out of the amount.
         </p>
       )}
+      {kind === "batch" && <BatchPayments draft={draft} groupId={group.id} network={network} />}
       <table className="participants">
         <tbody>
-          <tr>
-            <td>To</td>
-            <td className="mono-cell break-all">
-              {payee && (
-                <div className="payee-name">
-                  {payee.name} <span className="dim">· group payee, added by {memberName(payee.author)}</span>
-                </div>
-              )}
-              {kind === "move" ? "This wallet's private address" : selfSend ? "This wallet" : draft.recipient}
-            </td>
-          </tr>
+          {kind !== "batch" && (
+            <tr>
+              <td>To</td>
+              <td className="mono-cell break-all">
+                {payee && (
+                  <div className="payee-name">
+                    {payee.name} <span className="dim">· group payee, added by {memberName(payee.author)}</span>
+                  </div>
+                )}
+                {kind === "move" ? "This wallet's private address" : selfSend ? "This wallet" : draft.recipient}
+              </td>
+            </tr>
+          )}
           <tr>
             <td>Amount</td>
             <td>{zec(draft.amount_zatoshis)} {u}</td>
@@ -710,7 +769,9 @@ function ReviewSend({
       {needsCheck && (
         <label className="row confirm items-start mt-3">
           <input type="checkbox" className="w-auto mt-1" checked={checked} onChange={(e) => setChecked(e.target.checked)} />
-          <span>The recipient is correct. A payment can't be undone.</span>
+          <span>
+            {kind === "batch" ? "The recipients are correct." : "The recipient is correct."} A payment can't be undone.
+          </span>
         </label>
       )}
 
@@ -741,5 +802,39 @@ function ReviewSend({
         </table>
       </details>
     </div>
+  );
+}
+
+/** Every payment of a batch being reviewed: to whom (a payee's name where it's
+ *  one), how much, and its memo. */
+function BatchPayments({ draft, groupId, network }: { draft: DraftTransaction; groupId: string; network: WalletNetwork }) {
+  const payees = usePayees(groupId);
+  return (
+    <table className="batch-payments mb-3">
+      <thead>
+        <tr>
+          <th>To</th>
+          <th className="num">Amount</th>
+        </tr>
+      </thead>
+      <tbody>
+        {(draft.payments ?? []).map((p, i) => {
+          const payee = payeeFor(payees.data, p.recipient);
+          return (
+            <tr key={i}>
+              <td>
+                {payee && <div className="payee-name">{payee.name}</div>}
+                <div className="mono-cell break-all">{p.recipient}</div>
+                {p.memo && <div className="dim text-sm break-word">Memo: {p.memo}</div>}
+                {p.transparent && <div className="dim text-sm">Transparent: the amount and recipient will be public.</div>}
+              </td>
+              <td className="num nowrap">
+                {zec(p.amount_zatoshis)} {unit(network)}
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
   );
 }

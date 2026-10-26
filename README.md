@@ -33,6 +33,8 @@ The app has five places: **Home**, **Approvals**, **Votes**, **Groups** and
   - **Sending takes two steps:** enter the payment, then review it and choose
     who approves.
   - **Send all** pays everything, with the fee taken out of the amount.
+  - **Pay several at once:** up to 20 payments in one transaction, approved
+    once. Enter them one by one or paste a list.
   - **Transparent addresses** are detected automatically, with a note that the
     payment will be public.
   - **Activity** lists payments with their memos and fees.

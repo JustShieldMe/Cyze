@@ -46,6 +46,9 @@ export interface SendMeta {
   /** What it's for, for the group: approvers see it, and every member's
    *  history once it's sent. */
   reason?: string;
+  /** A batch: every payment, made in one transaction (`recipient` is empty
+   *  and `amountZatoshis` is the total). */
+  payments?: { recipient: string; amountZatoshis: number; memo?: string }[];
 }
 
 export interface CeremonyState {

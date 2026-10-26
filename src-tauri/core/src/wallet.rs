@@ -556,8 +556,7 @@ use zcash_client_backend::data_api::chain::{
 };
 use zcash_client_backend::data_api::scanning::{ScanPriority, ScanRange};
 use zcash_client_backend::data_api::wallet::{
-    create_pczt_from_proposal, propose_send_max_transfer, propose_standard_transfer_to_address,
-    ConfirmationsPolicy,
+    create_pczt_from_proposal, propose_send_max_transfer, propose_transfer, ConfirmationsPolicy,
 };
 use zcash_client_backend::data_api::{
     AccountBirthday, AccountPurpose, WalletCommitmentTrees, WalletRead, WalletWrite,
@@ -1958,6 +1957,32 @@ pub struct SpendToSign {
     pub alpha_hex: String,
 }
 
+/// One payment the group asks to make: to whom, how much, and an optional memo
+/// (dropped for a transparent recipient, which can't receive one).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaymentRequest {
+    pub recipient: String,
+    pub amount_zatoshis: u64,
+    #[serde(default)]
+    pub memo: Option<String>,
+}
+
+/// The most payments one transaction carries. Each is an output co-signers
+/// verify from the attached transaction, which has to fit one frostd message
+/// ([`crate::signing::signer_context_budget`], about 31 KiB for a few
+/// signers): twenty take about 21 KiB, and a memo adds about 0.7 KiB.
+pub const MAX_PAYMENTS: usize = 20;
+
+/// One payment in a draft transaction, as built.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DraftPayment {
+    pub recipient: String,
+    pub amount_zatoshis: u64,
+    pub memo: Option<String>,
+    /// To a transparent address: amount and recipient are public.
+    pub transparent: bool,
+}
+
 /// A draft transaction: a built, unsigned PCZT plus the data the FROST signing
 /// step needs (the shielded sighash to sign, and each spend's α). Building
 /// moves no funds.
@@ -1981,6 +2006,10 @@ pub struct DraftTransaction {
     /// on-chain; only the recipient's viewing key can decrypt it. Always None
     /// for unshield transfers (transparent outputs carry no memo).
     pub memo: Option<String>,
+    /// Every payment it makes. With more than one (a batch), `recipient` is
+    /// empty, `amount_zatoshis` is their total, `memo` is None, and
+    /// `is_unshield` says whether any is transparent.
+    pub payments: Vec<DraftPayment>,
     /// How long the group has to approve it, as of when it was built.
     pub approval_window: Option<ApprovalWindow>,
 }
@@ -2070,30 +2099,84 @@ pub async fn prepare_send(
     lightwalletd_url: &str,
     db_key: &[u8],
 ) -> Result<DraftTransaction, CoreError> {
+    let payment = PaymentRequest { recipient: recipient.to_string(), amount_zatoshis, memo };
+    prepare_payments(data_dir, wallet_id, network, &[payment], lightwalletd_url, db_key).await
+}
+
+/// Build one unsigned transaction making several payments (a batch), as
+/// [`prepare_send`] does for one. The group approves it once.
+pub async fn prepare_payments(
+    data_dir: &Path,
+    wallet_id: &str,
+    network: WalletNetwork,
+    payments: &[PaymentRequest],
+    lightwalletd_url: &str,
+    db_key: &[u8],
+) -> Result<DraftTransaction, CoreError> {
+    use zcash_client_backend::data_api::wallet::input_selection::{GreedyInputSelector, SpendPolicy};
+    use zcash_client_backend::fees::{standard::SingleOutputChangeStrategy, DustOutputPolicy};
     use zcash_keys::address::Address;
     use zcash_protocol::value::Zatoshis;
     use zcash_protocol::ShieldedPool;
 
+    if payments.is_empty() || payments.len() > MAX_PAYMENTS {
+        return Err(CoreError::Config(format!("a transaction makes 1 to {MAX_PAYMENTS} payments")));
+    }
     let params = network.params();
+    let mut built = Vec::with_capacity(payments.len());
+    let mut requested = Vec::with_capacity(payments.len());
+    let mut decoded = Vec::with_capacity(payments.len());
+    for (i, p) in payments.iter().enumerate() {
+        let which = if payments.len() > 1 { format!("payment {}: ", i + 1) } else { String::new() };
+        let to = decode_recipient(network, &p.recipient).map_err(|e| CoreError::Crypto(format!("{which}{e}")))?;
+        // A transparent recipient means an unshield (Orchard → transparent).
+        // Memos are only valid for shielded outputs: one given for a
+        // transparent recipient is dropped. Trimmed, as the memo reads back.
+        let transparent = matches!(to, Address::Transparent(_));
+        let memo = p.memo.as_deref().map(str::trim).filter(|m| !transparent && !m.is_empty()).map(str::to_string);
+        let memo_bytes = memo
+            .as_deref()
+            .map(|m| {
+                m.parse::<Memo>()
+                    .map(|m| m.encode())
+                    .map_err(|_| CoreError::Config(format!("{which}the memo is longer than 512 bytes")))
+            })
+            .transpose()?;
+        let amount = Zatoshis::from_u64(p.amount_zatoshis)
+            .ok()
+            .filter(|a| !a.is_zero())
+            .ok_or_else(|| CoreError::Config(format!("{which}the amount must be more than zero")))?;
+        requested.push(
+            zip321::Payment::new(to.to_zcash_address(&params), Some(amount), memo_bytes, None, None, vec![])
+                .map_err(|e| CoreError::Config(format!("{which}{e:?}")))?,
+        );
+        decoded.push(to);
+        built.push(DraftPayment {
+            recipient: p.recipient.trim().to_string(),
+            amount_zatoshis: p.amount_zatoshis,
+            memo,
+            transparent,
+        });
+    }
+    let request = zip321::TransactionRequest::new(requested)
+        .map_err(|e| CoreError::Config(format!("couldn't make the payment request ({e:?})")))?;
+
     let (mut db, account_id, tip_height) = open_for_send(data_dir, wallet_id, network, lightwalletd_url, db_key).await?;
-    let to = decode_recipient(network, recipient)?;
-    // A transparent recipient means this is an unshield (Orchard → transparent).
-    let is_unshield = matches!(to, Address::Transparent(_));
-    let amount =
-        Zatoshis::from_u64(amount_zatoshis).map_err(|e| CoreError::Crypto(format!("amount: {e}")))?;
-
-    // Memos are only valid for shielded (Orchard) outputs; transparent outputs
-    // carry no memo. Silently drop any memo supplied for an unshield.
-    let memo_bytes: Option<MemoBytes> = if is_unshield {
-        None
-    } else {
-        memo.as_deref().filter(|s| !s.is_empty()).map(|s| {
-            s.parse::<Memo>()
-                .map(|m| m.encode())
-                .unwrap_or_else(|_| MemoBytes::empty())
-        })
-    };
-
+    if payments.len() > 1 {
+        // Among other payments, one to the group itself reads as change to
+        // co-signers, who'd refuse the batch: say so now.
+        use zcash_client_backend::data_api::Account as _;
+        let own = db.get_account(account_id).ok().flatten().and_then(|a| a.ufvk().and_then(|k| k.orchard().cloned()));
+        for (i, to) in decoded.iter().enumerate() {
+            let ours = match (to, &own) {
+                (Address::Unified(ua), Some(fvk)) => ua.orchard().is_some_and(|a| fvk.scope_for_address(a).is_some()),
+                _ => false,
+            };
+            if ours {
+                return Err(CoreError::Config(format!("payment {}: that's this wallet's own address", i + 1)));
+            }
+        }
+    }
     // Let the backend choose the transaction version from the target height:
     // version 6 (carrying an Ironwood bundle) once NU6.3 is active, version 5
     // before it. Passing `None` is what enables Ironwood sends — post-NU6.3 the
@@ -2101,24 +2184,29 @@ pub async fn prepare_send(
     // delivered through the Ironwood bundle of a V6 transaction. `lock_inputs`
     // is None: Cyze builds and signs one transaction at a time, so there is no
     // need to reserve inputs across concurrent proposals.
-    let proposal = propose_standard_transfer_to_address::<_, _, std::convert::Infallible>(
-        &mut db,
-        &params,
+    let change_strategy = SingleOutputChangeStrategy::<GroupDb>::new(
         StandardFeeRule::Zip317,
-        account_id,
-        ConfirmationsPolicy::default(),
-        &to,
-        amount,
-        memo_bytes,
         None, // change memo
         ShieldedPool::Orchard,
+        DustOutputPolicy::default(),
+    );
+    let proposal = propose_transfer::<_, _, _, _, std::convert::Infallible>(
+        &mut db,
+        &params,
+        account_id,
+        &GreedyInputSelector::<GroupDb>::new(),
+        &change_strategy,
+        request,
+        ConfirmationsPolicy::default(),
+        &SpendPolicy::default(),
         None, // lock_inputs
         None, // proposed_version: derive V5/V6 from the target height
     )
     .map_err(|e| match e {
         zcash_client_backend::data_api::error::Error::InsufficientFunds { available, required } => {
+            let what = if payments.len() > 1 { "these payments need" } else { "this payment needs" };
             CoreError::Ceremony(format!(
-                "not enough spendable funds: {} {} can be spent now, and this payment needs {} with its fee. \
+                "not enough spendable funds: {} {} can be spent now, and {what} {} with the fee. \
                  Funds received recently need 10 confirmations first",
                 zec(available.into()),
                 network.ticker(),
@@ -2128,8 +2216,7 @@ pub async fn prepare_send(
         e => CoreError::Ceremony(format!("couldn't build the payment ({e:?})")),
     })?;
 
-    let memo = if is_unshield { None } else { memo.filter(|s| !s.is_empty()) };
-    draft_from_proposal(&mut db, network, account_id, tip_height, &proposal, recipient, amount_zatoshis, is_unshield, memo)
+    draft_from_proposal(&mut db, network, account_id, tip_height, &proposal, built)
 }
 
 /// Build an unsigned transaction that pays everything spendable in a wallet to
@@ -2186,7 +2273,8 @@ pub async fn prepare_send_max(
         .ok()
         .flatten()
         .map_or(0, u64::from);
-    draft_from_proposal(&mut db, network, account_id, tip_height, &proposal, recipient, amount, is_unshield, memo)
+    let payment = DraftPayment { recipient: recipient.trim().to_string(), amount_zatoshis: amount, memo, transparent: is_unshield };
+    draft_from_proposal(&mut db, network, account_id, tip_height, &proposal, vec![payment])
 }
 
 /// Open a wallet to build a transaction: its chain tip refreshed from
@@ -2262,17 +2350,13 @@ pub(crate) fn decode_recipient(network: WalletNetwork, recipient: &str) -> Resul
 
 /// Turn a proposal into the draft the group signs: the PCZT, its sighash, and
 /// the α of each spend to sign.
-#[allow(clippy::too_many_arguments)]
 fn draft_from_proposal(
     db: &mut GroupDb,
     network: WalletNetwork,
     account_id: <GroupDb as WalletRead>::AccountId,
     tip_height: u64,
     proposal: &zcash_client_backend::proposal::Proposal<StandardFeeRule, zcash_client_sqlite::ReceivedNoteId>,
-    recipient: &str,
-    amount_zatoshis: u64,
-    is_unshield: bool,
-    memo: Option<String>,
+    payments: Vec<DraftPayment>,
 ) -> Result<DraftTransaction, CoreError> {
     let fee = u64::from(proposal.steps().last().balance().fee_required());
 
@@ -2307,15 +2391,20 @@ fn draft_from_proposal(
     // use), across both the Orchard and Ironwood bundles.
     let spends = spends_to_sign(pczt)?;
 
+    let (recipient, memo) = match payments.as_slice() {
+        [one] => (one.recipient.clone(), one.memo.clone()),
+        _ => (String::new(), None),
+    };
     Ok(DraftTransaction {
         pczt_hex,
         sighash_hex: hex::encode(sighash),
         spends,
         fee_zatoshis: fee,
-        amount_zatoshis,
-        recipient: recipient.to_string(),
-        is_unshield,
+        amount_zatoshis: payments.iter().map(|p| p.amount_zatoshis).sum(),
+        recipient,
+        is_unshield: payments.iter().any(|p| p.transparent),
         memo,
+        payments,
         approval_window,
     })
 }
@@ -2696,6 +2785,18 @@ pub struct TxRecord {
     pub memo: Option<String>,
     /// Recipient unified address for sends; `None` for self-transfers (note consolidation).
     pub recipient: Option<String>,
+    /// Every payment a send made to addresses outside the wallet, as far as
+    /// the wallet recovered them (see the send query): more than one for a
+    /// batch. Empty for receipts.
+    pub payments: Vec<TxPayment>,
+}
+
+/// One payment a send made, from the wallet's record of its outputs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TxPayment {
+    pub recipient: Option<String>,
+    pub amount_zatoshis: u64,
+    pub memo: Option<String>,
 }
 
 /// Read on-chain transaction history for a group's wallet — received funds and
@@ -2957,6 +3058,7 @@ pub fn wallet_history(
                 fee_zatoshis: fee_paid.map(|f| f.max(0) as u64),
                 memo: memo_bytes.as_deref().and_then(decode_zcash_memo),
                 recipient: None,
+                payments: Vec::new(),
             });
         }
     }
@@ -2980,6 +3082,38 @@ pub fn wallet_history(
     // The recipient address/memo are still opportunistically read from
     // `sent_notes` when that OVK recovery *did* succeed; otherwise they're
     // simply absent (shown as "-" by the UI) rather than causing a wrong amount.
+    //
+    // Each external output, for listing a batch's payments.
+    let mut payments_by_tx: std::collections::HashMap<Vec<u8>, Vec<TxPayment>> = std::collections::HashMap::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT t.txid, sn.to_address, sn.value, sn.memo \
+                 FROM sent_notes sn \
+                 JOIN transactions t ON t.id_tx = sn.transaction_id \
+                 WHERE sn.from_account_id = ?1 AND sn.to_account_id IS NULL \
+                 ORDER BY sn.output_pool, sn.output_index",
+            )
+            .map_err(|e| CoreError::Crypto(format!("prepare payments query: {e}")))?;
+        let rows = stmt
+            .query_map([account_id], |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, Option<Vec<u8>>>(3)?,
+                ))
+            })
+            .map_err(|e| CoreError::Crypto(format!("execute payments query: {e}")))?;
+        for row in rows {
+            let (txid, recipient, value, memo) = row.map_err(|e| CoreError::Crypto(format!("payment row: {e}")))?;
+            payments_by_tx.entry(txid).or_default().push(TxPayment {
+                recipient,
+                amount_zatoshis: value.max(0) as u64,
+                memo: memo.as_deref().and_then(decode_zcash_memo),
+            });
+        }
+    }
     {
         let mut stmt = conn
             .prepare(
@@ -3022,6 +3156,7 @@ pub fn wallet_history(
         for row in rows {
             let (mut txid_bytes, block_height, timestamp, fee_paid, account_balance_delta, ext_address, memo_bytes) =
                 row.map_err(|e| CoreError::Crypto(format!("send row: {e}")))?;
+            let payments = payments_by_tx.remove(&txid_bytes).unwrap_or_default();
             txid_bytes.reverse();
             // account_balance_delta < 0 (guaranteed by the WHERE clause) is the
             // total decrease in our balance: amount sent externally + fee.
@@ -3037,6 +3172,7 @@ pub fn wallet_history(
                 fee_zatoshis: fee_paid.map(|f| f.max(0) as u64),
                 memo: memo_bytes.as_deref().and_then(decode_zcash_memo),
                 recipient: ext_address,
+                payments,
             });
         }
     }

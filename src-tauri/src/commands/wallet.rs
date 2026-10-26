@@ -800,6 +800,71 @@ pub async fn wallet_prepare_send(
     .await?)
 }
 
+/// Like [`wallet_prepare_send`], for several payments in one transaction (a
+/// batch), approved once. Refuses one too large for co-signers to verify in a
+/// single request now, rather than once approvals are asked for.
+#[tauri::command]
+pub async fn wallet_prepare_payments(
+    state: State<'_, AppState>,
+    group_id: String,
+    payments: Vec<wallet::PaymentRequest>,
+) -> AppResult<wallet::DraftTransaction> {
+    let (network, url, _ufvk) = group_wallet_ctx(&state, &group_id).await?;
+    let db_key = state.wallet_db_key(&group_id).await?;
+    let wid = state.wallet_dir_id(&group_id).await?;
+    let draft = wallet::prepare_payments(&state.data_dir, &wid, network, &payments, &url, db_key.as_ref()).await?;
+    // As asked of the fewest members who can approve it, with the longest
+    // reason: asking more needs a little more room, which wallet_send checks.
+    let threshold = state
+        .with_config(|config| {
+            let group = config.group.get(&group_id).ok_or_else(|| AppError::new("config", "group not found"))?;
+            Ok(frost_app_core::config::summarize_group(&group_id, group)?.threshold as usize)
+        })
+        .await?;
+    let longest_reason = "x".repeat(frost_app_core::polls::MAX_REASON);
+    let others = context_besides_pczt(&draft, network, Some(&longest_reason));
+    wallet::verify::pczt_for_signers_beside(&draft.pczt_hex, others, threshold)?;
+    Ok(draft)
+}
+
+/// How a draft is described to co-signers beyond its single-payment fields:
+/// payment by payment, for a batch.
+fn claimed_payments(draft: &wallet::DraftTransaction) -> Vec<frost_app_core::events::ClaimedPayment> {
+    if draft.payments.len() < 2 {
+        return Vec::new();
+    }
+    draft
+        .payments
+        .iter()
+        .map(|p| frost_app_core::events::ClaimedPayment {
+            recipient: p.recipient.clone(),
+            amount_zatoshis: p.amount_zatoshis,
+            transparent: p.transparent,
+        })
+        .collect()
+}
+
+/// The bytes a signing request's context takes besides the attached PCZT
+/// (see `wallet::verify::MAX_SIGNER_CONTEXT`), with room to spare.
+fn context_besides_pczt(draft: &wallet::DraftTransaction, network: WalletNetwork, reason: Option<&str>) -> usize {
+    let context = frost_app_core::events::SigningContext {
+        recipient: draft.recipient.clone(),
+        amount_zatoshis: draft.amount_zatoshis,
+        fee_zatoshis: draft.fee_zatoshis,
+        memo: draft.memo.clone(),
+        is_unshield: draft.is_unshield,
+        network: network.as_str().to_string(),
+        plan_id: Uuid::nil().to_string(),
+        spend_index: u32::MAX,
+        spend_total: u32::MAX,
+        tx_sighash: draft.sighash_hex.clone(),
+        pczt: None,
+        reason: reason.map(str::to_string),
+        payments: claimed_payments(draft),
+    };
+    serde_json::to_vec(&context).map_or(0, |json| json.len()) + 64
+}
+
 /// Like [`wallet_prepare_send`], but paying everything spendable, with the
 /// fee coming out of it: what "Send all" reviews.
 #[tauri::command]
@@ -872,6 +937,10 @@ pub struct WalletSendArgs {
     /// every member in its history once it's sent. Never on chain.
     #[serde(default)]
     pub reason: Option<String>,
+    /// Several payments in one transaction (a batch) instead: `recipient`,
+    /// `amount_zatoshis` and `memo` are then ignored.
+    #[serde(default)]
+    pub payments: Vec<wallet::PaymentRequest>,
 }
 
 /// What `wallet_send` started: the ceremony, and the transaction as it was
@@ -939,6 +1008,8 @@ pub async fn wallet_send<R: tauri::Runtime>(
     let wid = state.wallet_dir_id(&args.group_id).await?;
     let draft = if args.from_old_address {
         crate::commands::viewing::prepare_move(&state, &args.group_id).await?
+    } else if !args.payments.is_empty() {
+        wallet::prepare_payments(&state.data_dir, &wid, network, &args.payments, &url, db_key.as_ref()).await?
     } else if args.send_max {
         wallet::prepare_send_max(&state.data_dir, &wid, network, &args.recipient, args.memo, &url, db_key.as_ref())
             .await?
@@ -963,10 +1034,12 @@ pub async fn wallet_send<R: tauri::Runtime>(
     }
     let message = hex::decode(draft.sighash_hex.trim())
         .map_err(|e| AppError::new("wallet", format!("sighash: {e}")))?;
+    let ctx_payments = claimed_payments(&draft);
     // Co-signers verify the transaction itself, not our description of it
     // (wallet::verify). Prepared now so an oversized transaction fails before
-    // anyone is asked to sign.
-    let signer_pczt = wallet::verify::pczt_for_signers(&draft.pczt_hex)?;
+    // anyone is asked to sign, in the room the rest of the context leaves.
+    let others = context_besides_pczt(&draft, network, reason.as_deref());
+    let signer_pczt = wallet::verify::pczt_for_signers_beside(&draft.pczt_hex, others, args.signers.len())?;
     // Each Orchard spend is re-randomized with its own α, so each needs its own
     // re-randomized FROST signature over the (shared) sighash.
     let spends = draft
@@ -1118,6 +1191,7 @@ pub async fn wallet_send<R: tauri::Runtime>(
                         tx_sighash: sighash_hex.clone(),
                         pczt: Some(signer_pczt.clone()),
                         reason: ctx_reason.clone(),
+                        payments: ctx_payments.clone(),
                     })
                     .unwrap_or_default();
                     let params = CoordinatorParams {

@@ -1023,3 +1023,12 @@ button.icon-button {
 .payee-name { font-size: 13px; font-weight: 600; word-break: normal; margin-bottom: 2px; }
 select.payee-pick { width: auto; max-width: 60%; padding: 4px 8px; font-size: 13px; margin-bottom: 6px; }
 .reason-claim { font-size: 13px; margin: 0 0 10px; padding: 8px 10px; border-left: 3px solid var(--border); background: var(--bg-input); border-radius: 0 6px 6px 0; word-break: break-word; }
+
+/* Batch payments: each payment being entered, and the list under review. */
+.payment-row { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px 2px; margin-bottom: 10px; }
+.payment-row input.payment-amount { width: 160px; flex: none; }
+table.batch-payments { width: 100%; }
+table.batch-payments td { vertical-align: top; }
+table.batch-payments .num { text-align: right; }
+.tx-payment + .tx-payment { margin-top: 4px; }
+.payment-row select.payee-pick { min-width: 200px; margin-bottom: 0; }

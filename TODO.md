@@ -99,9 +99,12 @@ and skip kinds they don't know.
       `PaymentReason` record keyed by txid once sent; any member can add theirs.
 - [ ] **Accounting export** — CSV of history with payees, reasons and signers.
 - [ ] **Read-only access** — export the group's viewing key for an accountant.
-- [ ] **Batch payments** — several recipients in one transaction, approved once.
-      `verify.rs` already returns every payment; `check_coordinator_claims` and
-      the send form assume one.
+- [x] **Batch payments** — `wallet::prepare_payments` (single sends are a batch
+      of one), `SigningContext.payments` matched as an unordered set by
+      `check_coordinator_claims`, `src/wallet/Batch.tsx`. Up to
+      `MAX_PAYMENTS` (20); the request is sized exactly against one frostd
+      message (`signing::signer_context_budget`) and refused at review when it
+      can't fit.
 - [ ] **Pay if agreed** — a poll that carries a payment; once agreed, approvers
       see the poll and a check that the transaction matches it exactly.
 - [ ] **Trusted payees only** — adding a payee needs a threshold of members to
@@ -219,6 +222,17 @@ and skip kinds they don't know.
         test waits for one, with a group holding notes unspent at its snapshot.
 
 ## Wallet (Zcash)
+
+- [ ] **Record our own sends in the wallet** — Cyze builds sends as PCZTs and
+      broadcasts them itself, so the wallet db learns of them only by scanning:
+      as a balance change, without the fee or outputs (`sent_notes` stays
+      empty; compact blocks can't be decrypted with the OVK). History then
+      shows the fee inside the amount and no recipient. The sending device
+      fills these in from its saved send (`withWhatWasSent` in Activity.tsx).
+      Fix: `extract_and_store_transaction_from_pczt` at broadcast (the sender),
+      and for other members either enhancement (fetching full transactions,
+      which tells the server which are the group's) or the details in a group
+      record.
 
 - [x] **Auto-sync polish** — the backend sync service keeps the active wallet
       current, so Home no longer shows a permanent **Sync Now**: it offers

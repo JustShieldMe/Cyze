@@ -22,6 +22,12 @@ breaking changes. Cyze is beta, unaudited software (see the README).
     address the transaction verifiably pays.
   - Only the member who added a payee can change or remove it, and no two
     payees share a name or an address.
+- **Batch payments:** up to 20 payments in one transaction, approved once.
+  - **Pay several at once** on the send form, with rows to fill or **Paste a
+    list** (address or payee name, amount, memo per line).
+  - Each approver's app checks that the transaction makes exactly the payments
+    described, in any order.
+  - Activity shows a batch as its payments.
 - **Reasons:** say what a payment is for, for the group only.
   - Approvers see it with the request, attributed to the member who asked.
   - Once sent, every member's **Activity** shows it. Any member can add
@@ -52,6 +58,11 @@ breaking changes. Cyze is beta, unaudited software (see the README).
 - The memo-based coinholder vote (Vote Cast Memo v1), replaced by Votes.
 
 ### Fixed
+- A signing request whose transaction didn't fit one message to an approver
+  failed with "cryptography error from snow: input error". The limit didn't
+  count the context being hex-encoded, so a send spending many notes could hit
+  it. Cyze now sizes the request exactly and, when it can't fit, says so before
+  anyone is asked.
 - A send that a lock or restart cut off showed "in progress" forever. It now
   says it ended and offers the right retry.
 - A failed payment was hidden until Send was opened again. It now stays on Home

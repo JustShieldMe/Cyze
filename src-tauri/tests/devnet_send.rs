@@ -5,6 +5,9 @@
 //! transaction itself before he approves, and recognises the payee from his
 //! own copy of the group's payees. Cyze applies the signature, proves, and
 //! broadcasts; the devnet mines it, and Bob's app learns what it was for.
+//! Then a batch of the most payments a transaction makes, a few with memos,
+//! about as large a request as co-signers can verify, after one too large for
+//! that is refused at review; then "send all".
 //!
 //! Needs thus-spoke-zakura 0.3.x (NU6.3 from block 1) or 0.4.x (NU7 from block
 //! 1, with `CYZE_DEVNET_UPGRADE=nu7`). Ignored by default; run in release mode,
@@ -73,7 +76,12 @@ fn record(user: &UserApp, names: &[&'static str]) -> Events {
 
 /// A unified address that isn't the group's (a throwaway Orchard key).
 fn outside_recipient() -> String {
-    let sk = orchard::keys::SpendingKey::from_bytes([42; 32]).unwrap();
+    outside_recipient_at(42)
+}
+
+/// [`outside_recipient`], one per `seed`.
+fn outside_recipient_at(seed: u8) -> String {
+    let sk = orchard::keys::SpendingKey::from_bytes([seed; 32]).unwrap();
     let ak: [u8; 32] = orchard::keys::FullViewingKey::from(&sk).to_bytes()[..32].try_into().unwrap();
     let net = WalletNetwork::Regtest(RegtestUpgrade::Nu6_3).network_type();
     frost_app_core::zcash::derive_orchard_keys(&ak, None, net).unwrap().address
@@ -139,6 +147,7 @@ async fn a_two_of_two_send_is_verified_signed_and_mined() {
             from_old_address: false,
             send_max: false,
             reason: Some("Audit, invoice 12".into()),
+            payments: Vec::new(),
         },
         Some(50_000_000),
     )
@@ -184,6 +193,60 @@ async fn a_two_of_two_send_is_verified_signed_and_mined() {
         }
         assert!(started.elapsed() < Duration::from_secs(180), "the change never became spendable: {s:?}");
     }
+
+    // A batch with a full memo on every payment is too large for co-signers
+    // to verify in one request, and review says so.
+    let batch = |memos: usize| -> Vec<frost_app_core::wallet::PaymentRequest> {
+        (0..frost_app_core::wallet::MAX_PAYMENTS)
+            .map(|i| frost_app_core::wallet::PaymentRequest {
+                recipient: outside_recipient_at(100 + i as u8),
+                amount_zatoshis: 1_000_000 + i as u64 * 1_000,
+                memo: (i < memos).then(|| format!("Grant {i}: {}", "milestone two of three, as agreed. ".repeat(14))),
+            })
+            .collect()
+    };
+    let too_big = commands::wallet::wallet_prepare_payments(alice.clone(), group_id.clone(), batch(20)).await;
+    assert!(too_big.unwrap_err().message.contains("Make fewer payments at once"));
+    // The most payments one transaction makes, a few with memos.
+    let batch = batch(3);
+    let draft = commands::wallet::wallet_prepare_payments(alice.clone(), group_id.clone(), batch.clone()).await.unwrap();
+    assert_eq!(draft.payments.len(), batch.len());
+    let txid = send_with_bobs_approval(
+        &p,
+        commands::wallet::WalletSendArgs {
+            group_id: group_id.clone(),
+            recipient: String::new(),
+            amount_zatoshis: 0,
+            signers: vec![p.alice_pubkey.clone(), p.bob_pubkey.clone()],
+            memo: None,
+            from_old_address: false,
+            send_max: false,
+            reason: Some("Q4 grants".into()),
+            payments: batch.clone(),
+        },
+        None,
+    )
+    .await;
+    eprintln!("batch sent in {txid}");
+    ths(&["mine", "10"]);
+    let started = Instant::now();
+    loop {
+        commands::wallet::wallet_sync_now(alice.clone(), false).await.unwrap();
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let s = commands::wallet::wallet_group_status(alice.clone(), group_id.clone()).await.unwrap();
+        let history = commands::wallet::wallet_history(alice.clone(), group_id.clone()).await.unwrap();
+        if let Some(t) = history.iter().find(|t| t.txid == txid) {
+            if s.spendable_zatoshis > 0 && s.spendable_zatoshis == s.total_zatoshis {
+                // The wallet records its own sends as a balance change, without
+                // their fee or outputs (TODO.md), so the amount includes the fee.
+                let total: u64 = batch.iter().map(|p| p.amount_zatoshis).sum();
+                assert!(t.amount_zatoshis >= total, "{} < {total}", t.amount_zatoshis);
+                break;
+            }
+        }
+        assert!(started.elapsed() < Duration::from_secs(180), "the batch's change never became spendable: {s:?}");
+    }
+
     let txid = send_with_bobs_approval(
         &p,
         commands::wallet::WalletSendArgs {
@@ -195,6 +258,7 @@ async fn a_two_of_two_send_is_verified_signed_and_mined() {
             from_old_address: false,
             send_max: true,
             reason: None,
+            payments: Vec::new(),
         },
         None,
     )
@@ -215,13 +279,15 @@ async fn a_two_of_two_send_is_verified_signed_and_mined() {
 }
 
 /// Alice coordinates a send; Bob's app joins each signing request, verifies
-/// it, and Bob approves. Returns the broadcast txid. With `amount`, checks the
-/// one payment Bob's app verified is that much to the recipient, with the
-/// memo; without, that it's everything spent, less the fee.
+/// it, and Bob approves. Returns the broadcast txid. For a batch, checks Bob's
+/// app verified every payment and nothing else. Otherwise, with `amount`,
+/// checks the one payment Bob's app verified is that much to the recipient,
+/// with the memo; without, that it's everything spent, less the fee.
 async fn send_with_bobs_approval(p: &common::Pair, args: commands::wallet::WalletSendArgs, amount: Option<u64>) -> String {
     let bob = p.bob.app.state::<AppState>();
     let (group_id, recipient, memo) = (args.group_id.clone(), args.recipient.clone(), args.memo.clone());
     let reason = args.reason.clone();
+    let batch = args.payments.clone();
     let payees = commands::payees::list_payees(bob.clone(), group_id.clone()).await.unwrap();
     let bob_events = record(&p.bob, &["signing:progress", "signing:failed"]);
     let alice_events = record(&p.alice, &["send:progress", "send:complete", "send:failed"]);
@@ -269,21 +335,35 @@ async fn send_with_bobs_approval(p: &common::Pair, args: commands::wallet::Walle
             assert!(event.get("refused").is_none(), "Bob's app refused: {event}");
             let verified = &event["verified"];
             let payments = verified["payments"].as_array().expect("a verified transaction");
-            assert_eq!(payments.len(), 1, "{verified}");
-            assert_eq!(payments[0]["address"], recipient.as_str());
-            assert_eq!(payments[0]["memo"].as_str(), memo.as_deref());
-            // What Alice says it's for reaches Bob as she wrote it, and Bob's
-            // own copy of the group's payees names the address he verified.
             assert_eq!(event["context"]["reason"].as_str(), reason.as_deref(), "{event}");
-            let paid = payments[0]["address"].as_str().unwrap().to_string();
-            assert!(payees.iter().any(|p| p.forms.contains(&paid)), "the recipient is a payee: {paid}");
-            match amount {
-                Some(amount) => assert_eq!(payments[0]["value_zatoshis"], amount),
-                None => {
-                    assert_eq!(verified["change_zatoshis"], 0, "nothing comes back: {verified}");
-                    let spent = verified["spent_zatoshis"].as_u64().unwrap();
-                    let fee = verified["fee_zatoshis"].as_u64().unwrap();
-                    assert_eq!(payments[0]["value_zatoshis"].as_u64().unwrap(), spent - fee);
+            if !batch.is_empty() {
+                assert_eq!(payments.len(), batch.len(), "{verified}");
+                assert_eq!(event["context"]["payments"].as_array().map(Vec::len), Some(batch.len()));
+                for want in &batch {
+                    // Memos read back trimmed.
+                    let found = payments.iter().any(|p| {
+                        p["address"] == want.recipient.as_str()
+                            && p["value_zatoshis"] == want.amount_zatoshis
+                            && p["memo"].as_str() == want.memo.as_deref().map(str::trim)
+                    });
+                    assert!(found, "Bob's app didn't verify {want:?} among {payments:?}");
+                }
+            } else {
+                assert_eq!(payments.len(), 1, "{verified}");
+                assert_eq!(payments[0]["address"], recipient.as_str());
+                assert_eq!(payments[0]["memo"].as_str(), memo.as_deref());
+                // Bob's own copy of the group's payees names the address he
+                // verified.
+                let paid = payments[0]["address"].as_str().unwrap().to_string();
+                assert!(payees.iter().any(|p| p.forms.contains(&paid)), "the recipient is a payee: {paid}");
+                match amount {
+                    Some(amount) => assert_eq!(payments[0]["value_zatoshis"], amount),
+                    None => {
+                        assert_eq!(verified["change_zatoshis"], 0, "nothing comes back: {verified}");
+                        let spent = verified["spent_zatoshis"].as_u64().unwrap();
+                        let fee = verified["fee_zatoshis"].as_u64().unwrap();
+                        assert_eq!(payments[0]["value_zatoshis"].as_u64().unwrap(), spent - fee);
+                    }
                 }
             }
             // Bob sees how long is left, from his own view of the chain: the

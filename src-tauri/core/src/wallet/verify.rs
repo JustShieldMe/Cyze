@@ -46,10 +46,6 @@ use crate::events::SigningContext;
 
 const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::STANDARD;
 
-/// Largest base64 PCZT the coordinator attaches to a signing request. frostd
-/// caps each encrypted message at 64 KiB, and the signing package and its
-/// encryption need the rest.
-pub const MAX_SIGNER_PCZT_B64: usize = 48 * 1024;
 
 /// A transaction as a co-signer has proven it from its PCZT.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -140,13 +136,20 @@ fn serialize_b64(pczt: pczt::Pczt) -> Result<String, CoreError> {
 }
 
 /// Prepare a draft's PCZT (hex, as `prepare_send` returns it) for co-signers:
-/// base64, without the Merkle witnesses only the prover needs. If that is still
-/// over [`MAX_SIGNER_PCZT_B64`], also drop the fields signers can recompute
-/// (`cv_net`, `cmx`, decryptable ciphertexts). That is safe: the signer
-/// recomputes them, and then requires the sighash they produce to equal the
-/// message being signed.
+/// base64, without the Merkle witnesses only the prover needs. If that would
+/// take the request's context over what fits one frostd message
+/// ([`crate::signing::signer_context_budget`]), also drop the fields signers
+/// can recompute (`cv_net`, `cmx`, decryptable ciphertexts). That is safe: the
+/// signer recomputes them, and then requires the sighash they produce to equal
+/// the message being signed.
 pub fn pczt_for_signers(pczt_hex: &str) -> Result<String, CoreError> {
-    pczt_for_signers_within(pczt_hex, MAX_SIGNER_PCZT_B64)
+    pczt_for_signers_beside(pczt_hex, 0, 2)
+}
+
+/// [`pczt_for_signers`] for a request to `signers` signers whose context's
+/// other fields take `others` bytes.
+pub fn pczt_for_signers_beside(pczt_hex: &str, others: usize, signers: usize) -> Result<String, CoreError> {
+    pczt_for_signers_within(pczt_hex, crate::signing::signer_context_budget(signers).saturating_sub(others))
 }
 
 fn pczt_for_signers_within(pczt_hex: &str, limit: usize) -> Result<String, CoreError> {
@@ -169,8 +172,8 @@ fn pczt_for_signers_within(pczt_hex: &str, limit: usize) -> Result<String, CoreE
     let encoded = serialize_b64(compact)?;
     if encoded.len() > limit {
         return Err(CoreError::Ceremony(
-            "this transaction spends too many notes for co-signers to verify in one request. \
-             Send a smaller amount first so it uses fewer notes."
+            "this transaction is too large for co-signers to verify in one request. \
+             Make fewer payments at once, or send a smaller amount so it uses fewer notes."
                 .into(),
         ));
     }
@@ -434,7 +437,9 @@ fn is_group_address(address: &str, fvk: &FullViewingKey) -> bool {
 
 /// Require the coordinator's description of a send to match what the signer
 /// verified: the fee, a single payment of the stated amount to the stated
-/// recipient (or none, for a send back to the group), and the stated memo.
+/// recipient (or none, for a send back to the group), and the stated memo. For
+/// a batch, every stated payment, each matching one payment the transaction
+/// makes, and no others (outputs are shuffled, so in any order).
 pub fn check_coordinator_claims(
     network: WalletNetwork,
     group_ak_hex: &str,
@@ -451,6 +456,9 @@ pub fn check_coordinator_claims(
             zec(claimed.fee_zatoshis),
             zec(verified.fee_zatoshis)
         )));
+    }
+    if !claimed.payments.is_empty() {
+        return check_batch_claims(net, &fvk, verified, &claimed.payments);
     }
     if is_group_address(&claimed.recipient, &fvk) {
         if let Some(p) = verified.payments.first() {
@@ -483,6 +491,49 @@ pub fn check_coordinator_claims(
     }
     if !payment.transparent && claimed.memo.as_deref().filter(|m| !m.is_empty()) != payment.memo.as_deref() {
         return Err(fail("the memo in the transaction isn't the one the coordinator describes"));
+    }
+    Ok(())
+}
+
+/// [`check_coordinator_claims`] for a batch: each stated payment matches a
+/// different payment the transaction makes, and there are no others.
+fn check_batch_claims(
+    net: NetworkType,
+    fvk: &FullViewingKey,
+    verified: &VerifiedTransaction,
+    claimed: &[crate::events::ClaimedPayment],
+) -> Result<(), CoreError> {
+    let zec = |z: u64| format!("{}", z as f64 / 1e8);
+    if claimed.len() != verified.payments.len() {
+        return Err(fail(format!(
+            "the coordinator describes {} payments, but the transaction makes {}",
+            claimed.len(),
+            verified.payments.len()
+        )));
+    }
+    let mut unmatched: Vec<&VerifiedPayment> = verified.payments.iter().collect();
+    for c in claimed {
+        if is_group_address(&c.recipient, fvk) {
+            return Err(fail("the coordinator describes a payment back to the group among others"));
+        }
+        let address = canonical_recipient(&c.recipient, net);
+        let found = unmatched.iter().position(|p| {
+            Some(p.address.as_str()) == address.as_deref()
+                && p.value_zatoshis == c.amount_zatoshis
+                && p.transparent == c.transparent
+        });
+        match found {
+            Some(i) => {
+                unmatched.swap_remove(i);
+            }
+            None => {
+                return Err(fail(format!(
+                    "the coordinator says it pays {} to {}, but the transaction makes no such payment",
+                    zec(c.amount_zatoshis),
+                    c.recipient.trim(),
+                )))
+            }
+        }
     }
     Ok(())
 }
@@ -578,6 +629,11 @@ mod tests {
         memo: &str,
         change_to: orchard::Address,
     ) -> Draft {
+        draft_many(pool, fvk, &[(pay_to, pay, memo)], change_to)
+    }
+
+    /// [`draft_to`], making every payment in `pays` (recipient, amount, memo).
+    fn draft_many(pool: Pool, fvk: &FullViewingKey, pays: &[(orchard::Address, u64, &str)], change_to: orchard::Address) -> Draft {
         let note = received_note(pool, fvk);
         let (anchor, path): (orchard::Anchor, orchard::tree::MerklePath) = {
             let leaf = MerkleHashOrchard::from_cmx(&note.commitment().into());
@@ -591,7 +647,8 @@ mod tests {
             Pool::Orchard => (Some(anchor), Some(orchard::Anchor::empty_tree())),
             Pool::Ironwood => (None, Some(anchor)),
         };
-        let memo = if memo.is_empty() { MemoBytes::empty() } else { memo.parse::<Memo>().unwrap().encode() };
+        let memo_bytes = |memo: &str| if memo.is_empty() { MemoBytes::empty() } else { memo.parse::<Memo>().unwrap().encode() };
+        let total: u64 = pays.iter().map(|(_, pay, _)| pay).sum();
         let (ext_ovk, int_ovk) = (Some(fvk.to_ovk(Scope::External)), Some(fvk.to_ovk(Scope::Internal)));
         let builder_with_change = |change: u64| {
             let mut builder = Builder::new(
@@ -609,9 +666,11 @@ mod tests {
                 Pool::Orchard => builder.add_orchard_spend::<zip317::FeeRule>(fvk.clone(), note, path.clone()).unwrap(),
                 Pool::Ironwood => builder.add_ironwood_spend::<zip317::FeeRule>(fvk.clone(), note, path.clone()).unwrap(),
             }
-            builder
-                .add_ironwood_output::<zip317::FeeRule>(ext_ovk.clone(), pay_to, Zatoshis::const_from_u64(pay), memo.clone())
-                .unwrap();
+            for (pay_to, pay, memo) in pays {
+                builder
+                    .add_ironwood_output::<zip317::FeeRule>(ext_ovk.clone(), *pay_to, Zatoshis::const_from_u64(*pay), memo_bytes(memo))
+                    .unwrap();
+            }
             builder
                 .add_ironwood_output::<zip317::FeeRule>(int_ovk.clone(), change_to, Zatoshis::const_from_u64(change), MemoBytes::empty())
                 .unwrap();
@@ -620,7 +679,7 @@ mod tests {
         // The fee depends only on the shape of the transaction, so ask a
         // builder with placeholder change, then build with the real change.
         let fee = u64::from(builder_with_change(0).get_fee(&zip317::FeeRule::standard()).unwrap());
-        let builder = builder_with_change(NOTE - pay - fee);
+        let builder = builder_with_change(NOTE - total - fee);
         let PcztResult { pczt_parts, .. } = builder.build_for_pczt(super::super::wallet_rng(), &zip317::FeeRule::standard()).unwrap();
         let pczt = IoFinalizer::new(Creator::build_from_parts(pczt_parts).unwrap()).finalize_io().unwrap();
         let sighash = Signer::new(pczt.clone()).unwrap().shielded_sighash();
@@ -648,6 +707,7 @@ mod tests {
             tx_sighash: String::new(),
             pczt: None,
             reason: None,
+            payments: Vec::new(),
         }
     }
 
@@ -660,6 +720,83 @@ mod tests {
             Err(CoreError::Verification(msg)) => assert!(msg.contains(why), "expected {why:?}, got {msg:?}"),
             other => panic!("expected a refusal ({why}), got {other:?}"),
         }
+    }
+
+    fn second_payee() -> orchard::Address {
+        let sk = SpendingKey::from_bytes([10; 32]).unwrap();
+        FullViewingKey::from(&sk).address_at(0u32, Scope::External)
+    }
+
+    fn batch_claims(d: &Draft, payments: &[(String, u64, &str)]) -> SigningContext {
+        SigningContext {
+            payments: payments
+                .iter()
+                .map(|(recipient, amount, _memo)| crate::events::ClaimedPayment {
+                    recipient: recipient.clone(),
+                    amount_zatoshis: *amount,
+                    transparent: false,
+                })
+                .collect(),
+            ..claims(d, String::new(), payments.iter().map(|p| p.1).sum(), None)
+        }
+    }
+
+    /// A batch of `n` payments, each with `memo`.
+    fn batch_draft(fvk: &FullViewingKey, n: usize, memo: &str) -> Draft {
+        let pays: Vec<_> = (0..n)
+            .map(|i| {
+                let sk = SpendingKey::from_bytes([20 + i as u8; 32]).unwrap();
+                (FullViewingKey::from(&sk).address_at(0u32, Scope::External), 1_000, memo)
+            })
+            .collect();
+        draft_many(Pool::Ironwood, fvk, &pays, fvk.address_at(0u32, Scope::Internal))
+    }
+
+    /// A signing request has to fit one frostd message beside the signers'
+    /// commitments. The most payments a transaction makes fit, for a few
+    /// signers; a memo keeps its payment's ciphertext, so with full memos on
+    /// all of them it doesn't, and is refused before anyone is asked, saying
+    /// why.
+    #[test]
+    fn a_batch_fits_one_signing_request_or_is_refused_saying_why() {
+        let (_, fvk) = group(1);
+        // The rest of the context: every payment described, and a full reason.
+        let others = |n: usize| n * 250 + 1_000;
+        let most = crate::wallet::MAX_PAYMENTS;
+        let b64 = pczt_for_signers_beside(&batch_draft(&fvk, most, "").pczt_hex, others(most), 5).unwrap();
+        assert!(b64.len() + others(most) <= crate::signing::signer_context_budget(5));
+        let memo = "x".repeat(512);
+        pczt_for_signers_beside(&batch_draft(&fvk, 10, &memo).pczt_hex, others(10), 5).unwrap();
+        let too_big = pczt_for_signers_beside(&batch_draft(&fvk, most, &memo).pczt_hex, others(most), 5);
+        assert!(matches!(too_big, Err(CoreError::Ceremony(m)) if m.contains("Make fewer payments at once")));
+    }
+
+    #[test]
+    fn a_batch_verifies_when_every_payment_is_described_in_any_order() {
+        let (ak, fvk) = group(1);
+        let pays = [(payee(), 100_000, "invoice 7"), (second_payee(), 250_000, "")];
+        let d = draft_many(Pool::Ironwood, &fvk, &pays, fvk.address_at(0u32, Scope::Internal));
+        let v = verify(&ak, &d, &pczt_for_signers(&d.pczt_hex).unwrap()).unwrap();
+        assert_eq!(v.payments.len(), 2);
+        assert_eq!(v.change_zatoshis, NOTE - 350_000 - d.fee);
+        let described = batch_claims(&d, &[(ua(second_payee()), 250_000, ""), (ua(payee()), 100_000, "invoice 7")]);
+        check_coordinator_claims(DEVNET, &ak, None, &v, &described).unwrap();
+    }
+
+    #[test]
+    fn a_batch_is_refused_unless_it_describes_exactly_the_payments_made() {
+        let (ak, fvk) = group(1);
+        let pays = [(payee(), 100_000, "invoice 7"), (second_payee(), 250_000, "")];
+        let d = draft_many(Pool::Ironwood, &fvk, &pays, fvk.address_at(0u32, Scope::Internal));
+        let v = verify(&ak, &d, &pczt_for_signers(&d.pczt_hex).unwrap()).unwrap();
+        let check = |payments: &[(String, u64, &str)]| check_coordinator_claims(DEVNET, &ak, None, &v, &batch_claims(&d, payments));
+        let (a, b) = (ua(payee()), ua(second_payee()));
+        assert_refused(check(&[(a.clone(), 100_000, "invoice 7")]), "describes 1 payments, but the transaction makes 2");
+        assert_refused(check(&[(a.clone(), 100_000, "invoice 7"), (b.clone(), 260_000, "")]), "no such payment");
+        // Each described payment has to be a different one.
+        assert_refused(check(&[(a.clone(), 100_000, "invoice 7"), (a.clone(), 100_000, "invoice 7")]), "no such payment");
+        let group_address = ua(fvk.address_at(0u32, Scope::External));
+        assert_refused(check(&[(a, 100_000, "invoice 7"), (group_address, 250_000, "")]), "back to the group");
     }
 
     #[test]

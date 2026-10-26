@@ -253,6 +253,9 @@ export interface TxRecord {
   memo: string | null;
   /** Recipient unified address for sends; null for self-transfers (consolidation). */
   recipient: string | null;
+  /** Every payment a send made outside the wallet, as far as the wallet
+   *  recovered them: more than one for a batch. */
+  payments?: { recipient: string | null; amount_zatoshis: number; memo: string | null }[];
 }
 /** On-chain transaction history from the group's local wallet db. */
 export const walletHistory = (groupId: string) =>
@@ -304,9 +307,30 @@ export interface DraftTransaction {
    *  on-chain; only readable with the recipient's viewing key. Null for
    *  unshield transfers (transparent outputs carry no memo). */
   memo: string | null;
+  /** Every payment it makes. With more than one (a batch), `recipient` is
+   *  empty, `amount_zatoshis` is their total, and `memo` is null. */
+  payments?: DraftPayment[];
   /** How long the group has to approve it, as of when it was built. */
   approval_window: ApprovalWindow | null;
 }
+
+/** One payment of a draft transaction, as built (wallet::DraftPayment). */
+export interface DraftPayment {
+  recipient: string;
+  amount_zatoshis: number;
+  memo: string | null;
+  transparent: boolean;
+}
+
+/** One payment to ask the group to make (wallet::PaymentRequest). */
+export interface PaymentRequest {
+  recipient: string;
+  amount_zatoshis: number;
+  memo?: string | null;
+}
+
+/** The most payments one transaction makes (wallet::MAX_PAYMENTS). */
+export const MAX_PAYMENTS = 20;
 
 /** How long a transaction can wait for approvals before it can't be sent
  *  (wallet::ApprovalWindow). Payments keep the standard ~50-minute expiry, so
@@ -383,7 +407,13 @@ export const walletSend = (args: {
   /** What it's for, for the group: approvers see it, and every member's
    *  history once it's sent. Never on chain. */
   reason?: string | null;
+  /** Several payments in one transaction (recipient, amount and memo are
+   *  ignored). */
+  payments?: PaymentRequest[];
 }) => invoke<SendStarted>("wallet_send", { args });
+/** Build several payments as one transaction, for review (nothing is sent). */
+export const walletPreparePayments = (groupId: string, payments: PaymentRequest[]) =>
+  invoke<DraftTransaction>("wallet_prepare_payments", { groupId, payments });
 /** Like walletPrepareSend, paying everything spendable; the fee comes out of it. */
 export const walletPrepareSendMax = (groupId: string, recipient: string, memo?: string) =>
   invoke<DraftTransaction>("wallet_prepare_send_max", { groupId, recipient, memo: memo ?? null });

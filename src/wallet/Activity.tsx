@@ -20,6 +20,7 @@ import { MAX_REASON, payeeFor, reasonsFor, useMemberName, usePayees, usePaymentR
 import {
   useCeremonies,
   type CeremonyState,
+  type SendMeta,
 } from "../stores/ceremonies";
 
 import { zec } from "./common";
@@ -71,6 +72,18 @@ export function WalletTxHistory({ group, network }: { group: GroupSummary; netwo
   const onchainTxids = useMemo(
     () => new Set((history.data ?? []).map((t) => t.txid)),
     [history.data]
+  );
+  // Sends this device made, by txid: it knows exactly what each paid, while
+  // the wallet records only its own sends' net balance change (no fee, no
+  // recipients) unless it recovers them.
+  const sentHere = useMemo(
+    () =>
+      new Map(
+        Object.values(ceremonies)
+          .filter((c) => c.kind === "send" && c.groupId === group.id && c.txid && c.send)
+          .map((c) => [c.txid!, c.send!] as const),
+      ),
+    [ceremonies, group.id]
   );
   // Re-evaluate staleness on a timer, so a pending row that ages out disappears
   // on its own instead of lingering until some unrelated re-render.
@@ -154,6 +167,7 @@ export function WalletTxHistory({ group, network }: { group: GroupSummary; netwo
                 key={row.id}
                 row={row}
                 payee={payeeFor(payees.data, row.send?.recipient)}
+                payees={payees.data}
                 contacts={contacts.data ?? []}
                 groupAddress={groupAddress}
                 myPubkey={identity.data?.pubkey ?? undefined}
@@ -166,9 +180,10 @@ export function WalletTxHistory({ group, network }: { group: GroupSummary; netwo
             {onchainRows.slice(0, 50).map((tx) => (
               <OnchainTxRow
                 key={tx.txid}
-                tx={tx}
+                tx={withWhatWasSent(tx, sentHere.get(tx.txid))}
                 groupId={group.id}
                 payee={tx.direction === "send" ? payeeFor(payees.data, tx.recipient) : undefined}
+                payees={payees.data}
                 reasons={reasonsFor(reasons.data, tx.txid)}
                 contacts={contacts.data ?? []}
                 groupAddress={groupAddress}
@@ -204,6 +219,8 @@ export function TxDetail({
   fromAddress,
   recipient,
   payee,
+  payments,
+  payees,
   memo,
   reasons,
   pendingReason,
@@ -225,6 +242,10 @@ export function TxDetail({
   recipient?: string | null;
   /** The group payee it was paid to, if any. */
   payee?: Payee;
+  /** A batch's payments, listed instead of one recipient and memo. */
+  payments?: { recipient: string | null; amount_zatoshis: number; memo: string | null }[];
+  /** The group's payees, to name a batch's recipients. */
+  payees?: Payee[];
   memo?: string | null;
   /** What members say it was for. */
   reasons?: PaymentReason[];
@@ -275,7 +296,27 @@ export function TxDetail({
   } else if (fromAddress) {
     rows.push({ label: "From", value: fromAddress, mono: true });
   }
-  if (recipient) {
+  if (payments && payments.length > 1) {
+    rows.push({
+      label: "Payments",
+      value: (
+        <>
+          {payments.map((p, i) => {
+            const named = payeeFor(payees, p.recipient);
+            return (
+              <div key={i} className="tx-payment">
+                <span>
+                  {zec(p.amount_zatoshis)} {unit(network)} to{" "}
+                  {named ? <strong>{named.name}</strong> : <span className="mono">{p.recipient ?? "an address the wallet didn't record"}</span>}
+                </span>
+                {p.memo && <div className="dim">Memo: {p.memo}</div>}
+              </div>
+            );
+          })}
+        </>
+      ),
+    });
+  } else if (recipient) {
     rows.push({
       label: "To",
       value: payee ? (
@@ -291,7 +332,7 @@ export function TxDetail({
       mono: true,
     });
   }
-  if (memo) rows.push({ label: "Memo", value: memo });
+  if (memo && !(payments && payments.length > 1)) rows.push({ label: "Memo", value: memo });
   if (pendingReason) rows.push({ label: "Reason", value: pendingReason });
   const editable = !!(groupId && txid);
   if (reasons?.length || editable) {
@@ -369,6 +410,23 @@ export function TxDetail({
 
 export type PendingRow = CeremonyState & { id: string };
 
+/** A send as this device sent it, where it did: the exact amount, fee,
+ *  recipient, memo and payments. */
+export function withWhatWasSent(tx: TxRecord, sent: SendMeta | undefined): TxRecord {
+  // A transfer within the group moves its amount back to the group.
+  if (!sent || tx.direction !== "send" || sent.isConsolidation || sent.fromOldAddress) return tx;
+  return {
+    ...tx,
+    amount_zatoshis: sent.amountZatoshis,
+    fee_zatoshis: sent.feeZatoshis,
+    recipient: sent.payments?.length ? tx.recipient : sent.recipient || tx.recipient,
+    memo: sent.payments?.length ? tx.memo : (sent.memo ?? tx.memo),
+    payments: sent.payments?.length
+      ? sent.payments.map((p) => ({ recipient: p.recipient, amount_zatoshis: p.amountZatoshis, memo: p.memo ?? null }))
+      : tx.payments,
+  };
+}
+
 /** Tell the group what a transaction was for, change what this member said,
  *  or (emptied) take it back. */
 function ReasonEditor({
@@ -434,6 +492,7 @@ export function MemoRow({ memo, label = "Memo" }: { memo: string; label?: string
 export function PendingTxRow({
   row,
   payee,
+  payees,
   contacts,
   groupAddress,
   myPubkey,
@@ -443,6 +502,7 @@ export function PendingTxRow({
 }: {
   row: PendingRow;
   payee?: Payee;
+  payees?: Payee[];
   contacts: ContactDto[];
   groupAddress: string | null;
   myPubkey?: string;
@@ -453,7 +513,14 @@ export function PendingTxRow({
   const meta = row.send;
   const isUnshield = meta?.isUnshield;
   const dateStr = row.startedAt ? fmtDate(new Date(row.startedAt)) : "—";
-  const addrDisplay = payee ? payee.name : meta?.recipient ? meta.recipient.slice(0, 10) + "…" : "—";
+  const batch = (meta?.payments?.length ?? 0) > 1;
+  const addrDisplay = batch
+    ? `${meta!.payments!.length} payments`
+    : payee
+      ? payee.name
+      : meta?.recipient
+        ? meta.recipient.slice(0, 10) + "…"
+        : "—";
   return (
     <>
       {/* In flight or sent but unconfirmed reads in the pending colour. */}
@@ -471,7 +538,7 @@ export function PendingTxRow({
           )}
         </td>
         <td className="num">{meta ? `−${zec(meta.amountZatoshis)} ${unit(network)}` : "—"}</td>
-        <td className={payee ? "tx-with" : "mono-cell tx-with"}>{addrDisplay}</td>
+        <td className={payee || batch ? "tx-with" : "mono-cell tx-with"}>{addrDisplay}</td>
         <td className="tx-toggle-cell">
           <button className="secondary tx-toggle" title={isExpanded ? "Collapse" : "Expand"}>
             {isExpanded ? "−" : "+"}
@@ -486,6 +553,8 @@ export function PendingTxRow({
           network={network}
           txid={row.txid}
           payee={payee}
+          payees={payees}
+          payments={meta?.payments?.map((p) => ({ recipient: p.recipient, amount_zatoshis: p.amountZatoshis, memo: p.memo ?? null }))}
           pendingReason={meta?.reason}
           blockHeight={undefined}
           direction={isUnshield ? "send" : "send"}
@@ -508,6 +577,7 @@ export function OnchainTxRow({
   tx,
   groupId,
   payee,
+  payees,
   reasons,
   contacts,
   groupAddress,
@@ -520,6 +590,7 @@ export function OnchainTxRow({
   tx: TxRecord;
   groupId?: string;
   payee?: Payee;
+  payees?: Payee[];
   reasons?: PaymentReason[];
   contacts: ContactDto[];
   groupAddress: string | null;
@@ -531,13 +602,16 @@ export function OnchainTxRow({
 }) {
   const isReceive = tx.direction === "receive";
   const isMove = tx.direction === "move";
+  const batch = (tx.payments?.length ?? 0) > 1;
   const addrDisplay = isReceive || isMove
     ? "—"
-    : payee
-      ? payee.name
-      : tx.recipient
-        ? tx.recipient.slice(0, 10) + "…"
-        : "—";
+    : batch
+      ? `${tx.payments!.length} payments`
+      : payee
+        ? payee.name
+        : tx.recipient
+          ? tx.recipient.slice(0, 10) + "…"
+          : "—";
   const dateDisplay = tx.timestamp != null
     ? fmtDate(new Date(tx.timestamp * 1000))
     : tx.block_height != null
@@ -565,7 +639,7 @@ export function OnchainTxRow({
             {zec(tx.amount_zatoshis)} {unit(network)}
           </span>
         </td>
-        <td className={payee ? "tx-with" : "dim mono-cell tx-with"}>{addrDisplay}</td>
+        <td className={payee || batch ? "tx-with" : "dim mono-cell tx-with"}>{addrDisplay}</td>
         <td className="tx-toggle-cell">
           <button className="secondary tx-toggle" title={isExpanded ? "Collapse" : "Expand"}>
             {isExpanded ? "−" : "+"}
@@ -574,7 +648,7 @@ export function OnchainTxRow({
       </tr>
       {/* Memo, shown inline so it is readable without expanding the row. Hidden
           when expanded, where the detail panel shows the full text. */}
-      {tx.memo && !isExpanded && <MemoRow memo={tx.memo} />}
+      {tx.memo && !batch && !isExpanded && <MemoRow memo={tx.memo} />}
       {!!reasons?.length && !isExpanded && (
         <MemoRow label="Reason" memo={reasons.map((r) => r.text).join(" · ")} />
       )}
@@ -585,6 +659,8 @@ export function OnchainTxRow({
           txid={tx.txid}
           groupId={groupId}
           payee={payee}
+          payees={payees}
+          payments={tx.payments}
           reasons={reasons}
           timestamp={tx.timestamp}
           blockHeight={tx.block_height}

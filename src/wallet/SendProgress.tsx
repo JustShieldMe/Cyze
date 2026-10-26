@@ -41,6 +41,15 @@ export async function requestApprovals(meta: SendMeta): Promise<string> {
     from_old_address: !!meta.fromOldAddress,
     send_max: !!meta.sendMax,
     reason: meta.reason ?? null,
+    ...(meta.payments?.length
+      ? {
+          payments: meta.payments.map((p) => ({
+            recipient: p.recipient,
+            amount_zatoshis: p.amountZatoshis,
+            memo: p.memo ?? null,
+          })),
+        }
+      : {}),
   });
   useCeremonies.getState().startSend(started.ceremony_id, {
     ...meta,
